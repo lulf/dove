@@ -7,8 +7,63 @@ use std::io;
 use std::error;
 use std::net::TcpStream;
 use std::fmt;
+use byteorder::{ByteOrder, NetworkEndian};
 
 type Result<T> = std::result::Result<T, AmqpError>;
+
+enum AmqpType {
+    Null,
+    Boolean,
+    Ubyte,
+    Ushort,
+    Uint,
+    Ulong,
+    Byte,
+    Short,
+    Int,
+    Long,
+    Float,
+    Double,
+    Decimal32,
+    Decimal64,
+    Decimal128,
+    Char,
+    Timestamp,
+    Uuid,
+    Binary,
+    String,
+    Symbol,
+    List,
+    Map,
+    Array
+}
+
+mod framing {
+
+    struct Frame<'a> {
+        frameType: u8,
+        channel: u16,
+        extended: &'a[u8],
+        payload: &'a[u8]
+    }
+
+    enum Performative {
+        Open,
+        Begin,
+        Attach,
+        Flow,
+        Transfer,
+        Disposition,
+        Detach,
+        End,
+        Close
+    }
+
+    fn decode(frame: &Frame, stream: &Read) -> Result<Frame> {
+        let size = stream.read_u32()?;
+    }
+}
+
 
 #[derive(Debug, Clone)]
 pub struct AmqpError {
@@ -74,6 +129,12 @@ impl Container {
         let mut stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
         return Ok(());
     }
+
+    /*
+    pub fn listen(&self, opts: ListenOptions) -> io::Result<()> {
+        return Ok(());
+    }
+    */
 }
 
 impl Connection {
