@@ -5,12 +5,12 @@
 
 // use byteorder::{ByteOrder, NetworkEndian};
 
-use std::io::Write;
-use std::error;
-use std::net::TcpStream;
 use std::collections::HashMap;
-use std::vec::Vec;
+use std::error;
 use std::fmt;
+use std::io::Write;
+use std::net::TcpStream;
+use std::vec::Vec;
 
 type Result<T> = std::result::Result<T, AmqpError>;
 
@@ -48,7 +48,6 @@ mod types {
     pub type Fields = Map<Symbol, Box<std::any::Any>>;
 }
 
-
 /*
 struct Frame<'a> {
     frameType: u8,
@@ -59,7 +58,6 @@ struct Frame<'a> {
 */
 
 struct Descriptor(&'static str, u64);
-
 
 trait Frame {
     fn get_descriptor(&self) -> Descriptor;
@@ -76,7 +74,7 @@ struct OpenFrame {
     incoming_locales: types::Array<types::IetfLanguageTag>,
     offered_capabilities: types::Array<types::Symbol>,
     desired_capabilities: types::Array<types::Symbol>,
-    properties: types::Fields
+    properties: types::Fields,
 }
 
 impl Frame for OpenFrame {
@@ -95,13 +93,11 @@ impl Frame {
     }
 }
 
-
 /*
 fn decode(frame: &Frame, stream: &Read) -> Result<Frame> {
     let size = stream.read_u32()?;
 }
 */
-
 
 #[derive(Debug, Clone)]
 pub struct AmqpError {
@@ -116,7 +112,7 @@ impl error::Error for AmqpError {
 
 impl fmt::Display for AmqpError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.msg) 
+        write!(f, "{}", self.msg)
     }
 }
 /*
@@ -139,7 +135,7 @@ pub struct ConnectionOptions {
 }
 
 pub struct Container {
-    id: &'static str
+    id: &'static str,
 }
 
 enum ConnectionState {
@@ -155,38 +151,27 @@ enum ConnectionState {
     CloseRcvd,
     CloseSent,
     Discarding,
-    End
+    End,
 }
 
 pub struct Connection {
     stream: TcpStream,
-    state: ConnectionState
+    state: ConnectionState,
 }
 
-pub struct Session {
-    
-}
+pub struct Session {}
 
-pub struct Link {
-    
-}
+pub struct Link {}
 
-pub struct Sender {
-    
-}
+pub struct Sender {}
 
-pub struct Receiver {
-    
-}
+pub struct Receiver {}
 
 const AMQP_10_VERSION: [u8; 8] = [65, 77, 81, 80, 0, 1, 0, 0];
 
 impl Container {
-
     pub fn new(id: &'static str) -> Container {
-        Container {
-            id: id,
-        }
+        Container { id: id }
     }
 
     pub fn connect(&self, opts: ConnectionOptions) -> std::io::Result<Connection> {
@@ -196,7 +181,7 @@ impl Container {
         stream.write(&AMQP_10_VERSION);
 
         // AMQP OPEN
-        let frame = OpenFrame{
+        let frame = OpenFrame {
             container_id: types::String(String::from(self.id)),
             hostname: types::String(String::from(opts.host)),
             max_frame_size: types::Uint(4294967295),
@@ -206,12 +191,15 @@ impl Container {
             incoming_locales: types::Array(Vec::new()),
             offered_capabilities: types::Array(Vec::new()),
             desired_capabilities: types::Array(Vec::new()),
-            properties: types::Map(HashMap::new())
+            properties: types::Map(HashMap::new()),
         };
 
         frame.encode(&stream);
 
-        return Ok(Connection{stream: stream, state: ConnectionState::OpenPipe});
+        return Ok(Connection {
+            stream: stream,
+            state: ConnectionState::OpenPipe,
+        });
     }
 
     /*
@@ -253,9 +241,13 @@ mod tests {
     fn open_connection() {
         let cont = Container::new("myid");
 
-        let conn = cont.connect(ConnectionOptions{host: "127.0.0.1", port:5672}).unwrap();
+        let conn = cont
+            .connect(ConnectionOptions {
+                host: "127.0.0.1",
+                port: 5672,
+            })
+            .unwrap();
 
         println!("YAY!");
-
     }
 }
