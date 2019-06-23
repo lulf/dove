@@ -3,9 +3,10 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
-// use byteorder::{ByteOrder, NetworkEndian};
-
+use byteorder::WriteBytesExt;
+use byteorder::{ByteOrder, NetworkEndian};
 use std::collections::HashMap;
+use std::convert::From;
 use std::error;
 use std::fmt;
 use std::io::Write;
@@ -14,38 +15,43 @@ use std::vec::Vec;
 
 type Result<T> = std::result::Result<T, AmqpError>;
 
-mod types {
-    pub struct Null;
-    pub struct Boolean(pub bool);
-    pub struct Ubyte(pub u8);
-    pub struct Ushort(pub u16);
-    pub struct Uint(pub u32);
-    pub struct Ulong(pub u64);
-    pub struct Byte(pub i8);
-    pub struct Short(pub i16);
-    pub struct Int(pub i32);
-    pub struct Long(pub i64);
-    pub struct Float(pub f32);
-    pub struct Double(pub f64);
-    pub struct Decimal32(pub u32);
-    pub struct Decimal64(pub u64);
-    pub struct Decimal128(pub [u64; 2]);
-    pub struct Char(pub char);
-    pub struct Timestamp(pub i64);
-    pub struct Uuid(pub [u8; 16]);
-    pub struct Binary(pub u32);
-    pub struct String(pub std::string::String);
+#[derive(Clone, Debug, PartialEq)]
+pub enum AmqpValue {
+    Null,
+    Boolean(bool),
+    Ubyte(u8),
+    Ushort(u16),
+    Uint(u32),
+    Ulong(u64),
+    Byte(i8),
+    Short(i16),
+    Int(i32),
+    Long(i64),
+    Float(f32),
+    Double(f64),
+    Decimal32(u32),
+    Decimal64(u64),
+    Decimal128([u64; 2]),
+    Char(char),
+    Timestamp(i64),
+    Uuid([u8; 16]),
+    Binary(u32),
+    String(String),
+    Symbol(&'static str),
+    List(Vec<AmqpValue>),
+    Map(HashMap<String, AmqpValue>),
+    Array(Vec<AmqpValue>),
+    Milliseconds(u32),
+    IetfLanguageTag(&'static str),
+    Fields(HashMap<&'static str, AmqpValue>),
+}
 
-    #[derive(Eq, PartialEq, Hash)]
-    pub struct Symbol(pub &'static str);
+fn encode_value(value: &AmqpValue, stream: &Write) -> Result<()> {
+    return Ok(());
+}
 
-    pub struct List<T>(pub Vec<T>);
-    pub struct Map<K, V>(pub std::collections::HashMap<K, V>);
-    pub struct Array<T>(pub Vec<T>);
-
-    pub type Milliseconds = Uint;
-    pub type IetfLanguageTag = Symbol;
-    pub type Fields = Map<Symbol, Box<std::any::Any>>;
+fn encoded_size(value: &AmqpValue) -> u32 {
+    return 0;
 }
 
 /*
@@ -59,37 +65,44 @@ struct Frame<'a> {
 
 struct Descriptor(&'static str, u64);
 
-trait Frame {
-    fn get_descriptor(&self) -> Descriptor;
-    fn encode(&self, stream: &Write) -> Result<()>;
-}
-
 struct OpenFrame {
-    container_id: types::String,
-    hostname: types::String,
-    max_frame_size: types::Uint,
-    channel_max: types::Ushort,
-    idle_time_out: types::Milliseconds,
-    outgoing_locales: types::Array<types::IetfLanguageTag>,
-    incoming_locales: types::Array<types::IetfLanguageTag>,
-    offered_capabilities: types::Array<types::Symbol>,
-    desired_capabilities: types::Array<types::Symbol>,
-    properties: types::Fields,
+    container_id: AmqpValue,
+    hostname: AmqpValue,
+    max_frame_size: AmqpValue,
+    channel_max: AmqpValue,
+    idle_time_out: AmqpValue,
+    outgoing_locales: AmqpValue,
+    incoming_locales: AmqpValue,
+    offered_capabilities: AmqpValue,
+    desired_capabilities: AmqpValue,
+    properties: AmqpValue,
 }
 
-impl Frame for OpenFrame {
-    fn get_descriptor(&self) -> Descriptor {
-        return Descriptor("amqp:open:list", 0x00000010);
-    }
-
-    fn encode(&self, stream: &Write) -> Result<()> {
+impl OpenFrame {
+    fn encode(&self, stream: &mut Write) -> Result<()> {
+        let sz = self.size();
+        let doff = 2;
+        stream.write_u32::<NetworkEndian>(sz);
+        stream.write_u8(doff);
+        stream.write_u8(0);
+        stream.write_u16::<NetworkEndian>(0);
+        encode_value(&self.container_id, stream);
+        encode_value(&self.hostname, stream);
         return Ok(());
     }
-}
 
-impl Frame {
-    fn encode(frame: &Frame, stream: &Write) -> Result<()> {
-        return frame.encode(stream);
+    fn size(&self) -> u32 {
+        return 8
+            + encoded_size(&self.container_id)
+            + encoded_size(&self.hostname)
+            + encoded_size(&self.max_frame_size)
+            + encoded_size(&self.channel_max)
+            + encoded_size(&self.idle_time_out)
+            + encoded_size(&self.outgoing_locales)
+            + encoded_size(&self.incoming_locales)
+            + encoded_size(&self.offered_capabilities)
+            + encoded_size(&self.desired_capabilities)
+            + encoded_size(&self.properties);
     }
 }
 
@@ -182,19 +195,19 @@ impl Container {
 
         // AMQP OPEN
         let frame = OpenFrame {
-            container_id: types::String(String::from(self.id)),
-            hostname: types::String(String::from(opts.host)),
-            max_frame_size: types::Uint(4294967295),
-            channel_max: types::Ushort(65535),
-            idle_time_out: types::Uint(10000),
-            outgoing_locales: types::Array(Vec::new()),
-            incoming_locales: types::Array(Vec::new()),
-            offered_capabilities: types::Array(Vec::new()),
-            desired_capabilities: types::Array(Vec::new()),
-            properties: types::Map(HashMap::new()),
+            container_id: AmqpValue::String(String::from(self.id)),
+            hostname: AmqpValue::String(String::from(opts.host)),
+            max_frame_size: AmqpValue::Uint(4294967295),
+            channel_max: AmqpValue::Ushort(65535),
+            idle_time_out: AmqpValue::Uint(10000),
+            outgoing_locales: AmqpValue::Array(Vec::new()),
+            incoming_locales: AmqpValue::Array(Vec::new()),
+            offered_capabilities: AmqpValue::Array(Vec::new()),
+            desired_capabilities: AmqpValue::Array(Vec::new()),
+            properties: AmqpValue::Map(HashMap::new()),
         };
 
-        frame.encode(&stream);
+        frame.encode(&mut stream);
 
         return Ok(Connection {
             stream: stream,
