@@ -37,7 +37,7 @@ pub enum AmqpValue {
     Char(char),
     Timestamp(i64),
     Uuid([u8; 16]),
-    Binary(u32),
+    Binary(Box<[u8]>),
     String(String),
     Symbol(&'static str),
     List(Vec<AmqpValue>),
@@ -68,116 +68,252 @@ impl std::cmp::PartialEq for AmqpValue {
     }
 }
 
-const TYPE_CODE_NULL: u8 = 0x40;
-const TYPE_CODE_BOOL: u8 = 0x56;
-const TYPE_CODE_TRUEBOOL: u8 = 0x41;
-const TYPE_CODE_FALSEBOOL: u8 = 0x42;
-const TYPE_CODE_UBYTE: u8 = 0x50;
-const TYPE_CODE_USHORT: u8 = 0x60;
-const TYPE_CODE_UINT: u8 = 0x70;
-const TYPE_CODE_SMALLUINT: u8 = 0x52;
-const TYPE_CODE_UINT0: u8 = 0x43;
-const TYPE_CODE_ULONG: u8 = 0x80;
-const TYPE_CODE_SMALLULONG: u8 = 0x53;
-const TYPE_CODE_ULONG0: u8 = 0x44;
-const TYPE_CODE_BYTE: u8 = 0x51;
-const TYPE_CODE_SHORT: u8 = 0x61;
-const TYPE_CODE_SMALLINT: u8 = 0x54;
-const TYPE_CODE_INT: u8 = 0x71;
-const TYPE_CODE_SMALLLONG: u8 = 0x55;
-const TYPE_CODE_LONG: u8 = 0x81;
-const TYPE_CODE_FLOAT: u8 = 0x72;
-const TYPE_CODE_DOUBLE: u8 = 0x82;
-const TYPE_CODE_DECIMAL32: u8 = 0x74;
-const TYPE_CODE_DECIMAL64: u8 = 0x84;
-const TYPE_CODE_DECIMAL128: u8 = 0x94;
-const TYPE_CODE_CHAR: u8 = 0x73;
-const TYPE_CODE_TIMESTAMP: u8 = 0x83;
-const TYPE_CODE_UUID: u8 = 0x98;
-const TYPE_CODE_VBIN8: u8 = 0xA0;
-const TYPE_CODE_VBIN32: u8 = 0xB0;
-const TYPE_CODE_STR8: u8 = 0xA1;
-const TYPE_CODE_STR32: u8 = 0xB1;
-const TYPE_CODE_SYM8: u8 = 0xA3;
-const TYPE_CODE_SYM32: u8 = 0xB3;
-const TYPE_CODE_LIST0: u8 = 0x45;
-const TYPE_CODE_LIST8: u8 = 0xC0;
-const TYPE_CODE_LIST32: u8 = 0xD0;
-const TYPE_CODE_MAP8: u8 = 0xC1;
-const TYPE_CODE_MAP32: u8 = 0xD1;
-const TYPE_CODE_ARRAY8: u8 = 0xE0;
-const TYPE_CODE_ARRAY32: u8 = 0xF0;
+#[derive(Copy, Clone)]
+enum TypeCode {
+    Null = 0x40,
+    Bool = 0x56,
+    Truebool = 0x41,
+    Falsebool = 0x42,
+    Ubyte = 0x50,
+    Ushort = 0x60,
+    Uint = 0x70,
+    Smalluint = 0x52,
+    Uint0 = 0x43,
+    Ulong = 0x80,
+    Smallulong = 0x53,
+    Ulong0 = 0x44,
+    Byte = 0x51,
+    Short = 0x61,
+    Smallint = 0x54,
+    Int = 0x71,
+    Smalllong = 0x55,
+    Long = 0x81,
+    Float = 0x72,
+    Double = 0x82,
+    Decimal32 = 0x74,
+    Decimal64 = 0x84,
+    Decimal128 = 0x94,
+    Char = 0x73,
+    Timestamp = 0x83,
+    Uuid = 0x98,
+    Vbin8 = 0xA0,
+    Vbin32 = 0xB0,
+    Str8 = 0xA1,
+    Str32 = 0xB1,
+    Sym8 = 0xA3,
+    Sym32 = 0xB3,
+    List0 = 0x45,
+    List8 = 0xC0,
+    List32 = 0xD0,
+    Map8 = 0xC1,
+    Map32 = 0xD1,
+    Array8 = 0xE0,
+    Array32 = 0xF0,
+}
 
-fn encode_value(value: &AmqpValue, stream: &Write) -> Result<()> {
+fn encode_type(code: TypeCode, stream: &mut Write) -> Result<()> {
+    stream.write_u8(code as u8)?;
+    return Ok(());
+}
+
+fn encode_value(value: &AmqpValue, stream: &mut Write) -> Result<()> {
     match value {
-        AmqpValue::Null => stream.write_u8(TYPE_CODE_NULL)?,
+        AmqpValue::Null => encode_type(TypeCode::Null, stream)?,
         AmqpValue::Boolean(value) => {
-            // stream.write_u8(TYPE_CODE_BOOL)?;
-            stream.write_u8(if *value { 0x41 } else { 0x42 })?;
+            encode_type(
+                if *value {
+                    TypeCode::Truebool
+                } else {
+                    TypeCode::Falsebool
+                },
+                stream,
+            )?;
         }
         AmqpValue::Ubyte(value) => {
-            stream.write_u8(TYPE_CODE_UBYTE)?;
+            encode_type(TypeCode::Ubyte, stream)?;
             stream.write_u8(*value)?;
         }
         AmqpValue::Ushort(value) => {
-            stream.write_u8(TYPE_CODE_USHORT)?;
+            encode_type(TypeCode::Ushort, stream)?;
             stream.write_u16::<NetworkEndian>(*value)?;
         }
         AmqpValue::Uint(value) => {
-            stream.write_u8(TYPE_CODE_UINT)?;
+            encode_type(TypeCode::Uint, stream)?;
             stream.write_u32::<NetworkEndian>(*value)?;
         }
         AmqpValue::Ulong(value) => {
-            stream.write_u8(TYPE_CODE_ULONG)?;
+            encode_type(TypeCode::Ulong, stream)?;
             stream.write_u64::<NetworkEndian>(*value)?;
         }
         AmqpValue::Byte(value) => {
-            stream.write_u8(TYPE_CODE_BYTE)?;
+            encode_type(TypeCode::Byte, stream)?;
             stream.write_i8(*value)?;
         }
         AmqpValue::Short(value) => {
-            stream.write_u8(TYPE_CODE_SHORT)?;
+            encode_type(TypeCode::Short, stream)?;
             stream.write_i16::<NetworkEndian>(*value)?;
         }
         AmqpValue::Int(value) => {
-            stream.write_u8(TYPE_CODE_INT)?;
+            encode_type(TypeCode::Int, stream)?;
             stream.write_i32::<NetworkEndian>(*value)?;
         }
         AmqpValue::Long(value) => {
-            stream.write_u8(TYPE_CODE_LONG)?;
+            encode_type(TypeCode::Long, stream)?;
             stream.write_i64::<NetworkEndian>(*value)?;
         }
         AmqpValue::Float(value) => {
-            stream.write_u8(TYPE_CODE_FLOAT)?;
+            encode_type(TypeCode::Float, stream)?;
             stream.write_f32::<NetworkEndian>(*value)?;
         }
         AmqpValue::Double(value) => {
-            stream.write_u8(TYPE_CODE_DOUBLE)?;
+            encode_type(TypeCode::Double, stream)?;
             stream.write_f64::<NetworkEndian>(*value)?;
         }
         AmqpValue::Decimal32(value) => {
-            stream.write_u8(TYPE_CODE_DECIMAL32)?;
+            encode_type(TypeCode::Decimal32, stream)?;
             stream.write_u32::<NetworkEndian>(*value)?;
         }
         AmqpValue::Decimal64(value) => {
-            stream.write_u8(TYPE_CODE_DECIMAL64)?;
+            encode_type(TypeCode::Decimal64, stream)?;
             stream.write_u64::<NetworkEndian>(*value)?;
         }
         AmqpValue::Decimal128(value) => {
-            stream.write_u8(TYPE_CODE_DECIMAL128)?;
-            //stream.write_all(&value)?;
+            encode_type(TypeCode::Decimal128, stream)?;
+            stream.write_u64::<NetworkEndian>(value[0])?;
+            stream.write_u64::<NetworkEndian>(value[1])?;
         }
+        AmqpValue::Char(value) => {
+            encode_type(TypeCode::Char, stream)?;
+            // stream.write_u32::<NetworkEndian>(value)?;
+        }
+        AmqpValue::Timestamp(value) => {
+            encode_type(TypeCode::Timestamp, stream)?;
+            stream.write_i64::<NetworkEndian>(*value)?;
+        }
+        AmqpValue::Uuid(value) => {
+            encode_type(TypeCode::Uuid, stream)?;
+            stream.write(value)?;
+        }
+        AmqpValue::Binary(value) => {
+            if (*value).len() > 0xFFFFFFFF {
+                return Err(AmqpError::new(
+                    "Binary values cannot be longer than 4294967295 octets",
+                ));
+            } else if (*value).len() > 0xFF {
+                encode_type(TypeCode::Vbin32, stream)?;
+                stream.write_u32::<NetworkEndian>((*value).len() as u32)?;
+                stream.write(&*value)?;
+            } else {
+                encode_type(TypeCode::Vbin8, stream)?;
+                stream.write_u8((*value).len() as u8)?;
+                stream.write(&*value)?;
+            }
+        }
+        AmqpValue::String(value) => {
+            if value.len() > 0xFFFFFFFF {
+                return Err(AmqpError::new(
+                    "String values cannot be longer than 4294967295 octets",
+                ));
+            } else if value.len() > 0xFF {
+                encode_type(TypeCode::Str32, stream)?;
+                stream.write_u32::<NetworkEndian>(value.len() as u32);
+                stream.write(value.as_bytes())?;
+            } else {
+                encode_type(TypeCode::Str8, stream)?;
+                stream.write_u8(value.len() as u8);
+                stream.write(value.as_bytes())?;
+            }
+        }
+        AmqpValue::Symbol(value) => {
+            if value.len() > 0xFFFFFFFF {
+                return Err(AmqpError::new(
+                    "Symbol values cannot be longer than 4294967295 octets",
+                ));
+            } else if value.len() > 0xFF {
+                encode_type(TypeCode::Sym32, stream)?;
+                stream.write_u32::<NetworkEndian>(value.len() as u32);
+                stream.write(value.as_bytes())?;
+            } else {
+                encode_type(TypeCode::Sym8, stream)?;
+                stream.write_u8(value.len() as u8);
+                stream.write(value.as_bytes())?;
+            }
+        }
+        AmqpValue::List(value) => {}
+        AmqpValue::Map(value) => {
+            encode_type(TypeCode::Null, stream)?;
+        }
+        AmqpValue::Array(value) => {
+            encode_type(TypeCode::Null, stream)?;
+        }
+        AmqpValue::Milliseconds(value) => {
+            encode_type(TypeCode::Uint, stream)?;
+            stream.write_u32::<NetworkEndian>(*value)?;
+        }
+        AmqpValue::IetfLanguageTag(value) => {}
+        AmqpValue::Fields(value) => {}
     }
     return Ok(());
 }
 
-fn encoded_size(_value: &AmqpValue) -> u32 {
-    return 0;
+fn encoded_size(value: &AmqpValue) -> u32 {
+    return match value {
+        AmqpValue::Null => 1,
+        AmqpValue::Boolean(value) => 1,
+        AmqpValue::Ubyte(value) => 2,
+        AmqpValue::Ushort(value) => 3,
+        AmqpValue::Uint(value) => 5,
+        AmqpValue::Ulong(value) => 9,
+        AmqpValue::Byte(value) => 2,
+        AmqpValue::Short(value) => 3,
+        AmqpValue::Int(value) => 5,
+        AmqpValue::Long(value) => 9,
+        AmqpValue::Float(value) => 5,
+        AmqpValue::Double(value) => 9,
+        AmqpValue::Decimal32(value) => 5,
+        AmqpValue::Decimal64(value) => 9,
+        AmqpValue::Decimal128(value) => 17,
+        AmqpValue::Char(value) => 1, // TODO: Fix size
+        AmqpValue::Timestamp(value) => 9,
+        AmqpValue::Uuid(value) => 1 + value.len() as u32,
+        AmqpValue::Binary(value) => {
+            if (*value).len() > 0xFF {
+                5 + (*value).len() as u32
+            } else {
+                2 + (*value).len() as u32
+            }
+        }
+        AmqpValue::String(value) => {
+            if value.len() > 0xFF {
+                5 + value.len() as u32
+            } else {
+                2 + value.len() as u32
+            }
+        }
+        AmqpValue::Symbol(value) => {
+            if value.len() > 0xFF {
+                5 + value.len() as u32
+            } else {
+                2 + value.len() as u32
+            }
+        }
+        AmqpValue::List(value) => 0,
+        AmqpValue::Map(value) => 1,
+        AmqpValue::Array(value) => 1,
+        AmqpValue::Milliseconds(value) => 5,
+        AmqpValue::IetfLanguageTag(value) => 0,
+        AmqpValue::Fields(value) => 0,
+    };
 }
 
 struct Descriptor(&'static str, u64);
 
 const DESC_OPEN: Descriptor = Descriptor("amqp:open:list", 0x0000_0000_0000_0010);
+
+#[derive(Copy, Clone)]
+enum Performative {
+    Open = 0x10,
+}
 
 fn encode_descriptor(descriptor: Descriptor, stream: &mut Write) -> Result<()> {
     let Descriptor(_, code) = descriptor;
@@ -201,12 +337,13 @@ struct OpenFrame {
 impl OpenFrame {
     fn encode(&self, stream: &mut Write) -> Result<()> {
         let sz = self.size();
+        println!("Total size: {}", sz);
         let doff = 2;
         stream.write_u32::<NetworkEndian>(sz)?;
         stream.write_u8(doff)?;
         stream.write_u8(0)?;
         stream.write_u16::<NetworkEndian>(0)?;
-        encode_descriptor(DESC_OPEN, stream)?;
+        stream.write_u8(Performative::Open as u8);
         encode_value(&self.container_id, stream)?;
         encode_value(&self.hostname, stream)?;
         encode_value(&self.max_frame_size, stream)?;
@@ -222,7 +359,7 @@ impl OpenFrame {
 
     fn size(&self) -> u32 {
         return 8
-            + 8
+            + 1
             + encoded_size(&self.container_id)
             + encoded_size(&self.hostname)
             + encoded_size(&self.max_frame_size)
@@ -330,17 +467,18 @@ impl Container {
         let frame = OpenFrame {
             container_id: AmqpValue::String(String::from(self.id)),
             hostname: AmqpValue::String(String::from(opts.host)),
-            max_frame_size: AmqpValue::Uint(4294967295),
-            channel_max: AmqpValue::Ushort(65535),
-            idle_time_out: AmqpValue::Uint(10000),
-            outgoing_locales: AmqpValue::Array(Vec::new()),
-            incoming_locales: AmqpValue::Array(Vec::new()),
-            offered_capabilities: AmqpValue::Array(Vec::new()),
-            desired_capabilities: AmqpValue::Array(Vec::new()),
-            properties: AmqpValue::Map(BTreeMap::new()),
+            max_frame_size: AmqpValue::Null,
+            channel_max: AmqpValue::Ushort(32767),
+            idle_time_out: AmqpValue::Null,
+            outgoing_locales: AmqpValue::Null,
+            incoming_locales: AmqpValue::Null,
+            offered_capabilities: AmqpValue::Null,
+            desired_capabilities: AmqpValue::Null,
+            properties: AmqpValue::Null,
         };
 
         frame.encode(&mut stream)?;
+        stream.flush();
 
         return Ok(Connection {
             stream: stream,
@@ -385,11 +523,11 @@ mod tests {
 
     #[test]
     fn open_connection() {
-        let cont = Container::new("myid");
+        let cont = Container::new("ce8c4a3e-96b3-11e9-9bfd-c85b7644b4a4");
 
         let conn = cont
             .connect(ConnectionOptions {
-                host: "127.0.0.1",
+                host: "localhost",
                 port: 5672,
             })
             .unwrap();
