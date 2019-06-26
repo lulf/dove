@@ -116,8 +116,8 @@ fn encode_type(code: TypeCode, stream: &mut Write) -> Result<()> {
     return Ok(());
 }
 
-fn encode_value(value: &AmqpValue, stream: &mut Write) -> Result<()> {
-    match value {
+fn encode_value(amqp_value: &AmqpValue, stream: &mut Write) -> Result<()> {
+    match amqp_value {
         AmqpValue::Null => encode_type(TypeCode::Null, stream)?,
         AmqpValue::Boolean(value) => {
             encode_type(
@@ -142,8 +142,15 @@ fn encode_value(value: &AmqpValue, stream: &mut Write) -> Result<()> {
             stream.write_u32::<NetworkEndian>(*value)?;
         }
         AmqpValue::Ulong(value) => {
-            encode_type(TypeCode::Ulong, stream)?;
-            stream.write_u64::<NetworkEndian>(*value)?;
+            if *value > 0xFF {
+                encode_type(TypeCode::Ulong, stream)?;
+                stream.write_u64::<NetworkEndian>(*value)?;
+            } else if *value > 0 {
+                encode_type(TypeCode::Smallulong, stream)?;
+                stream.write_u8(*value as u8);
+            } else {
+                encode_type(TypeCode::Ulong0, stream)?;
+            }
         }
         AmqpValue::Byte(value) => {
             encode_type(TypeCode::Byte, stream)?;
@@ -239,7 +246,31 @@ fn encode_value(value: &AmqpValue, stream: &mut Write) -> Result<()> {
                 stream.write(value.as_bytes())?;
             }
         }
-        AmqpValue::List(value) => {}
+        AmqpValue::List(value) => {
+            if value.len() > 0xFFFFFFFF {
+                return Err(AmqpError::new(
+                    "List length cannot be longer than 4294967295 items",
+                ));
+            } else if value.len() > 0 {
+                encode_type(TypeCode::List32, stream)?;
+                stream.write_u32::<NetworkEndian>(encoded_size(amqp_value) - 5)?;
+                stream.write_u32::<NetworkEndian>(value.len() as u32)?;
+                for v in value.iter() {
+                    encode_value(&v, stream)?;
+                }
+            /*
+            } else if value.len() > 0 {
+                encode_type(TypeCode::List8, stream)?;
+                stream.write_u8((encoded_size(amqp_value) - 2) as u8)?;
+                stream.write_u8(value.len() as u8)?;
+                for v in value.iter() {
+                    encode_value(&v, stream)?;
+                }
+                */
+            } else {
+                encode_type(TypeCode::List0, stream)?;
+            }
+        }
         AmqpValue::Map(value) => {
             encode_type(TypeCode::Null, stream)?;
         }
@@ -263,7 +294,15 @@ fn encoded_size(value: &AmqpValue) -> u32 {
         AmqpValue::Ubyte(value) => 2,
         AmqpValue::Ushort(value) => 3,
         AmqpValue::Uint(value) => 5,
-        AmqpValue::Ulong(value) => 9,
+        AmqpValue::Ulong(value) => {
+            if *value > 0xFF {
+                9
+            } else if *value > 0 {
+                2
+            } else {
+                1
+            }
+        }
         AmqpValue::Byte(value) => 2,
         AmqpValue::Short(value) => 3,
         AmqpValue::Int(value) => 5,
@@ -297,7 +336,15 @@ fn encoded_size(value: &AmqpValue) -> u32 {
                 2 + value.len() as u32
             }
         }
-        AmqpValue::List(value) => 0,
+        AmqpValue::List(value) => {
+            if value.len() > 0 {
+                9 + value.iter().fold(0, |a, v| a + encoded_size(v))
+            /*            } else if value.len() > 0 {
+            3 + value.iter().fold(0, |a, v| a + encoded_size(v))*/
+            } else {
+                1
+            }
+        }
         AmqpValue::Map(value) => 1,
         AmqpValue::Array(value) => 1,
         AmqpValue::Milliseconds(value) => 5,
@@ -315,9 +362,9 @@ enum Performative {
     Open = 0x10,
 }
 
-fn encode_descriptor(descriptor: Descriptor, stream: &mut Write) -> Result<()> {
-    let Descriptor(_, code) = descriptor;
-    stream.write_u64::<NetworkEndian>(code)?;
+fn encode_performative(performative: Performative, stream: &mut Write) -> Result<()> {
+    stream.write_u8(0);
+    encode_value(&AmqpValue::Ulong(performative as u64), stream)?;
     return Ok(());
 }
 
@@ -336,40 +383,38 @@ struct OpenFrame {
 
 impl OpenFrame {
     fn encode(&self, stream: &mut Write) -> Result<()> {
-        let sz = self.size();
+        let arguments: Vec<AmqpValue> = vec![
+            self.container_id.clone(),
+            self.hostname.clone(),
+            self.max_frame_size.clone(),
+            self.channel_max.clone(),
+            self.idle_time_out.clone(),
+            self.outgoing_locales.clone(),
+            self.incoming_locales.clone(),
+            self.offered_capabilities.clone(),
+            self.desired_capabilities.clone(),
+            self.properties.clone(),
+        ];
+
+        let list = AmqpValue::List(vec![
+            AmqpValue::String(String::from("fab6c474-983c-11e9-98ba-c85b7644b4a4")),
+            AmqpValue::String(String::from("localhost")),
+            AmqpValue::Null,
+            AmqpValue::Ushort(32767),
+        ]);
+        let performative = AmqpValue::Ulong(Performative::Open as u64);
+        let sz = 8 + encoded_size(&list) + encoded_size(&performative) + 1;
         println!("Total size: {}", sz);
         let doff = 2;
+
         stream.write_u32::<NetworkEndian>(sz)?;
         stream.write_u8(doff)?;
         stream.write_u8(0)?;
         stream.write_u16::<NetworkEndian>(0)?;
-        stream.write_u8(Performative::Open as u8);
-        encode_value(&self.container_id, stream)?;
-        encode_value(&self.hostname, stream)?;
-        encode_value(&self.max_frame_size, stream)?;
-        encode_value(&self.channel_max, stream)?;
-        encode_value(&self.idle_time_out, stream)?;
-        encode_value(&self.outgoing_locales, stream)?;
-        encode_value(&self.incoming_locales, stream)?;
-        encode_value(&self.offered_capabilities, stream)?;
-        encode_value(&self.desired_capabilities, stream)?;
-        encode_value(&self.properties, stream)?;
-        return Ok(());
-    }
+        encode_performative(Performative::Open, stream)?;
 
-    fn size(&self) -> u32 {
-        return 8
-            + 1
-            + encoded_size(&self.container_id)
-            + encoded_size(&self.hostname)
-            + encoded_size(&self.max_frame_size)
-            + encoded_size(&self.channel_max)
-            + encoded_size(&self.idle_time_out)
-            + encoded_size(&self.outgoing_locales)
-            + encoded_size(&self.incoming_locales)
-            + encoded_size(&self.offered_capabilities)
-            + encoded_size(&self.desired_capabilities)
-            + encoded_size(&self.properties);
+        encode_value(&list, stream)?;
+        return Ok(());
     }
 }
 
@@ -520,6 +565,22 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encode_list() {
+        let list = AmqpValue::List(vec![
+            AmqpValue::String(String::from("fab6c474-983c-11e9-98ba-c85b7644b4a4")),
+            AmqpValue::String(String::from("localhost")),
+            AmqpValue::Null,
+            AmqpValue::Ushort(32767),
+        ]);
+
+        let mut output: Vec<u8> = Vec::new();
+        encode_value(&list, &mut output);
+        let sz = encoded_size(&list);
+        println!("Size: {}, of output: {}", sz, output.len());
+        println!("{:X?}", &output[..])
+    }
 
     #[test]
     fn open_connection() {
