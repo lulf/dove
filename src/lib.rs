@@ -275,7 +275,17 @@ fn encode_value(amqp_value: &AmqpValue, stream: &mut Write) -> Result<()> {
             encode_type(TypeCode::Null, stream)?;
         }
         AmqpValue::Array(value) => {
-            encode_type(TypeCode::Null, stream)?;
+            if value.len() > 0xFFFFFFFF {
+                return Err(AmqpError::new(
+                    "Array length cannot be longer than 4294967295 bytes",
+                ));
+            } else if value.len() > 0xFF {
+                encode_type(TypeCode::Array32, stream)?;
+            } else if value.len() > 0 {
+                encode_type(TypeCode::Array8, stream)?;
+            } else {
+                encode_type(TypeCode::Null, stream)?;
+            }
         }
         AmqpValue::Milliseconds(value) => {
             encode_type(TypeCode::Uint, stream)?;
