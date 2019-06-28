@@ -4,6 +4,7 @@
  */
 
 use byteorder::NetworkEndian;
+use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -11,111 +12,200 @@ use std::convert::From;
 use std::error;
 use std::fmt;
 use std::io;
+use std::io::Read;
 use std::io::Write;
 use std::net::TcpStream;
 use std::vec::Vec;
 
 type Result<T> = std::result::Result<T, AmqpError>;
 
-#[derive(Clone, Debug)]
-pub enum AmqpValue {
+/*
+type Null = ();
+type Boolean = bool;
+type Ubyte = u8;
+type Ushort = u16;
+type Uint = u32;
+type Ulong = u64;
+type Symbol = String;
+
+trait AmqpCodec<T> {
+    fn encode(value: T, stream: &mut Write) -> Result<usize>;
+    fn decode(code: u8, stream: &mut Read) -> Result<T>;
+}
+
+impl AmqpCodec<Ulong> for Ulong {
+    fn encode(value: Ulong, stream: &mut Write) -> Result<usize> {
+        Ok(if value > 0xFF {
+            stream.write_u8(TYPE_CODE_ULONG)?;
+            stream.write_u64::<NetworkEndian>(value)?;
+            5
+        } else if value > 0 {
+            stream.write_u8(TYPE_CODE_SMALLULONG)?;
+            stream.write_u8(value as u8)?;
+            2
+        } else {
+            stream.write_u8(TYPE_CODE_ULONG0)?;
+            1
+        })
+    }
+
+    fn decode(code: u8, stream: &mut Read) -> Result<Ulong> {
+        match code {
+            TYPE_CODE_ULONG => Ok(stream.read_u64::<NetworkEndian>()?),
+            TYPE_CODE_SMALLULONG => Ok(stream.read_u8()? as u64),
+            TYPE_CODE_ULONG0 => Ok(0),
+            _ => Err(AmqpError::new("Cannot decode type as Ulong")),
+        }
+    }
+}
+*/
+
+enum Kind {
     Null,
-    Boolean(bool),
-    Ubyte(u8),
-    Ushort(u16),
-    Uint(u32),
+    Ulong,
+    String,
+}
+
+enum Value {
+    Null,
     Ulong(u64),
-    Byte(i8),
-    Short(i16),
-    Int(i32),
-    Long(i64),
-    Float(f32),
-    Double(f64),
-    Decimal32(u32),
-    Decimal64(u64),
-    Decimal128([u64; 2]),
-    Char(char),
-    Timestamp(i64),
-    Uuid([u8; 16]),
-    Binary(Box<[u8]>),
     String(String),
-    Symbol(&'static str),
-    List(Vec<AmqpValue>),
-    Map(BTreeMap<AmqpValue, AmqpValue>),
-    Array(Vec<AmqpValue>),
-    Milliseconds(u32),
-    IetfLanguageTag(&'static str),
-    Fields(BTreeMap<&'static str, AmqpValue>),
 }
 
-impl std::cmp::Eq for AmqpValue {}
+fn encode(value: Value, stream: &mut Write) -> Result<usize> {
+    return Ok(match value {
+        Value::Null => {
+            stream.write_u8(TypeCode::Null as u8)?;
+            1
+        }
+        Value::String(val) => {
+            if val.len() > 0xFF {
+                stream.write_u8(TypeCode::Str32 as u8)?;
+                stream.write_u32::<NetworkEndian>(val.len() as u32)?;
+                stream.write(val.as_bytes())?;
+                5 + val.len()
+            } else {
+                stream.write_u8(TypeCode::Str8 as u8)?;
+                stream.write_u8(val.len() as u8)?;
+                stream.write(val.as_bytes())?;
+                2 + val.len()
+            }
+        }
+        Value::Ulong(val) => {
+            if val > 0xFF {
+                stream.write_u8(TypeCode::Ulong as u8)?;
+                stream.write_u64::<NetworkEndian>(val)?;
+                9
+            } else if val > 0 {
+                stream.write_u8(TypeCode::Ulongsmall as u8)?;
+                stream.write_u8(val as u8)?;
+                2
+            } else {
+                stream.write_u8(TypeCode::Ulong0 as u8)?;
+                1
+            }
+        }
+    });
+}
 
-impl std::cmp::PartialOrd for AmqpValue {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        return None;
+fn decode(stream: &mut Read) -> Result<Value> {
+    let raw_code: u8 = stream.read_u8()?;
+    let code = decode_type(raw_code)?;
+    match code {
+        TypeCode::Null => Ok(Value::Null),
+        TypeCode::Ulong => {
+            let val = stream.read_u64::<NetworkEndian>()?;
+            Ok(Value::Ulong(val))
+        }
+        TypeCode::Ulongsmall => {
+            let val = stream.read_u8()? as u64;
+            Ok(Value::Ulong(val))
+        }
+        TypeCode::Ulong0 => Ok(Value::Ulong(0)),
+        TypeCode::Str8 => {
+            let len = stream.read_u8()? as usize;
+            let mut buffer = vec![0u8; len];
+            stream.read_exact(&mut buffer)?;
+            let s = String::from_utf8(buffer)?;
+            Ok(Value::String(s))
+        }
+        TypeCode::Str32 => {
+            let len = stream.read_u32::<NetworkEndian>()? as usize;
+            let mut buffer = vec![0u8; len];
+            stream.read_exact(&mut buffer)?;
+            let s = String::from_utf8(buffer)?;
+            Ok(Value::String(s))
+        }
     }
 }
 
-impl std::cmp::Ord for AmqpValue {
-    fn cmp(&self, other: &Self) -> Ordering {
-        return Ordering::Equal;
-    }
-}
-
-impl std::cmp::PartialEq for AmqpValue {
-    fn eq(&self, other: &Self) -> bool {
-        return true;
-    }
-}
-
-#[derive(Copy, Clone)]
+#[repr(u8)]
 enum TypeCode {
     Null = 0x40,
-    Bool = 0x56,
-    Truebool = 0x41,
-    Falsebool = 0x42,
-    Ubyte = 0x50,
-    Ushort = 0x60,
-    Uint = 0x70,
-    Smalluint = 0x52,
-    Uint0 = 0x43,
     Ulong = 0x80,
-    Smallulong = 0x53,
+    Ulongsmall = 0x53,
     Ulong0 = 0x44,
-    Byte = 0x51,
-    Short = 0x61,
-    Smallint = 0x54,
-    Int = 0x71,
-    Smalllong = 0x55,
-    Long = 0x81,
-    Float = 0x72,
-    Double = 0x82,
-    Decimal32 = 0x74,
-    Decimal64 = 0x84,
-    Decimal128 = 0x94,
-    Char = 0x73,
-    Timestamp = 0x83,
-    Uuid = 0x98,
-    Vbin8 = 0xA0,
-    Vbin32 = 0xB0,
     Str8 = 0xA1,
     Str32 = 0xB1,
-    Sym8 = 0xA3,
-    Sym32 = 0xB3,
-    List0 = 0x45,
-    List8 = 0xC0,
-    List32 = 0xD0,
-    Map8 = 0xC1,
-    Map32 = 0xD1,
-    Array8 = 0xE0,
-    Array32 = 0xF0,
 }
 
-fn encode_type(code: TypeCode, stream: &mut Write) -> Result<()> {
-    stream.write_u8(code as u8)?;
-    return Ok(());
+fn decode_type(code: u8) -> Result<TypeCode> {
+    match code {
+        0x40 => Ok(TypeCode::Null),
+        0x80 => Ok(TypeCode::Ulong),
+        0x53 => Ok(TypeCode::Ulongsmall),
+        0x44 => Ok(TypeCode::Ulong0),
+        0xA1 => Ok(TypeCode::Str8),
+        0xB1 => Ok(TypeCode::Str32),
+        _ => Err(AmqpError::new("Unknown code!")),
+    }
 }
 
+// const TYPE_CODE_Bool = 0x56,
+// const TYPE_CODE_Truebool = 0x41,
+// const TYPE_CODE_Falsebool = 0x42,
+// const TYPE_CODE_Ubyte = 0x50,
+// const TYPE_CODE_Ushort = 0x60,
+// const TYPE_CODE_Uint = 0x70,
+// const TYPE_CODE_Smalluint = 0x52,
+// const TYPE_CODE_Uint0 = 0x43,
+
+// const TYPE_CODE_Byte = 0x51,
+// const TYPE_CODE_Short = 0x61,
+// const TYPE_CODE_Smallint = 0x54,
+// const TYPE_CODE_Int = 0x71,
+// const TYPE_CODE_Smalllong = 0x55,
+// const TYPE_CODE_Long = 0x81,
+// const TYPE_CODE_Float = 0x72,
+// const TYPE_CODE_Double = 0x82,
+// const TYPE_CODE_Decimal32 = 0x74,
+// const TYPE_CODE_Decimal64 = 0x84,
+// const TYPE_CODE_Decimal128 = 0x94,
+// const TYPE_CODE_Char = 0x73,
+// const TYPE_CODE_Timestamp = 0x83,
+// const TYPE_CODE_Uuid = 0x98,
+// const TYPE_CODE_Vbin8 = 0xA0,
+// const TYPE_CODE_Vbin32 = 0xB0,
+// const TYPE_CODE_Str8 = 0xA1,
+// const TYPE_CODE_Str32 = 0xB1,
+// const TYPE_CODE_Sym8 = 0xA3,
+// const TYPE_CODE_Sym32 = 0xB3,
+// const TYPE_CODE_List0 = 0x45,
+// const TYPE_CODE_List8 = 0xC0,
+// const TYPE_CODE_List32 = 0xD0,
+// const TYPE_CODE_Map8 = 0xC1,
+// const TYPE_CODE_Map32 = 0xD1,
+//const TYPE_CODE_Array8 = 0xE0,
+//const TYPE_CODE_Array32 = 0xF0,
+
+/*
+fn decode_value<T: AmqpCodec<T>>(stream: &mut Read) -> Result<T> {
+    let code = stream.read_u8()?;
+    return T::decode(code, stream);
+}
+*/
+
+/*
 fn encode_value(amqp_value: &AmqpValue, stream: &mut Write) -> Result<()> {
     match amqp_value {
         AmqpValue::Null => encode_type(TypeCode::Null, stream)?,
@@ -362,6 +452,7 @@ fn encoded_size(value: &AmqpValue) -> u32 {
         AmqpValue::Fields(value) => 0,
     };
 }
+*/
 
 struct Descriptor(&'static str, u64);
 
@@ -374,10 +465,11 @@ enum Performative {
 
 fn encode_performative(performative: Performative, stream: &mut Write) -> Result<()> {
     stream.write_u8(0);
-    encode_value(&AmqpValue::Ulong(performative as u64), stream)?;
+    // encode_value(&AmqpValue::Ulong(performative as u64), stream)?;
     return Ok(());
 }
 
+/*
 struct OpenFrame {
     container_id: AmqpValue,
     hostname: AmqpValue,
@@ -427,6 +519,7 @@ impl OpenFrame {
         return Ok(());
     }
 }
+*/
 
 /*
 fn decode(frame: &Frame, stream: &Read) -> Result<Frame> {
@@ -453,6 +546,14 @@ impl fmt::Display for AmqpError {
 
 impl std::convert::From<io::Error> for AmqpError {
     fn from(error: io::Error) -> Self {
+        return AmqpError {
+            msg: error.to_string(),
+        };
+    }
+}
+
+impl std::convert::From<std::string::FromUtf8Error> for AmqpError {
+    fn from(error: std::string::FromUtf8Error) -> Self {
         return AmqpError {
             msg: error.to_string(),
         };
@@ -518,6 +619,7 @@ impl Container {
 
         stream.write(&AMQP_10_VERSION)?;
 
+        /*
         // AMQP OPEN
         let frame = OpenFrame {
             container_id: AmqpValue::String(String::from(self.id)),
@@ -534,6 +636,7 @@ impl Container {
 
         frame.encode(&mut stream)?;
         stream.flush();
+        */
 
         return Ok(Connection {
             stream: stream,
@@ -577,6 +680,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn codec() {
+        let mut output: Vec<u8> = Vec::new();
+        let v = Value::Ulong(1234);
+        let len = encode(v, &mut output).unwrap();
+        assert_eq!(9, len);
+        assert_eq!(9, output.len());
+    }
+    /*
+    #[test]
     fn encode_list() {
         let list = AmqpValue::List(vec![
             AmqpValue::String(String::from("fab6c474-983c-11e9-98ba-c85b7644b4a4")),
@@ -604,5 +716,5 @@ mod tests {
             .unwrap();
 
         println!("YAY!");
-    }
+    }*/
 }
