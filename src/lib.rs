@@ -551,8 +551,41 @@ fn encode_performative(performative: Performative, stream: &mut Write) -> Result
     return Ok(());
 }
 
+enum Frame {
+    Open {
+        container_id: String,
+        hostname: String,
+        max_frame_size: u32,
+        channel_max: u16,
+        // TODO: Add the rest
+    },
+}
+
+fn encode_frame(frame: &Frame, stream: &mut Write) -> Result<usize> {
+    stream.write_u8(0)?;
+    match frame {
+        Frame::Open {
+            container_id,
+            hostname,
+            max_frame_size,
+            channel_max,
+        } => {
+            let mut sz = encode_ref(&Value::Ulong(0x10), stream)?;
+            let args = vec![
+                Value::String(container_id.clone()),
+                Value::String(hostname.clone()),
+                Value::Null,
+                Value::Null,
+            ];
+            sz += encode_ref(&Value::List(args), stream)?;
+            Ok(sz)
+        }
+    }
+}
+
 /*
 struct OpenFrame {
+
     container_id: AmqpValue,
     hostname: AmqpValue,
     max_frame_size: AmqpValue,
