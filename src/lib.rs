@@ -19,60 +19,21 @@ use std::vec::Vec;
 
 type Result<T> = std::result::Result<T, AmqpError>;
 
-/*
-type Null = ();
-type Boolean = bool;
-type Ubyte = u8;
-type Ushort = u16;
-type Uint = u32;
-type Ulong = u64;
-type Symbol = String;
-
-trait AmqpCodec<T> {
-    fn encode(value: T, stream: &mut Write) -> Result<usize>;
-    fn decode(code: u8, stream: &mut Read) -> Result<T>;
-}
-
-impl AmqpCodec<Ulong> for Ulong {
-    fn encode(value: Ulong, stream: &mut Write) -> Result<usize> {
-        Ok(if value > 0xFF {
-            stream.write_u8(TYPE_CODE_ULONG)?;
-            stream.write_u64::<NetworkEndian>(value)?;
-            5
-        } else if value > 0 {
-            stream.write_u8(TYPE_CODE_SMALLULONG)?;
-            stream.write_u8(value as u8)?;
-            2
-        } else {
-            stream.write_u8(TYPE_CODE_ULONG0)?;
-            1
-        })
-    }
-
-    fn decode(code: u8, stream: &mut Read) -> Result<Ulong> {
-        match code {
-            TYPE_CODE_ULONG => Ok(stream.read_u64::<NetworkEndian>()?),
-            TYPE_CODE_SMALLULONG => Ok(stream.read_u8()? as u64),
-            TYPE_CODE_ULONG0 => Ok(0),
-            _ => Err(AmqpError::new("Cannot decode type as Ulong")),
-        }
-    }
-}
-*/
-
 enum Kind {
     Null,
     Ulong,
     String,
     List,
+    Map,
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, PartialOrd)]
 enum Value {
     Null,
     Ulong(u64),
     String(String),
     List(Vec<Value>),
+    Map(BTreeMap<Value, Value>),
 }
 
 const U8_MAX: usize = std::u8::MAX as usize;
@@ -121,7 +82,7 @@ fn encode_ref(value: &Value, stream: &mut Write) -> Result<usize> {
 
             if listbuf.len() > LIST32_MAX {
                 Err(AmqpError::new(
-                    "Size cannot be longer than 4294967291 bytes",
+                    "Encoded list size cannot be longer than 4294967291 bytes",
                 ))
             } else if listbuf.len() > LIST8_MAX {
                 stream.write_u8(TypeCode::List32 as u8)?;
@@ -138,6 +99,33 @@ fn encode_ref(value: &Value, stream: &mut Write) -> Result<usize> {
             } else {
                 stream.write_u8(TypeCode::List0 as u8)?;
                 Ok(1)
+            }
+        }
+        Value::Map(m) => {
+            let mut listbuf = Vec::new();
+            for (key, value) in m {
+                encode_ref(key, &mut listbuf)?;
+                encode_ref(value, &mut listbuf)?;
+            }
+
+            let n_items = m.len() * 2;
+
+            if listbuf.len() > LIST32_MAX {
+                Err(AmqpError::new(
+                    "Encoded map size cannot be longer than 4294967291 bytes",
+                ))
+            } else if listbuf.len() > LIST8_MAX || n_items > U8_MAX {
+                stream.write_u8(TypeCode::Map32 as u8)?;
+                stream.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
+                stream.write_u32::<NetworkEndian>(n_items as u32)?;
+                stream.write(&listbuf[..]);
+                Ok(9 + listbuf.len())
+            } else {
+                stream.write_u8(TypeCode::Map8 as u8)?;
+                stream.write_u8((1 + listbuf.len()) as u8)?;
+                stream.write_u8(n_items as u8)?;
+                stream.write(&listbuf[..]);
+                Ok(3 + listbuf.len())
             }
         }
     }
@@ -192,6 +180,34 @@ fn decode(stream: &mut Read) -> Result<Value> {
             }
             Ok(Value::List(data))
         }
+        TypeCode::Map8 => {
+            /*
+            let sz = stream.read_u8()? as usize;
+            let count = stream.read_u8()? as usize / 2;
+            let mut data: BTreeMap<Value, Value> = BTreeMap::new();
+            for num in (0..count) {
+                let key = decode(stream)?;
+                let value = decode(stream)?;
+                data.insert(key, value);
+            }
+            Ok(Value::Map(data))
+            */
+            Ok(Value::Null)
+        }
+        TypeCode::Map32 => {
+            /*
+            let sz = stream.read_u32::<NetworkEndian>()? as usize;
+            let count = stream.read_u32::<NetworkEndian>()? as usize / 2;
+            let mut data: BTreeMap<Value, Value> = BTreeMap::new();
+            for num in (0..count) {
+                let key = decode(stream)?;
+                let value = decode(stream)?;
+                data.insert(key, value);
+            }
+            Ok(Value::Map(data))
+                */
+            Ok(Value::Null)
+        }
     }
 }
 
@@ -206,6 +222,8 @@ enum TypeCode {
     List0 = 0x45,
     List8 = 0xC0,
     List32 = 0xD0,
+    Map8 = 0xC1,
+    Map32 = 0xD1,
 }
 
 fn decode_type(code: u8) -> Result<TypeCode> {
@@ -219,6 +237,8 @@ fn decode_type(code: u8) -> Result<TypeCode> {
         0x45 => Ok(TypeCode::List0),
         0xC0 => Ok(TypeCode::List8),
         0xD0 => Ok(TypeCode::List32),
+        0xC1 => Ok(TypeCode::Map8),
+        0xD1 => Ok(TypeCode::Map32),
         _ => Err(AmqpError::new("Unknown code!")),
     }
 }
