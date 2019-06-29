@@ -64,48 +64,83 @@ enum Kind {
     Null,
     Ulong,
     String,
+    List,
 }
 
+#[derive(Clone, PartialEq, Debug)]
 enum Value {
     Null,
     Ulong(u64),
     String(String),
+    List(Vec<Value>),
 }
 
-fn encode(value: Value, stream: &mut Write) -> Result<usize> {
-    return Ok(match value {
+const U8_MAX: usize = std::u8::MAX as usize;
+const U32_MAX: usize = std::u32::MAX as usize;
+const LIST8_MAX: usize = (std::u8::MAX as usize) - 1;
+const LIST32_MAX: usize = (std::u32::MAX as usize) - 4;
+
+fn encode_ref(value: &Value, stream: &mut Write) -> Result<usize> {
+    match value {
         Value::Null => {
             stream.write_u8(TypeCode::Null as u8)?;
-            1
+            Ok(1)
         }
         Value::String(val) => {
-            if val.len() > 0xFF {
+            if val.len() > U8_MAX {
                 stream.write_u8(TypeCode::Str32 as u8)?;
                 stream.write_u32::<NetworkEndian>(val.len() as u32)?;
                 stream.write(val.as_bytes())?;
-                5 + val.len()
+                Ok(5 + val.len())
             } else {
                 stream.write_u8(TypeCode::Str8 as u8)?;
                 stream.write_u8(val.len() as u8)?;
                 stream.write(val.as_bytes())?;
-                2 + val.len()
+                Ok(2 + val.len())
             }
         }
         Value::Ulong(val) => {
-            if val > 0xFF {
+            if *val > U8_MAX as u64 {
                 stream.write_u8(TypeCode::Ulong as u8)?;
-                stream.write_u64::<NetworkEndian>(val)?;
-                9
-            } else if val > 0 {
+                stream.write_u64::<NetworkEndian>(*val)?;
+                Ok(9)
+            } else if *val > 0 {
                 stream.write_u8(TypeCode::Ulongsmall as u8)?;
-                stream.write_u8(val as u8)?;
-                2
+                stream.write_u8(*val as u8)?;
+                Ok(2)
             } else {
                 stream.write_u8(TypeCode::Ulong0 as u8)?;
-                1
+                Ok(1)
             }
         }
-    });
+        Value::List(vec) => {
+            let mut listbuf = Vec::new();
+            for v in vec.iter() {
+                encode_ref(v, &mut listbuf)?;
+            }
+
+            if listbuf.len() > LIST32_MAX {
+                Err(AmqpError::new(
+                    "Size cannot be longer than 4294967291 bytes",
+                ))
+            } else if listbuf.len() > LIST8_MAX {
+                stream.write_u8(TypeCode::List32 as u8)?;
+                stream.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
+                stream.write_u32::<NetworkEndian>(vec.len() as u32)?;
+                stream.write(&listbuf[..]);
+                Ok(9 + listbuf.len())
+            } else if listbuf.len() > 0 {
+                stream.write_u8(TypeCode::List8 as u8)?;
+                stream.write_u8((1 + listbuf.len()) as u8)?;
+                stream.write_u8(vec.len() as u8)?;
+                stream.write(&listbuf[..]);
+                Ok(3 + listbuf.len())
+            } else {
+                stream.write_u8(TypeCode::List0 as u8)?;
+                Ok(1)
+            }
+        }
+    }
 }
 
 fn decode(stream: &mut Read) -> Result<Value> {
@@ -136,6 +171,27 @@ fn decode(stream: &mut Read) -> Result<Value> {
             let s = String::from_utf8(buffer)?;
             Ok(Value::String(s))
         }
+        TypeCode::List0 => Ok(Value::List(Vec::new())),
+        TypeCode::List8 => {
+            let sz = stream.read_u8()? as usize;
+            let count = stream.read_u8()? as usize;
+            let mut data: Vec<Value> = Vec::new();
+            for num in (0..count) {
+                let result = decode(stream)?;
+                data.push(result);
+            }
+            Ok(Value::List(data))
+        }
+        TypeCode::List32 => {
+            let sz = stream.read_u32::<NetworkEndian>()? as usize;
+            let count = stream.read_u32::<NetworkEndian>()? as usize;
+            let mut data: Vec<Value> = Vec::new();
+            for num in (0..count) {
+                let result = decode(stream)?;
+                data.push(result);
+            }
+            Ok(Value::List(data))
+        }
     }
 }
 
@@ -147,6 +203,9 @@ enum TypeCode {
     Ulong0 = 0x44,
     Str8 = 0xA1,
     Str32 = 0xB1,
+    List0 = 0x45,
+    List8 = 0xC0,
+    List32 = 0xD0,
 }
 
 fn decode_type(code: u8) -> Result<TypeCode> {
@@ -157,6 +216,9 @@ fn decode_type(code: u8) -> Result<TypeCode> {
         0x44 => Ok(TypeCode::Ulong0),
         0xA1 => Ok(TypeCode::Str8),
         0xB1 => Ok(TypeCode::Str32),
+        0x45 => Ok(TypeCode::List0),
+        0xC0 => Ok(TypeCode::List8),
+        0xD0 => Ok(TypeCode::List32),
         _ => Err(AmqpError::new("Unknown code!")),
     }
 }
@@ -679,13 +741,30 @@ impl Session {
 mod tests {
     use super::*;
 
-    #[test]
-    fn codec() {
+    fn assert_type(value: &Value, expected_len: usize) {
         let mut output: Vec<u8> = Vec::new();
-        let v = Value::Ulong(1234);
-        let len = encode(v, &mut output).unwrap();
-        assert_eq!(9, len);
-        assert_eq!(9, output.len());
+        let len = encode_ref(value, &mut output).unwrap();
+        assert_eq!(expected_len, len);
+        assert_eq!(expected_len, output.len());
+
+        let decoded = decode(&mut &output[..]).unwrap();
+        assert_eq!(&decoded, value);
+    }
+
+    #[test]
+    fn check_types() {
+        assert_type(&Value::Ulong(123), 2);
+        assert_type(&Value::Ulong(1234), 9);
+        assert_type(&Value::String(String::from("Hello, world")), 14);
+        assert_type(&Value::String(String::from("aaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbcccccccccccccccccccccccdddddddddddddddddddddddddeeeeeeeeeeeeeeeeeeeeeeeeeffffffffffffffffffffgggggggggggggggggggggggghhhhhhhhhhhhhhhhhhhhhhhiiiiiiiiiiiiiiiiiiiiiiiijjjjjjjjjjjjjjjjjjjkkkkkkkkkkkkkkkkkkkkkkllllllllllllllllllllmmmmmmmmmmmmmmmmmmmmnnnnnnnnnnnnnnnnnnnnooooooooooooooooooooppppppppppppppppppqqqqqqqqqqqqqqqq")), 370);
+        assert_type(
+            &Value::List(vec![
+                Value::Ulong(1),
+                Value::Ulong(42),
+                Value::String(String::from("Hello, world")),
+            ]),
+            21,
+        );
     }
     /*
     #[test]
