@@ -6,7 +6,6 @@
 use byteorder::NetworkEndian;
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::convert::From;
 use std::error;
@@ -21,6 +20,8 @@ type Result<T> = std::result::Result<T, AmqpError>;
 
 enum Kind {
     Null,
+    Ushort,
+    Uint,
     Ulong,
     String,
     List,
@@ -30,6 +31,8 @@ enum Kind {
 #[derive(Clone, PartialEq, Debug, PartialOrd)]
 enum Value {
     Null,
+    Ushort(u16),
+    Uint(u32),
     Ulong(u64),
     String(String),
     List(Vec<Value>),
@@ -58,6 +61,25 @@ fn encode_ref(value: &Value, stream: &mut Write) -> Result<usize> {
                 stream.write_u8(val.len() as u8)?;
                 stream.write(val.as_bytes())?;
                 Ok(2 + val.len())
+            }
+        }
+        Value::Ushort(val) => {
+            stream.write_u8(TypeCode::Ushort as u8)?;
+            stream.write_u16::<NetworkEndian>(*val)?;
+            Ok(3)
+        }
+        Value::Uint(val) => {
+            if *val > U8_MAX as u32 {
+                stream.write_u8(TypeCode::Uint as u8)?;
+                stream.write_u32::<NetworkEndian>(*val)?;
+                Ok(5)
+            } else if *val > 0 {
+                stream.write_u8(TypeCode::Uintsmall as u8)?;
+                stream.write_u8(*val as u8)?;
+                Ok(2)
+            } else {
+                stream.write_u8(TypeCode::Uint0 as u8)?;
+                Ok(1)
             }
         }
         Value::Ulong(val) => {
@@ -136,6 +158,19 @@ fn decode(stream: &mut Read) -> Result<Value> {
     let code = decode_type(raw_code)?;
     match code {
         TypeCode::Null => Ok(Value::Null),
+        TypeCode::Ushort => {
+            let val = stream.read_u16::<NetworkEndian>()?;
+            Ok(Value::Ushort(val))
+        }
+        TypeCode::Uint => {
+            let val = stream.read_u32::<NetworkEndian>()?;
+            Ok(Value::Uint(val))
+        }
+        TypeCode::Uintsmall => {
+            let val = stream.read_u8()? as u32;
+            Ok(Value::Uint(val))
+        }
+        TypeCode::Uint0 => Ok(Value::Uint(0)),
         TypeCode::Ulong => {
             let val = stream.read_u64::<NetworkEndian>()?;
             Ok(Value::Ulong(val))
@@ -161,20 +196,20 @@ fn decode(stream: &mut Read) -> Result<Value> {
         }
         TypeCode::List0 => Ok(Value::List(Vec::new())),
         TypeCode::List8 => {
-            let sz = stream.read_u8()? as usize;
+            let _sz = stream.read_u8()? as usize;
             let count = stream.read_u8()? as usize;
             let mut data: Vec<Value> = Vec::new();
-            for num in (0..count) {
+            for _num in 0..count {
                 let result = decode(stream)?;
                 data.push(result);
             }
             Ok(Value::List(data))
         }
         TypeCode::List32 => {
-            let sz = stream.read_u32::<NetworkEndian>()? as usize;
+            let _sz = stream.read_u32::<NetworkEndian>()? as usize;
             let count = stream.read_u32::<NetworkEndian>()? as usize;
             let mut data: Vec<Value> = Vec::new();
-            for num in (0..count) {
+            for _num in 0..count {
                 let result = decode(stream)?;
                 data.push(result);
             }
@@ -214,6 +249,10 @@ fn decode(stream: &mut Read) -> Result<Value> {
 #[repr(u8)]
 enum TypeCode {
     Null = 0x40,
+    Ushort = 0x60,
+    Uint = 0x70,
+    Uintsmall = 0x52,
+    Uint0 = 0x43,
     Ulong = 0x80,
     Ulongsmall = 0x53,
     Ulong0 = 0x44,
@@ -229,6 +268,10 @@ enum TypeCode {
 fn decode_type(code: u8) -> Result<TypeCode> {
     match code {
         0x40 => Ok(TypeCode::Null),
+        0x60 => Ok(TypeCode::Ushort),
+        0x70 => Ok(TypeCode::Uint),
+        0x52 => Ok(TypeCode::Uintsmall),
+        0x43 => Ok(TypeCode::Uint0),
         0x80 => Ok(TypeCode::Ulong),
         0x53 => Ok(TypeCode::Ulongsmall),
         0x44 => Ok(TypeCode::Ulong0),
@@ -536,6 +579,7 @@ fn encoded_size(value: &AmqpValue) -> u32 {
 }
 */
 
+/*
 struct Descriptor(&'static str, u64);
 
 const DESC_OPEN: Descriptor = Descriptor("amqp:open:list", 0x0000_0000_0000_0010);
@@ -550,6 +594,7 @@ fn encode_performative(performative: Performative, stream: &mut Write) -> Result
     // encode_value(&AmqpValue::Ulong(performative as u64), stream)?;
     return Ok(());
 }
+*/
 
 enum Frame {
     Open {
@@ -560,6 +605,8 @@ enum Frame {
         // TODO: Add the rest
     },
 }
+
+struct Transport {}
 
 fn encode_frame(frame: &Frame, stream: &mut Write) -> Result<usize> {
     stream.write_u8(0)?;
@@ -574,8 +621,8 @@ fn encode_frame(frame: &Frame, stream: &mut Write) -> Result<usize> {
             let args = vec![
                 Value::String(container_id.clone()),
                 Value::String(hostname.clone()),
-                Value::Null,
-                Value::Null,
+                Value::Uint(*max_frame_size),
+                Value::Ushort(*channel_max),
             ];
             sz += encode_ref(&Value::List(args), stream)?;
             Ok(sz)
