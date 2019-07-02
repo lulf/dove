@@ -631,6 +631,7 @@ pub struct ConnectionOptions {
 
 pub struct Container {
     id: &'static str,
+    //    transport: &'a Transport,
 }
 
 enum ConnectionState {
@@ -664,9 +665,23 @@ pub struct Receiver {}
 
 const AMQP_10_VERSION: [u8; 8] = [65, 77, 81, 80, 0, 1, 0, 0];
 
+/*
+struct Transport {
+    connections: Vec<Connection>,
+    thread_pool:
+}
+
+static global_transport: Transport = Transport {
+    connections: Vec::new(),
+};
+ */
+
 impl Container {
     pub fn new(id: &'static str) -> Container {
-        Container { id: id }
+        Container {
+            id: id,
+            //         transport: &global_transport,
+        }
     }
 
     pub fn connect(&self, opts: ConnectionOptions) -> Result<Connection> {
