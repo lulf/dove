@@ -596,38 +596,64 @@ fn encode_performative(performative: Performative, stream: &mut Write) -> Result
 }
 */
 
-enum Frame {
-    Open {
-        container_id: String,
-        hostname: String,
-        max_frame_size: u32,
-        channel_max: u16,
-        // TODO: Add the rest
-    },
+struct OpenFrame {
+    container_id: String,
+    hostname: String,
+    max_frame_size: u32,
+    channel_max: u16,
 }
 
-struct Transport {}
-
-fn encode_frame(frame: &Frame, stream: &mut Write) -> Result<usize> {
-    stream.write_u8(0)?;
-    match frame {
-        Frame::Open {
-            container_id,
-            hostname,
-            max_frame_size,
-            channel_max,
-        } => {
-            let mut sz = encode_ref(&Value::Ulong(0x10), stream)?;
-            let args = vec![
-                Value::String(container_id.clone()),
-                Value::String(hostname.clone()),
-                Value::Uint(*max_frame_size),
-                Value::Ushort(*channel_max),
-            ];
-            sz += encode_ref(&Value::List(args), stream)?;
-            Ok(sz)
-        }
+impl Default for OpenFrame {
+    fn default() -> Self {
+        self.max_frame_size: std::u32::MAX;
     }
+}
+
+struct Field {
+    name: &'static str,
+    kind: Kind,
+}
+
+struct Schema {
+    name: &'static str,
+    performative: Value,
+    fields: &'static [Field],
+}
+
+const SCHEMA_OPEN: Schema = Schema {
+    name: "open",
+    performative: Value::Ulong(0x10),
+    fields: &[
+        Field {
+            name: "container_id",
+            kind: Kind::String,
+        },
+        Field {
+            name: "hostname",
+            kind: Kind::String,
+        },
+        Field {
+            name: "max_frame_size",
+            kind: Kind::Uint,
+        },
+        Field {
+            name: "channel_max",
+            kind: Kind::Ushort,
+        },
+    ],
+};
+
+fn encode_frame(frame: &OpenFrame, schema: &Schema, stream: &mut Write) -> Result<usize> {
+    stream.write_u8(0)?;
+    let mut sz = encode_ref(&Value::Ulong(0x10), stream)?;
+    let args = vec![
+        Value::String(frame.container_id.clone()),
+        Value::String(frame.hostname.clone()),
+        Value::Uint(*frame.max_frame_size),
+        Value::Ushort(*frame.channel_max),
+    ];
+    sz += encode_ref(&Value::List(args), stream)?;
+    Ok(sz)
 }
 
 /*
