@@ -15,6 +15,7 @@ use std::io::Read;
 use std::io::Write;
 use std::net::TcpStream;
 use std::vec::Vec;
+use uuid::Uuid;
 
 type Result<T> = std::result::Result<T, AmqpError>;
 
@@ -511,209 +512,76 @@ fn encode_value(amqp_value: &AmqpValue, stream: &mut Write) -> Result<()> {
     }
     return Ok(());
 }
-
-fn encoded_size(value: &AmqpValue) -> u32 {
-    return match value {
-        AmqpValue::Null => 1,
-        AmqpValue::Boolean(value) => 1,
-        AmqpValue::Ubyte(value) => 2,
-        AmqpValue::Ushort(value) => 3,
-        AmqpValue::Uint(value) => 5,
-        AmqpValue::Ulong(value) => {
-            if *value > 0xFF {
-                9
-            } else if *value > 0 {
-                2
-            } else {
-                1
-            }
-        }
-        AmqpValue::Byte(value) => 2,
-        AmqpValue::Short(value) => 3,
-        AmqpValue::Int(value) => 5,
-        AmqpValue::Long(value) => 9,
-        AmqpValue::Float(value) => 5,
-        AmqpValue::Double(value) => 9,
-        AmqpValue::Decimal32(value) => 5,
-        AmqpValue::Decimal64(value) => 9,
-        AmqpValue::Decimal128(value) => 17,
-        AmqpValue::Char(value) => 1, // TODO: Fix size
-        AmqpValue::Timestamp(value) => 9,
-        AmqpValue::Uuid(value) => 1 + value.len() as u32,
-        AmqpValue::Binary(value) => {
-            if (*value).len() > 0xFF {
-                5 + (*value).len() as u32
-            } else {
-                2 + (*value).len() as u32
-            }
-        }
-        AmqpValue::String(value) => {
-            if value.len() > 0xFF {
-                5 + value.len() as u32
-            } else {
-                2 + value.len() as u32
-            }
-        }
-        AmqpValue::Symbol(value) => {
-            if value.len() > 0xFF {
-                5 + value.len() as u32
-            } else {
-                2 + value.len() as u32
-            }
-        }
-        AmqpValue::List(value) => {
-            if value.len() > 0 {
-                9 + value.iter().fold(0, |a, v| a + encoded_size(v))
-            /*            } else if value.len() > 0 {
-            3 + value.iter().fold(0, |a, v| a + encoded_size(v))*/
-            } else {
-                1
-            }
-        }
-        AmqpValue::Map(value) => 1,
-        AmqpValue::Array(value) => 1,
-        AmqpValue::Milliseconds(value) => 5,
-        AmqpValue::IetfLanguageTag(value) => 0,
-        AmqpValue::Fields(value) => 0,
-    };
-}
 */
 
-/*
-struct Descriptor(&'static str, u64);
-
-const DESC_OPEN: Descriptor = Descriptor("amqp:open:list", 0x0000_0000_0000_0010);
-
-#[derive(Copy, Clone)]
-enum Performative {
-    Open = 0x10,
-}
-
-fn encode_performative(performative: Performative, stream: &mut Write) -> Result<()> {
-    stream.write_u8(0);
-    // encode_value(&AmqpValue::Ulong(performative as u64), stream)?;
-    return Ok(());
-}
-*/
-
-struct OpenFrame {
+struct OpenPerformative {
     container_id: String,
     hostname: String,
     max_frame_size: u32,
     channel_max: u16,
 }
 
-impl Default for OpenFrame {
-    fn default() -> Self {
-        self.max_frame_size: std::u32::MAX;
+impl Default for OpenPerformative {
+    fn default() -> OpenPerformative {
+        OpenPerformative {
+            container_id: Uuid::new_v4().to_string(),
+            hostname: String::new(),
+            max_frame_size: 4294967295,
+            channel_max: 65535,
+        }
     }
 }
 
-struct Field {
-    name: &'static str,
-    kind: Kind,
+enum Performative {
+    Open(OpenPerformative),
 }
 
-struct Schema {
-    name: &'static str,
-    performative: Value,
-    fields: &'static [Field],
+enum FrameType {
+    AMQP,
+    SASL,
 }
 
-const SCHEMA_OPEN: Schema = Schema {
-    name: "open",
-    performative: Value::Ulong(0x10),
-    fields: &[
-        Field {
-            name: "container_id",
-            kind: Kind::String,
-        },
-        Field {
-            name: "hostname",
-            kind: Kind::String,
-        },
-        Field {
-            name: "max_frame_size",
-            kind: Kind::Uint,
-        },
-        Field {
-            name: "channel_max",
-            kind: Kind::Ushort,
-        },
-    ],
-};
+struct Frame {
+    frameType: FrameType,
+    channel: u16,
+    performative: Option<Performative>,
+    payload: Option<Box<Vec<u8>>>,
+}
 
-fn encode_frame(frame: &OpenFrame, schema: &Schema, stream: &mut Write) -> Result<usize> {
-    stream.write_u8(0)?;
-    let mut sz = encode_ref(&Value::Ulong(0x10), stream)?;
-    let args = vec![
-        Value::String(frame.container_id.clone()),
-        Value::String(frame.hostname.clone()),
-        Value::Uint(*frame.max_frame_size),
-        Value::Ushort(*frame.channel_max),
-    ];
-    sz += encode_ref(&Value::List(args), stream)?;
+fn encode_frame(frame: &Frame, stream: &mut Write) -> Result<usize> {
+    let mut buf: Vec<u8> = Vec::new();
+    let doff = 2;
+    let mut sz = 8;
+
+    buf.write_u8(doff)?;
+    buf.write_u8(0)?;
+    buf.write_u16::<NetworkEndian>(frame.channel)?;
+
+    if let Some(performative) = &frame.performative {
+        match performative {
+            Performative::Open(open) => {
+                buf.write_u8(0)?;
+                sz += encode_ref(&Value::Ulong(0x10), &mut buf)? + 1;
+                let args = vec![
+                    Value::String(open.container_id.clone()),
+                    Value::String(open.hostname.clone()),
+                    Value::Uint(open.max_frame_size),
+                    Value::Ushort(open.channel_max),
+                ];
+                sz += encode_ref(&Value::List(args), &mut buf)?;
+            }
+        }
+    }
+
+    stream.write_u32::<NetworkEndian>(sz as u32);
+    stream.write(&buf[..]);
+
     Ok(sz)
 }
 
-/*
-struct OpenFrame {
-
-    container_id: AmqpValue,
-    hostname: AmqpValue,
-    max_frame_size: AmqpValue,
-    channel_max: AmqpValue,
-    idle_time_out: AmqpValue,
-    outgoing_locales: AmqpValue,
-    incoming_locales: AmqpValue,
-    offered_capabilities: AmqpValue,
-    desired_capabilities: AmqpValue,
-    properties: AmqpValue,
+fn decode_frame(_stream: &mut Read) -> Result<Frame> {
+    Err(AmqpError::new("Not implemented"))
 }
-
-impl OpenFrame {
-    fn encode(&self, stream: &mut Write) -> Result<()> {
-        let arguments: Vec<AmqpValue> = vec![
-            self.container_id.clone(),
-            self.hostname.clone(),
-            self.max_frame_size.clone(),
-            self.channel_max.clone(),
-            self.idle_time_out.clone(),
-            self.outgoing_locales.clone(),
-            self.incoming_locales.clone(),
-            self.offered_capabilities.clone(),
-            self.desired_capabilities.clone(),
-            self.properties.clone(),
-        ];
-
-        let list = AmqpValue::List(vec![
-            AmqpValue::String(String::from("fab6c474-983c-11e9-98ba-c85b7644b4a4")),
-            AmqpValue::String(String::from("localhost")),
-            AmqpValue::Null,
-            AmqpValue::Ushort(32767),
-        ]);
-        let performative = AmqpValue::Ulong(Performative::Open as u64);
-        let sz = 8 + encoded_size(&list) + encoded_size(&performative) + 1;
-        println!("Total size: {}", sz);
-        let doff = 2;
-
-        stream.write_u32::<NetworkEndian>(sz)?;
-        stream.write_u8(doff)?;
-        stream.write_u8(0)?;
-        stream.write_u16::<NetworkEndian>(0)?;
-        encode_performative(Performative::Open, stream)?;
-
-        encode_value(&list, stream)?;
-        return Ok(());
-    }
-}
-*/
-
-/*
-fn decode(frame: &Frame, stream: &Read) -> Result<Frame> {
-    let size = stream.read_u32()?;
-}
-*/
 
 #[derive(Debug, Clone)]
 pub struct AmqpError {
@@ -807,24 +675,18 @@ impl Container {
 
         stream.write(&AMQP_10_VERSION)?;
 
-        /*
         // AMQP OPEN
-        let frame = OpenFrame {
-            container_id: AmqpValue::String(String::from(self.id)),
-            hostname: AmqpValue::String(String::from(opts.host)),
-            max_frame_size: AmqpValue::Null,
-            channel_max: AmqpValue::Ushort(32767),
-            idle_time_out: AmqpValue::Null,
-            outgoing_locales: AmqpValue::Null,
-            incoming_locales: AmqpValue::Null,
-            offered_capabilities: AmqpValue::Null,
-            desired_capabilities: AmqpValue::Null,
-            properties: AmqpValue::Null,
+        let frame = Frame {
+            frameType: FrameType::AMQP,
+            channel: 0,
+            performative: Some(Performative::Open(OpenPerformative {
+                hostname: String::from(opts.host),
+                ..Default::default()
+            })),
+            payload: None,
         };
 
-        frame.encode(&mut stream)?;
-        stream.flush();
-        */
+        encode_frame(&frame, &mut stream)?;
 
         return Ok(Connection {
             stream: stream,
@@ -892,6 +754,20 @@ mod tests {
             21,
         );
     }
+
+    #[test]
+    fn check_performatives() {
+        let frm = OpenPerformative {
+            hostname: String::from("localhost"),
+            ..Default::default()
+        };
+
+        assert_eq!(String::from("localhost"), frm.hostname);
+        assert_eq!(36, frm.container_id.len());
+        assert_eq!(4294967295, frm.max_frame_size);
+        assert_eq!(65535, frm.channel_max);
+    }
+
     /*
     #[test]
     fn encode_list() {
@@ -908,6 +784,7 @@ mod tests {
         println!("Size: {}, of output: {}", sz, output.len());
         println!("{:X?}", &output[..])
     }
+    */
 
     #[test]
     fn open_connection() {
@@ -921,5 +798,5 @@ mod tests {
             .unwrap();
 
         println!("YAY!");
-    }*/
+    }
 }
