@@ -804,6 +804,9 @@ impl Container {
 }
 
 impl Connection {
+    // Wait for next connection state event
+    //    pub fn wait() -> Result<Event> {}
+
     pub fn create_session() -> Result<Session> {
         return Err(AmqpError::new("Not yet implemented"));
     }
