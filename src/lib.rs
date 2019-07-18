@@ -41,39 +41,25 @@ enum Value {
 }
 
 impl Value {
-    fn to_string(self: &Self) -> Option<String> {
+    fn to_string(self: &Self) -> String {
         match self {
-            Value::Null => None,
-            Value::Ushort(v) => Some(v.to_string()),
-            Value::Uint(v) => Some(v.to_string()),
-            Value::Ulong(v) => Some(v.to_string()),
-            Value::String(v) => Some(v.clone()),
-            Value::List(v) => None,
-            Value::Map(v) => None,
+            Value::String(v) => v.clone(),
+            _ => panic!("Unexpected type"),
         }
     }
 
-    fn to_u32(self: &Self) -> Option<u32> {
+    fn to_u32(self: &Self) -> u32 {
         match self {
-            Value::Null => None,
-            Value::Ushort(v) => Some(*v as u32),
-            Value::Uint(v) => Some(*v as u32),
-            Value::Ulong(v) => None,
-            Value::String(v) => None,
-            Value::List(v) => None,
-            Value::Map(v) => None,
+            Value::Ushort(v) => (*v as u32),
+            Value::Uint(v) => (*v as u32),
+            _ => panic!("Unexpected type"),
         }
     }
 
-    fn to_u16(self: &Self) -> Option<u16> {
+    fn to_u16(self: &Self) -> u16 {
         match self {
-            Value::Null => None,
-            Value::Ushort(v) => Some(*v as u16),
-            Value::Uint(v) => None,
-            Value::Ulong(v) => None,
-            Value::String(v) => None,
-            Value::List(v) => None,
-            Value::Map(v) => None,
+            Value::Ushort(v) => (*v as u16),
+            _ => panic!("Unexpected type"),
         }
     }
 }
@@ -648,19 +634,19 @@ fn decode_frame(stream: &mut Read) -> Result<Frame> {
                     };
                     let mut it = args.iter();
                     if let Some(container_id) = it.next() {
-                        open.container_id = container_id.to_string().unwrap();
+                        open.container_id = container_id.to_string();
                     }
 
                     if let Some(hostname) = it.next() {
-                        open.hostname = hostname.to_string().unwrap();
+                        open.hostname = hostname.to_string();
                     }
 
                     if let Some(max_frame_size) = it.next() {
-                        open.max_frame_size = max_frame_size.to_u32().unwrap();
+                        open.max_frame_size = max_frame_size.to_u32();
                     }
 
                     if let Some(channel_max) = it.next() {
-                        open.channel_max = channel_max.to_u16().unwrap();
+                        open.channel_max = channel_max.to_u16();
                     }
 
                     Ok(Performative::Open(open))
