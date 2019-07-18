@@ -156,93 +156,98 @@ fn encode_ref(value: &Value, stream: &mut Write) -> Result<usize> {
 
 fn decode(stream: &mut Read) -> Result<Value> {
     let raw_code: u8 = stream.read_u8()?;
-    let code = decode_type(raw_code)?;
-    match code {
-        TypeCode::Null => Ok(Value::Null),
-        TypeCode::Ushort => {
-            let val = stream.read_u16::<NetworkEndian>()?;
-            Ok(Value::Ushort(val))
-        }
-        TypeCode::Uint => {
-            let val = stream.read_u32::<NetworkEndian>()?;
-            Ok(Value::Uint(val))
-        }
-        TypeCode::Uintsmall => {
-            let val = stream.read_u8()? as u32;
-            Ok(Value::Uint(val))
-        }
-        TypeCode::Uint0 => Ok(Value::Uint(0)),
-        TypeCode::Ulong => {
-            let val = stream.read_u64::<NetworkEndian>()?;
-            Ok(Value::Ulong(val))
-        }
-        TypeCode::Ulongsmall => {
-            let val = stream.read_u8()? as u64;
-            Ok(Value::Ulong(val))
-        }
-        TypeCode::Ulong0 => Ok(Value::Ulong(0)),
-        TypeCode::Str8 => {
-            let len = stream.read_u8()? as usize;
-            let mut buffer = vec![0u8; len];
-            stream.read_exact(&mut buffer)?;
-            let s = String::from_utf8(buffer)?;
-            Ok(Value::String(s))
-        }
-        TypeCode::Str32 => {
-            let len = stream.read_u32::<NetworkEndian>()? as usize;
-            let mut buffer = vec![0u8; len];
-            stream.read_exact(&mut buffer)?;
-            let s = String::from_utf8(buffer)?;
-            Ok(Value::String(s))
-        }
-        TypeCode::List0 => Ok(Value::List(Vec::new())),
-        TypeCode::List8 => {
-            let _sz = stream.read_u8()? as usize;
-            let count = stream.read_u8()? as usize;
-            let mut data: Vec<Value> = Vec::new();
-            for _num in 0..count {
-                let result = decode(stream)?;
-                data.push(result);
+    if raw_code == 0 {
+        let descriptor = decode(stream)?;
+        Ok(descriptor)
+    } else {
+        let code = decode_type(raw_code)?;
+        match code {
+            TypeCode::Null => Ok(Value::Null),
+            TypeCode::Ushort => {
+                let val = stream.read_u16::<NetworkEndian>()?;
+                Ok(Value::Ushort(val))
             }
-            Ok(Value::List(data))
-        }
-        TypeCode::List32 => {
-            let _sz = stream.read_u32::<NetworkEndian>()? as usize;
-            let count = stream.read_u32::<NetworkEndian>()? as usize;
-            let mut data: Vec<Value> = Vec::new();
-            for _num in 0..count {
-                let result = decode(stream)?;
-                data.push(result);
+            TypeCode::Uint => {
+                let val = stream.read_u32::<NetworkEndian>()?;
+                Ok(Value::Uint(val))
             }
-            Ok(Value::List(data))
-        }
-        TypeCode::Map8 => {
-            /*
-            let sz = stream.read_u8()? as usize;
-            let count = stream.read_u8()? as usize / 2;
-            let mut data: BTreeMap<Value, Value> = BTreeMap::new();
-            for num in (0..count) {
-                let key = decode(stream)?;
-                let value = decode(stream)?;
-                data.insert(key, value);
+            TypeCode::Uintsmall => {
+                let val = stream.read_u8()? as u32;
+                Ok(Value::Uint(val))
             }
-            Ok(Value::Map(data))
-            */
-            Ok(Value::Null)
-        }
-        TypeCode::Map32 => {
-            /*
-            let sz = stream.read_u32::<NetworkEndian>()? as usize;
-            let count = stream.read_u32::<NetworkEndian>()? as usize / 2;
-            let mut data: BTreeMap<Value, Value> = BTreeMap::new();
-            for num in (0..count) {
-                let key = decode(stream)?;
-                let value = decode(stream)?;
-                data.insert(key, value);
+            TypeCode::Uint0 => Ok(Value::Uint(0)),
+            TypeCode::Ulong => {
+                let val = stream.read_u64::<NetworkEndian>()?;
+                Ok(Value::Ulong(val))
             }
-            Ok(Value::Map(data))
+            TypeCode::Ulongsmall => {
+                let val = stream.read_u8()? as u64;
+                Ok(Value::Ulong(val))
+            }
+            TypeCode::Ulong0 => Ok(Value::Ulong(0)),
+            TypeCode::Str8 => {
+                let len = stream.read_u8()? as usize;
+                let mut buffer = vec![0u8; len];
+                stream.read_exact(&mut buffer)?;
+                let s = String::from_utf8(buffer)?;
+                Ok(Value::String(s))
+            }
+            TypeCode::Str32 => {
+                let len = stream.read_u32::<NetworkEndian>()? as usize;
+                let mut buffer = vec![0u8; len];
+                stream.read_exact(&mut buffer)?;
+                let s = String::from_utf8(buffer)?;
+                Ok(Value::String(s))
+            }
+            TypeCode::List0 => Ok(Value::List(Vec::new())),
+            TypeCode::List8 => {
+                let _sz = stream.read_u8()? as usize;
+                let count = stream.read_u8()? as usize;
+                let mut data: Vec<Value> = Vec::new();
+                for _num in 0..count {
+                    let result = decode(stream)?;
+                    data.push(result);
+                }
+                Ok(Value::List(data))
+            }
+            TypeCode::List32 => {
+                let _sz = stream.read_u32::<NetworkEndian>()? as usize;
+                let count = stream.read_u32::<NetworkEndian>()? as usize;
+                let mut data: Vec<Value> = Vec::new();
+                for _num in 0..count {
+                    let result = decode(stream)?;
+                    data.push(result);
+                }
+                Ok(Value::List(data))
+            }
+            TypeCode::Map8 => {
+                /*
+                let sz = stream.read_u8()? as usize;
+                let count = stream.read_u8()? as usize / 2;
+                let mut data: BTreeMap<Value, Value> = BTreeMap::new();
+                for num in (0..count) {
+                    let key = decode(stream)?;
+                    let value = decode(stream)?;
+                    data.insert(key, value);
+                }
+                Ok(Value::Map(data))
                 */
-            Ok(Value::Null)
+                Ok(Value::Null)
+            }
+            TypeCode::Map32 => {
+                /*
+                let sz = stream.read_u32::<NetworkEndian>()? as usize;
+                let count = stream.read_u32::<NetworkEndian>()? as usize / 2;
+                let mut data: BTreeMap<Value, Value> = BTreeMap::new();
+                for num in (0..count) {
+                    let key = decode(stream)?;
+                    let value = decode(stream)?;
+                    data.insert(key, value);
+                }
+                Ok(Value::Map(data))
+                    */
+                Ok(Value::Null)
+            }
         }
     }
 }
@@ -573,14 +578,45 @@ fn encode_frame(frame: &Frame, stream: &mut Write) -> Result<usize> {
         }
     }
 
+    if let Some(payload) = &frame.payload {
+        sz += buf.write(payload)?;
+    }
+
     stream.write_u32::<NetworkEndian>(sz as u32);
     stream.write(&buf[..]);
 
     Ok(sz)
 }
 
-fn decode_frame(_stream: &mut Read) -> Result<Frame> {
-    Err(AmqpError::new("Not implemented"))
+fn decode_frame(stream: &mut Read) -> Result<Frame> {
+    let sz = stream.read_u32::<NetworkEndian>()? as usize;
+    let mut doff = stream.read_u8()?;
+    let frame_type = stream.read_u8()?;
+    if frame_type == 0 {
+        let channel = stream.read_u16::<NetworkEndian>()?;
+        let mut buf: Vec<u8> = Vec::new();
+        while doff > 2 {
+            stream.read_u32::<NetworkEndian>()?;
+            doff -= 1;
+        }
+        let descriptor = decode(stream)?;
+        let performative = match descriptor {
+            Value::Ulong(0x10) => Ok(Performative::Open(OpenPerformative {
+                hostname: String::from("localhost"),
+                ..Default::default()
+            })),
+            _ => Err(AmqpError::new("Unexpected descriptor value")),
+        }?;
+        Ok(Frame {
+            channel: channel,
+            frameType: FrameType::AMQP,
+            performative: Some(performative),
+            payload: None,
+        })
+    } else {
+        // TODO: Print which type
+        Err(AmqpError::new("Unknown frame type"))
+    }
 }
 
 #[derive(Debug, Clone)]
