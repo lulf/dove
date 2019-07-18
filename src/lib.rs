@@ -40,6 +40,44 @@ enum Value {
     Map(BTreeMap<Value, Value>),
 }
 
+impl Value {
+    fn to_string(self: &Self) -> Option<String> {
+        match self {
+            Value::Null => None,
+            Value::Ushort(v) => Some(v.to_string()),
+            Value::Uint(v) => Some(v.to_string()),
+            Value::Ulong(v) => Some(v.to_string()),
+            Value::String(v) => Some(v.clone()),
+            Value::List(v) => None,
+            Value::Map(v) => None,
+        }
+    }
+
+    fn to_u32(self: &Self) -> Option<u32> {
+        match self {
+            Value::Null => None,
+            Value::Ushort(v) => Some(*v as u32),
+            Value::Uint(v) => Some(*v as u32),
+            Value::Ulong(v) => None,
+            Value::String(v) => None,
+            Value::List(v) => None,
+            Value::Map(v) => None,
+        }
+    }
+
+    fn to_u16(self: &Self) -> Option<u16> {
+        match self {
+            Value::Null => None,
+            Value::Ushort(v) => Some(*v as u16),
+            Value::Uint(v) => None,
+            Value::Ulong(v) => None,
+            Value::String(v) => None,
+            Value::List(v) => None,
+            Value::Map(v) => None,
+        }
+    }
+}
+
 const U8_MAX: usize = std::u8::MAX as usize;
 const U32_MAX: usize = std::u32::MAX as usize;
 const LIST8_MAX: usize = (std::u8::MAX as usize) - 1;
@@ -519,16 +557,16 @@ fn encode_value(amqp_value: &AmqpValue, stream: &mut Write) -> Result<()> {
 }
 */
 
-struct OpenPerformative {
+struct Open {
     container_id: String,
     hostname: String,
     max_frame_size: u32,
     channel_max: u16,
 }
 
-impl Default for OpenPerformative {
-    fn default() -> OpenPerformative {
-        OpenPerformative {
+impl Default for Open {
+    fn default() -> Open {
+        Open {
             container_id: Uuid::new_v4().to_string(),
             hostname: String::new(),
             max_frame_size: 4294967295,
@@ -538,7 +576,7 @@ impl Default for OpenPerformative {
 }
 
 enum Performative {
-    Open(OpenPerformative),
+    Open(Open),
 }
 
 enum FrameType {
@@ -601,10 +639,37 @@ fn decode_frame(stream: &mut Read) -> Result<Frame> {
         }
         let descriptor = decode(stream)?;
         let performative = match descriptor {
-            Value::Ulong(0x10) => Ok(Performative::Open(OpenPerformative {
-                hostname: String::from("localhost"),
-                ..Default::default()
-            })),
+            Value::Ulong(0x10) => {
+                let list = decode(stream)?;
+                if let Value::List(args) = list {
+                    let mut open = Open {
+                        hostname: String::from("localhost"), // TODO: Set to my hostname if not found
+                        ..Default::default()
+                    };
+                    let mut it = args.iter();
+                    if let Some(container_id) = it.next() {
+                        open.container_id = container_id.to_string().unwrap();
+                    }
+
+                    if let Some(hostname) = it.next() {
+                        open.hostname = hostname.to_string().unwrap();
+                    }
+
+                    if let Some(max_frame_size) = it.next() {
+                        open.max_frame_size = max_frame_size.to_u32().unwrap();
+                    }
+
+                    if let Some(channel_max) = it.next() {
+                        open.channel_max = channel_max.to_u16().unwrap();
+                    }
+
+                    Ok(Performative::Open(open))
+                } else {
+                    Err(AmqpError::new(
+                        "Missing expected arguments for open performative",
+                    ))
+                }
+            }
             _ => Err(AmqpError::new("Unexpected descriptor value")),
         }?;
         Ok(Frame {
@@ -730,7 +795,7 @@ impl Container {
         let frame = Frame {
             frameType: FrameType::AMQP,
             channel: 0,
-            performative: Some(Performative::Open(OpenPerformative {
+            performative: Some(Performative::Open(Open {
                 hostname: String::from(opts.host),
                 ..Default::default()
             })),
@@ -808,7 +873,7 @@ mod tests {
 
     #[test]
     fn check_performatives() {
-        let frm = OpenPerformative {
+        let frm = Open {
             hostname: String::from("localhost"),
             ..Default::default()
         };
@@ -847,6 +912,8 @@ mod tests {
                 port: 5672,
             })
             .unwrap();
+
+        //        while (conn.process()) {}
 
         println!("YAY!");
     }
