@@ -543,11 +543,12 @@ fn encode_value(amqp_value: &AmqpValue, stream: &mut Write) -> Result<()> {
 }
 */
 
-struct Open {
-    container_id: String,
-    hostname: String,
-    max_frame_size: u32,
-    channel_max: u16,
+#[derive(Debug)]
+pub struct Open {
+    pub container_id: String,
+    pub hostname: String,
+    pub max_frame_size: u32,
+    pub channel_max: u16,
 }
 
 impl Default for Open {
@@ -664,9 +665,14 @@ fn decode_frame(stream: &mut Read) -> Result<Frame> {
             performative: Some(performative),
             payload: None,
         })
+    //} else if frame_type == 1 {
+    // SASL
     } else {
         // TODO: Print which type
-        Err(AmqpError::new("Unknown frame type"))
+        Err(AmqpError::from(format!(
+            "Unknown frame type {}",
+            frame_type
+        )))
     }
 }
 
@@ -709,6 +715,10 @@ impl AmqpError {
             msg: String::from(message),
         }
     }
+
+    fn from(message: String) -> AmqpError {
+        AmqpError { msg: message }
+    }
 }
 
 pub struct ConnectionOptions {
@@ -717,29 +727,24 @@ pub struct ConnectionOptions {
 }
 
 pub struct Container {
-    id: &'static str,
-    //    transport: &'a Transport,
+    id: String,
 }
 
 enum ConnectionState {
-    //Start,
-    //HdrRcvd,
-    //HdrSent,
-    OpenPipe,
+    Start,
+    HdrRcvd,
+    HdrSent,
+    HdrExch,
+    //OpenPipe,
     //OcPipe,
-    //OpenRcvd,
-    //OpenSent,
+    OpenRcvd,
+    OpenSent,
     //ClosePipe,
-    //Opened,
-    //CloseRcvd,
-    //CloseSent,
+    Opened,
+    CloseRcvd,
+    CloseSent,
     //Discarding,
-    //End,
-}
-
-pub struct Connection {
-    stream: TcpStream,
-    state: ConnectionState,
+    End,
 }
 
 pub struct Session {}
@@ -752,60 +757,155 @@ pub struct Receiver {}
 
 const AMQP_10_VERSION: [u8; 8] = [65, 77, 81, 80, 0, 1, 0, 0];
 
-/*
-struct Transport {
-    connections: Vec<Connection>,
-    thread_pool:
+pub struct Connection {
+    opts: ConnectionOptions,
+    pub container_id: String,
+    transport: Transport,
+    sessions: Vec<Session>,
+    state: ConnectionState,
+    pending_events: Vec<Event>,
 }
 
-static global_transport: Transport = Transport {
-    connections: Vec::new(),
-};
- */
+pub struct Transport {
+    stream: TcpStream,
+}
 
 impl Container {
     pub fn new(id: &'static str) -> Container {
         Container {
-            id: id,
-            //         transport: &global_transport,
+            id: String::from(id),
         }
     }
 
     pub fn connect(&self, opts: ConnectionOptions) -> Result<Connection> {
         let mut stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
+        // stream.set_nonblocking(true)?;
         // TODO: SASL support
 
-        stream.write(&AMQP_10_VERSION)?;
+        let mut transport: Transport = Transport { stream: stream };
 
-        // AMQP OPEN
-        let frame = Frame {
-            frameType: FrameType::AMQP,
-            channel: 0,
-            performative: Some(Performative::Open(Open {
-                hostname: String::from(opts.host),
-                ..Default::default()
-            })),
-            payload: None,
+        let mut connection = Connection {
+            sessions: Vec::new(),
+            container_id: self.id.clone(),
+            transport: transport,
+            pending_events: Vec::new(),
+            opts: opts,
+            state: ConnectionState::Start,
         };
 
-        encode_frame(&frame, &mut stream)?;
-
-        return Ok(Connection {
-            stream: stream,
-            state: ConnectionState::OpenPipe,
-        });
+        Ok(connection)
     }
+}
 
-    /*
-    pub fn listen(&self, opts: ListenOptions) -> io::Result<()> {
-        return Ok(());
-    }
-    */
+/*
+pub fn listen(&self, opts: ListenOptions) -> io::Result<()> {
+    return Ok(());
+}
+*/
+
+struct Context<'a> {
+    connection: Option<&'a Connection>,
+}
+
+#[derive(Debug)]
+pub enum Event {
+    ConnectionInit,
+    RemoteOpen(Open),
+    LocalOpen,
 }
 
 impl Connection {
-    // Wait for next connection state event
-    //    pub fn wait() -> Result<Event> {}
+    // Wait for next state event
+    pub fn next_event(self: &mut Self) -> Result<Event> {
+        if self.pending_events.len() > 0 {
+            Ok(self.pending_events.remove(0))
+        } else {
+            loop {
+                println!("Checking state...");
+                match self.state {
+                    ConnectionState::Start => {
+                        self.transport.stream.write(&AMQP_10_VERSION)?;
+                        self.state = ConnectionState::HdrSent;
+                        println!("Moved to HdrSent!");
+                        continue;
+                    }
+                    ConnectionState::HdrSent => {
+                        let mut remote_version: [u8; 8] = [0; 8];
+                        println!("Reading remote version...");
+                        self.transport.stream.read_exact(&mut remote_version)?;
+                        println!("Done!");
+                        println!("Received remote version buf: {:?}", remote_version);
+                        self.state = ConnectionState::HdrExch;
+                        continue;
+                    }
+                    ConnectionState::HdrRcvd => {
+                        self.transport.stream.write(&AMQP_10_VERSION)?;
+                        self.state = ConnectionState::HdrExch;
+                        continue;
+                    }
+                    ConnectionState::HdrExch => {
+                        return self.handle_open(ConnectionState::OpenRcvd);
+                    }
+                    ConnectionState::OpenSent => {
+                        return self.handle_open(ConnectionState::Opened);
+                    }
+                    _ => return Err(AmqpError::new("Not yet implemented")),
+                }
+            }
+        }
+    }
+
+    fn handle_open(self: &mut Self, next_state: ConnectionState) -> Result<Event> {
+        // Read incoming data if we have some
+        let frame = decode_frame(&mut self.transport.stream)?;
+        match frame.frameType {
+            FrameType::AMQP => {
+                // Handle AMQP
+                let performative = frame
+                    .performative
+                    .expect("Missing required performative for AMQP frame");
+                match performative {
+                    Performative::Open(open) => {
+                        self.state = next_state;
+                        return Ok(Event::RemoteOpen(open));
+                    }
+                }
+            }
+            _ => {
+                return Err(AmqpError::new("Framing error"));
+            }
+        }
+    }
+
+    /*
+    impl ConnectionDriver {
+        pub fn process(self: &mut Self) -> Result<()> {
+            loop {
+                match self.state {
+                    ConnectionState::Start => {
+                        self.state = ConnectionState::HdrSent;
+                    }
+                    ConnectionState::HdrSent
+                    ConnectionState::HdrExch => {
+                        let frame = Frame {
+                            frameType: FrameType::AMQP,
+                            channel: 0,
+                            performative: Some(Performative::Open(Open {
+                                hostname: String::from(self.opts.host),
+                                ..Default::default()
+                            })),
+                            payload: None,
+                        };
+
+                        self.state =
+                        encode_frame(&frame, &mut self.transport.stream)?;
+                        return Ok(());
+                    }
+                    ConnectionState::OpenPipe => return Err(AmqpError::new("Already opened")),
+                }
+            }
+        }
+    */
 
     pub fn create_session() -> Result<Session> {
         return Err(AmqpError::new("Not yet implemented"));
@@ -893,15 +993,20 @@ mod tests {
 
     #[test]
     fn open_connection() {
-        let cont = Container::new("ce8c4a3e-96b3-11e9-9bfd-c85b7644b4a4");
+        let mut cont = Container::new("ce8c4a3e-96b3-11e9-9bfd-c85b7644b4a4");
 
-        let conn = cont
+        let mut conn = cont
             .connect(ConnectionOptions {
                 host: "localhost",
                 port: 5672,
             })
-            .unwrap();
+            .expect("Error opening connection");
 
+        let event = conn.next_event();
+        match event {
+            Ok(event) => println!("Got {:?} event", event),
+            Err(e) => assert!(false, e.msg),
+        }
         //        while (conn.process()) {}
 
         println!("YAY!");
