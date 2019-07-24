@@ -107,6 +107,7 @@ pub enum Event {
     ConnectionInit,
     RemoteOpen(framing::Open),
     LocalOpen(framing::Open),
+    UnknownFrame(framing::FrameType),
 }
 
 impl Connection {
@@ -143,6 +144,10 @@ impl Connection {
                     }
                     ConnectionState::OpenSent => {
                         return self.handle_open(ConnectionState::Opened);
+                    }
+                    ConnectionState::Opened => {
+                        let frame = framing::decode_frame(&mut self.transport.stream)?;
+                        return Ok(Event::UnknownFrame(frame.frameType));
                     }
                     _ => return Err(AmqpError::NotImplemented),
                 }

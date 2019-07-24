@@ -21,6 +21,7 @@ pub enum Value {
     Uint(u32),
     Ulong(u64),
     String(String),
+    Symbol(Vec<u8>),
     List(Vec<Value>),
     Map(BTreeMap<Value, Value>),
 }
@@ -29,7 +30,9 @@ impl Value {
     pub fn to_string(self: &Self) -> String {
         match self {
             Value::String(v) => v.clone(),
-            _ => panic!("Unexpected type"),
+            Value::Symbol(v) => String::from_utf8(v.to_vec()).expect("Error decoding symbol"),
+            Value::Null => String::new(),
+            t => panic!("Unexpected type: {:?}", t),
         }
     }
 
@@ -70,6 +73,19 @@ pub fn encode_ref(value: &Value, stream: &mut Write) -> Result<usize> {
                 stream.write_u8(TypeCode::Str8 as u8)?;
                 stream.write_u8(val.len() as u8)?;
                 stream.write(val.as_bytes())?;
+                Ok(2 + val.len())
+            }
+        }
+        Value::Symbol(val) => {
+            if val.len() > U8_MAX {
+                stream.write_u8(TypeCode::Sym32 as u8)?;
+                stream.write_u32::<NetworkEndian>(val.len() as u32)?;
+                stream.write(&val[..])?;
+                Ok(5 + val.len())
+            } else {
+                stream.write_u8(TypeCode::Sym8 as u8)?;
+                stream.write_u8(val.len() as u8)?;
+                stream.write(&val[..])?;
                 Ok(2 + val.len())
             }
         }
@@ -208,6 +224,18 @@ pub fn decode(stream: &mut Read) -> Result<Value> {
                 let s = String::from_utf8(buffer)?;
                 Ok(Value::String(s))
             }
+            TypeCode::Sym8 => {
+                let len = stream.read_u8()? as usize;
+                let mut buffer = vec![0u8; len];
+                stream.read_exact(&mut buffer)?;
+                Ok(Value::Symbol(buffer))
+            }
+            TypeCode::Sym32 => {
+                let len = stream.read_u32::<NetworkEndian>()? as usize;
+                let mut buffer = vec![0u8; len];
+                stream.read_exact(&mut buffer)?;
+                Ok(Value::Symbol(buffer))
+            }
             TypeCode::List0 => Ok(Value::List(Vec::new())),
             TypeCode::List8 => {
                 let _sz = stream.read_u8()? as usize;
@@ -273,6 +301,8 @@ enum TypeCode {
     Ulong0 = 0x44,
     Str8 = 0xA1,
     Str32 = 0xB1,
+    Sym8 = 0xA3,
+    Sym32 = 0xB3,
     List0 = 0x45,
     List8 = 0xC0,
     List32 = 0xD0,
@@ -291,7 +321,9 @@ fn decode_type(code: u8) -> Result<TypeCode> {
         0x53 => Ok(TypeCode::Ulongsmall),
         0x44 => Ok(TypeCode::Ulong0),
         0xA1 => Ok(TypeCode::Str8),
+        0xA3 => Ok(TypeCode::Sym8),
         0xB1 => Ok(TypeCode::Str32),
+        0xB3 => Ok(TypeCode::Sym32),
         0x45 => Ok(TypeCode::List0),
         0xC0 => Ok(TypeCode::List8),
         0xD0 => Ok(TypeCode::List32),

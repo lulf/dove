@@ -21,6 +21,7 @@ pub struct Open {
     pub hostname: String,
     pub max_frame_size: u32,
     pub channel_max: u16,
+    pub idle_timeout: u32,
 }
 
 impl Default for Open {
@@ -30,6 +31,7 @@ impl Default for Open {
             hostname: String::new(),
             max_frame_size: 4294967295,
             channel_max: 65535,
+            idle_timeout: 0,
         }
     }
 }
@@ -38,6 +40,7 @@ pub enum Performative {
     Open(Open),
 }
 
+#[derive(Debug)]
 pub enum FrameType {
     AMQP,
     SASL,
@@ -121,6 +124,31 @@ pub fn decode_frame(stream: &mut Read) -> Result<Frame> {
                         open.channel_max = channel_max.to_u16();
                     }
 
+                    if let Some(idle_timeout) = it.next() {
+                        open.idle_timeout = idle_timeout.to_u32();
+                    }
+
+                    if let Some(outgoing_locales) = it.next() {
+                        // TODO:
+                        println!("{:?}", outgoing_locales);
+                    }
+
+                    if let Some(incoming_locales) = it.next() {
+                        // TODO:
+                    }
+
+                    if let Some(offered_capabilities) = it.next() {
+                        // TODO:
+                    }
+
+                    if let Some(desired_capabilities) = it.next() {
+                        // TODO:
+                    }
+
+                    if let Some(properties) = it.next() {
+                        // TODO:
+                    }
+
                     Ok(Performative::Open(open))
                 } else {
                     Err(AmqpError::DecodeError(String::from(
@@ -128,8 +156,9 @@ pub fn decode_frame(stream: &mut Read) -> Result<Frame> {
                     )))
                 }
             }
-            _ => Err(AmqpError::DecodeError(String::from(
-                "Unexpected descriptor value",
+            v => Err(AmqpError::DecodeError(format!(
+                "Unexpected descriptor value: {:?}",
+                v
             ))),
         }?;
         Ok(Frame {
