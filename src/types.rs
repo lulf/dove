@@ -530,3 +530,36 @@ fn encode_value(amqp_value: &AmqpValue, stream: &mut Write) -> Result<()> {
     return Ok(());
 }
 */
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use crate::error::*;
+
+    fn assert_type(value: &Value, expected_len: usize) {
+        let mut output: Vec<u8> = Vec::new();
+        let len = encode_ref(value, &mut output).unwrap();
+        assert_eq!(expected_len, len);
+        assert_eq!(expected_len, output.len());
+
+        let decoded = decode(&mut &output[..]).unwrap();
+        assert_eq!(&decoded, value);
+    }
+
+    #[test]
+    fn check_types() {
+        assert_type(&Value::Ulong(123), 2);
+        assert_type(&Value::Ulong(1234), 9);
+        assert_type(&Value::String(String::from("Hello, world")), 14);
+        assert_type(&Value::String(String::from("aaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbcccccccccccccccccccccccdddddddddddddddddddddddddeeeeeeeeeeeeeeeeeeeeeeeeeffffffffffffffffffffgggggggggggggggggggggggghhhhhhhhhhhhhhhhhhhhhhhiiiiiiiiiiiiiiiiiiiiiiiijjjjjjjjjjjjjjjjjjjkkkkkkkkkkkkkkkkkkkkkkllllllllllllllllllllmmmmmmmmmmmmmmmmmmmmnnnnnnnnnnnnnnnnnnnnooooooooooooooooooooppppppppppppppppppqqqqqqqqqqqqqqqq")), 370);
+        assert_type(
+            &Value::List(vec![
+                Value::Ulong(1),
+                Value::Ulong(42),
+                Value::String(String::from("Hello, world")),
+            ]),
+            21,
+        );
+    }
+}

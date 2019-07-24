@@ -226,52 +226,10 @@ impl Session {
 #[cfg(test)]
 mod tests {
 
-    use super::error::*;
-    use super::framing::Open;
-    use super::types::*;
     use super::*;
     use std::io;
     use std::thread;
     use std::time;
-
-    fn assert_type(value: &Value, expected_len: usize) {
-        let mut output: Vec<u8> = Vec::new();
-        let len = encode_ref(value, &mut output).unwrap();
-        assert_eq!(expected_len, len);
-        assert_eq!(expected_len, output.len());
-
-        let decoded = decode(&mut &output[..]).unwrap();
-        assert_eq!(&decoded, value);
-    }
-
-    #[test]
-    fn check_types() {
-        assert_type(&Value::Ulong(123), 2);
-        assert_type(&Value::Ulong(1234), 9);
-        assert_type(&Value::String(String::from("Hello, world")), 14);
-        assert_type(&Value::String(String::from("aaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbcccccccccccccccccccccccdddddddddddddddddddddddddeeeeeeeeeeeeeeeeeeeeeeeeeffffffffffffffffffffgggggggggggggggggggggggghhhhhhhhhhhhhhhhhhhhhhhiiiiiiiiiiiiiiiiiiiiiiiijjjjjjjjjjjjjjjjjjjkkkkkkkkkkkkkkkkkkkkkkllllllllllllllllllllmmmmmmmmmmmmmmmmmmmmnnnnnnnnnnnnnnnnnnnnooooooooooooooooooooppppppppppppppppppqqqqqqqqqqqqqqqq")), 370);
-        assert_type(
-            &Value::List(vec![
-                Value::Ulong(1),
-                Value::Ulong(42),
-                Value::String(String::from("Hello, world")),
-            ]),
-            21,
-        );
-    }
-
-    #[test]
-    fn check_performatives() {
-        let frm = Open {
-            hostname: String::from("localhost"),
-            ..Default::default()
-        };
-
-        assert_eq!(String::from("localhost"), frm.hostname);
-        assert_eq!(36, frm.container_id.len());
-        assert_eq!(4294967295, frm.max_frame_size);
-        assert_eq!(65535, frm.channel_max);
-    }
 
     #[test]
     fn check_client() {

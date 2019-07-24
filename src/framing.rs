@@ -147,3 +147,24 @@ pub fn decode_frame(stream: &mut Read) -> Result<Frame> {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use crate::error::*;
+    use crate::types::*;
+
+    #[test]
+    fn check_performatives() {
+        let frm = Open {
+            hostname: String::from("localhost"),
+            ..Default::default()
+        };
+
+        assert_eq!(String::from("localhost"), frm.hostname);
+        assert_eq!(36, frm.container_id.len());
+        assert_eq!(4294967295, frm.max_frame_size);
+        assert_eq!(65535, frm.channel_max);
+    }
+}
