@@ -107,7 +107,7 @@ pub enum Event {
     ConnectionInit,
     RemoteOpen(framing::Open),
     LocalOpen(framing::Open),
-    UnknownFrame(framing::FrameType),
+    UnknownFrame(framing::Frame),
 }
 
 impl Connection {
@@ -147,7 +147,7 @@ impl Connection {
                     }
                     ConnectionState::Opened => {
                         let frame = framing::decode_frame(&mut self.transport.stream)?;
-                        return Ok(Event::UnknownFrame(frame.frameType));
+                        return Ok(Event::UnknownFrame(frame));
                     }
                     _ => return Err(AmqpError::NotImplemented),
                 }
@@ -158,12 +158,15 @@ impl Connection {
     fn handle_open(self: &mut Self, next_state: ConnectionState) -> Result<Event> {
         // Read incoming data if we have some
         let frame = framing::decode_frame(&mut self.transport.stream)?;
-        match frame.frameType {
-            framing::FrameType::AMQP => {
+        match frame {
+            framing::Frame::AMQP {
+                channel,
+                performative,
+                payload,
+            } => {
                 // Handle AMQP
-                let performative = frame
-                    .performative
-                    .expect("Missing required performative for AMQP frame");
+                let performative =
+                    performative.expect("Missing required performative for AMQP frame");
                 match performative {
                     framing::Performative::Open(open) => {
                         self.state = next_state;
@@ -186,8 +189,7 @@ impl Connection {
     }
 
     fn do_open(self: &mut Self, next_state: ConnectionState) -> Result<()> {
-        let frame = framing::Frame {
-            frameType: framing::FrameType::AMQP,
+        let frame = framing::Frame::AMQP {
             channel: 0,
             performative: Some(framing::Performative::Open(framing::Open {
                 hostname: String::from(self.opts.host),
@@ -199,8 +201,15 @@ impl Connection {
         framing::encode_frame(&frame, &mut self.transport.stream)?;
 
         self.state = next_state;
-        if let Some(framing::Performative::Open(data)) = frame.performative {
-            self.pending_events.push(Event::LocalOpen(data));
+        if let framing::Frame::AMQP {
+            channel,
+            performative,
+            payload,
+        } = frame
+        {
+            if let Some(framing::Performative::Open(data)) = performative {
+                self.pending_events.push(Event::LocalOpen(data));
+            }
         }
         Ok(())
     }

@@ -6,6 +6,8 @@
 use byteorder::NetworkEndian;
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
+use std::any::Any;
+use std::collections::HashMap;
 use std::convert::From;
 use std::io::Read;
 use std::io::Write;
@@ -22,6 +24,11 @@ pub struct Open {
     pub max_frame_size: u32,
     pub channel_max: u16,
     pub idle_timeout: u32,
+    pub outgoing_locales: Vec<String>,
+    pub incoming_locales: Vec<String>,
+    pub offered_capabilities: Vec<String>,
+    pub desired_capabilities: Vec<String>,
+    pub properties: HashMap<String, Box<Any>>,
 }
 
 impl Default for Open {
@@ -32,25 +39,28 @@ impl Default for Open {
             max_frame_size: 4294967295,
             channel_max: 65535,
             idle_timeout: 0,
+            outgoing_locales: Vec::new(),
+            incoming_locales: Vec::new(),
+            offered_capabilities: Vec::new(),
+            desired_capabilities: Vec::new(),
+            properties: HashMap::new(),
         }
     }
 }
 
+#[derive(Debug)]
 pub enum Performative {
     Open(Open),
 }
 
 #[derive(Debug)]
-pub enum FrameType {
-    AMQP,
+pub enum Frame {
+    AMQP {
+        channel: u16,
+        performative: Option<Performative>,
+        payload: Option<Box<Vec<u8>>>,
+    },
     SASL,
-}
-
-pub struct Frame {
-    pub frameType: FrameType,
-    pub channel: u16,
-    pub performative: Option<Performative>,
-    pub payload: Option<Box<Vec<u8>>>,
 }
 
 pub fn encode_frame(frame: &Frame, stream: &mut Write) -> Result<usize> {
@@ -60,32 +70,42 @@ pub fn encode_frame(frame: &Frame, stream: &mut Write) -> Result<usize> {
 
     buf.write_u8(doff)?;
     buf.write_u8(0)?;
-    buf.write_u16::<NetworkEndian>(frame.channel)?;
 
-    if let Some(performative) = &frame.performative {
-        match performative {
-            Performative::Open(open) => {
-                buf.write_u8(0)?;
-                sz += encode_ref(&Value::Ulong(0x10), &mut buf)? + 1;
-                let args = vec![
-                    Value::String(open.container_id.clone()),
-                    Value::String(open.hostname.clone()),
-                    Value::Uint(open.max_frame_size),
-                    Value::Ushort(open.channel_max),
-                ];
-                sz += encode_ref(&Value::List(args), &mut buf)?;
+    match frame {
+        Frame::AMQP {
+            channel,
+            performative,
+            payload,
+        } => {
+            buf.write_u16::<NetworkEndian>(*channel)?;
+
+            if let Some(performative) = performative {
+                match performative {
+                    Performative::Open(open) => {
+                        buf.write_u8(0)?;
+                        sz += encode_ref(&Value::Ulong(0x10), &mut buf)? + 1;
+                        let args = vec![
+                            Value::String(open.container_id.clone()),
+                            Value::String(open.hostname.clone()),
+                            Value::Uint(open.max_frame_size),
+                            Value::Ushort(open.channel_max),
+                        ];
+                        sz += encode_ref(&Value::List(args), &mut buf)?;
+                    }
+                }
             }
+
+            if let Some(payload) = payload {
+                sz += buf.write(payload)?;
+            }
+
+            stream.write_u32::<NetworkEndian>(sz as u32);
+            stream.write(&buf[..]);
+
+            Ok(sz)
         }
+        Frame::SASL => Err(AmqpError::NotImplemented),
     }
-
-    if let Some(payload) = &frame.payload {
-        sz += buf.write(payload)?;
-    }
-
-    stream.write_u32::<NetworkEndian>(sz as u32);
-    stream.write(&buf[..]);
-
-    Ok(sz)
 }
 
 pub fn decode_frame(stream: &mut Read) -> Result<Frame> {
@@ -161,9 +181,8 @@ pub fn decode_frame(stream: &mut Read) -> Result<Frame> {
                 v
             ))),
         }?;
-        Ok(Frame {
+        Ok(Frame::AMQP {
             channel: channel,
-            frameType: FrameType::AMQP,
             performative: Some(performative),
             payload: None,
         })
