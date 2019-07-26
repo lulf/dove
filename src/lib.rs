@@ -8,17 +8,38 @@ mod framing;
 mod types;
 
 use std::convert::From;
+use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
 use std::net::TcpStream;
 use std::vec::Vec;
 
-use error::Result;
-use error::*;
+pub use error::Result;
+pub use error::*;
+
+pub struct ReadBuffer {
+    buffer: Vec<u8>,
+    position: usize,
+}
+
+impl ReadBuffer {
+    pub fn fill(self: &mut Self, reader: &mut Read) -> Result<&[u8]> {
+        let mut cursor: Cursor<&mut Vec<u8>> = Cursor::new(&mut self.buffer);
+        cursor.set_position(self.position as u64);
+        std::io::copy(reader, &mut cursor)?;
+        //        reader.read(&mut cursor)?;
+        Ok(&self.buffer[0..self.position])
+    }
+
+    pub fn consume(self: &mut Self, nbytes: usize) -> Result<()> {
+        self.buffer.drain(0..nbytes);
+        Ok(())
+    }
+}
 
 pub struct ConnectionOptions {
-    host: &'static str,
-    port: u16,
+    pub host: &'static str,
+    pub port: u16,
 }
 
 pub struct Container {
@@ -52,17 +73,65 @@ pub struct Receiver {}
 
 const AMQP_10_VERSION: [u8; 8] = [65, 77, 81, 80, 0, 1, 0, 0];
 
-pub struct Connection {
+pub struct ConnectionDriver {
     opts: ConnectionOptions,
     pub container_id: String,
     transport: Transport,
-    sessions: Vec<Session>,
     state: ConnectionState,
     pending_events: Vec<Event>,
 }
 
 pub struct Transport {
     stream: TcpStream,
+    incoming: ReadBuffer,
+    outgoing: Vec<u8>,
+    max_frame_size: usize,
+}
+
+impl Transport {
+    pub fn new(stream: TcpStream, max_frame_size: usize) -> Result<Transport> {
+        stream.set_nonblocking(true)?;
+        Ok(Transport {
+            stream: stream,
+            incoming: ReadBuffer {
+                buffer: Vec::with_capacity(max_frame_size),
+                position: 0,
+            },
+            outgoing: Vec::with_capacity(max_frame_size),
+            max_frame_size: max_frame_size,
+        })
+    }
+
+    pub fn read_protocol_version(self: &mut Self) -> Result<Option<[u8; 8]>> {
+        let mut buf = self.incoming.fill(&mut self.stream)?;
+        if buf.len() >= 8 {
+            let mut remote_version: [u8; 8] = [0; 8];
+            buf.read(&mut remote_version)?;
+            Ok(Some(remote_version))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn read_frame(self: &mut Self) -> Result<Option<framing::Frame>> {
+        let mut buf = self.incoming.fill(&mut self.stream)?;
+        Ok(None)
+    }
+
+    pub fn write_frame(self: &mut Self, frame: &framing::Frame) -> Result<usize> {
+        framing::encode_frame(frame, &mut self.outgoing)
+    }
+
+    pub fn write(self: &mut Self, data: &[u8]) -> Result<usize> {
+        self.outgoing.write_all(data)?;
+        Ok(data.len())
+    }
+
+    pub fn flush(self: &mut Self) -> Result<usize> {
+        let len = self.outgoing.len();
+        self.stream.write_all(self.outgoing.as_mut())?;
+        Ok(len)
+    }
 }
 
 impl Container {
@@ -72,15 +141,12 @@ impl Container {
         }
     }
 
-    pub fn connect(&self, opts: ConnectionOptions) -> Result<Connection> {
+    pub fn connect(&self, opts: ConnectionOptions) -> Result<ConnectionDriver> {
         let stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
-        stream.set_nonblocking(true)?;
         // TODO: SASL support
+        let transport: Transport = Transport::new(stream, 1024)?;
 
-        let transport: Transport = Transport { stream: stream };
-
-        let connection = Connection {
-            sessions: Vec::new(),
+        let driver = ConnectionDriver {
             container_id: self.id.clone(),
             transport: transport,
             pending_events: Vec::new(),
@@ -88,7 +154,7 @@ impl Container {
             state: ConnectionState::Start,
         };
 
-        Ok(connection)
+        Ok(driver)
     }
 }
 
@@ -99,7 +165,7 @@ pub fn listen(&self, opts: ListenOptions) -> io::Result<()> {
 */
 
 struct Context<'a> {
-    connection: Option<&'a Connection>,
+    connection: Option<&'a ConnectionDriver>,
 }
 
 #[derive(Debug)]
@@ -108,56 +174,67 @@ pub enum Event {
     RemoteOpen(framing::Open),
     LocalOpen(framing::Open),
     UnknownFrame(framing::Frame),
+    Transport,
 }
 
-impl Connection {
+impl ConnectionDriver {
     // Wait for next state event
-    pub fn next_event(self: &mut Self) -> Result<Event> {
+    pub fn next_event(self: &mut Self) -> Result<Option<Event>> {
         if self.pending_events.len() > 0 {
-            Ok(self.pending_events.remove(0))
+            Ok(Some(self.pending_events.remove(0)))
         } else {
-            loop {
-                println!("Checking state...");
-                match self.state {
-                    ConnectionState::Start => {
-                        self.transport.stream.write(&AMQP_10_VERSION)?;
-                        self.state = ConnectionState::HdrSent;
-                        println!("Moved to HdrSent!");
-                        continue;
-                    }
-                    ConnectionState::HdrSent => {
-                        let mut remote_version: [u8; 8] = [0; 8];
-                        println!("Reading remote version...");
-                        self.transport.stream.read_exact(&mut remote_version)?;
-                        println!("Done!");
-                        println!("Received remote version buf: {:?}", remote_version);
-                        self.state = ConnectionState::HdrExch;
-                        return Ok(Event::ConnectionInit);
-                    }
-                    ConnectionState::HdrRcvd => {
-                        self.transport.stream.write(&AMQP_10_VERSION)?;
-                        self.state = ConnectionState::HdrExch;
-                        return Ok(Event::ConnectionInit);
-                    }
-                    ConnectionState::HdrExch => {
-                        return self.handle_open(ConnectionState::OpenRcvd);
-                    }
-                    ConnectionState::OpenSent => {
-                        return self.handle_open(ConnectionState::Opened);
-                    }
-                    ConnectionState::Opened => {
-                        let frame = framing::decode_frame(&mut self.transport.stream)?;
-                        return Ok(Event::UnknownFrame(frame));
-                    }
-                    _ => return Err(AmqpError::NotImplemented),
+            println!("Checking state...");
+            match self.state {
+                ConnectionState::Start => {
+                    self.transport.write(&AMQP_10_VERSION)?;
+                    self.transport.flush()?;
+                    self.state = ConnectionState::HdrSent;
+                    self.next_event()
                 }
+                ConnectionState::HdrSent => {
+                    println!("Reading remote version...");
+                    let mut remote_version = self.transport.read_protocol_version()?;
+                    println!("Done!");
+                    println!("Received remote version buf: {:?}", remote_version);
+                    self.state = ConnectionState::HdrExch;
+                    Ok(Some(Event::ConnectionInit))
+                }
+                ConnectionState::HdrRcvd => {
+                    self.transport.write(&AMQP_10_VERSION)?;
+                    self.transport.flush()?;
+                    self.state = ConnectionState::HdrExch;
+                    Ok(Some(Event::ConnectionInit))
+                }
+                ConnectionState::HdrExch => {
+                    let frame = self.transport.read_frame()?;
+                    if let Some(f) = frame {
+                        self.handle_open(f, ConnectionState::OpenSent)
+                    } else {
+                        Ok(None)
+                    }
+                }
+                ConnectionState::OpenSent => {
+                    let frame = self.transport.read_frame()?;
+                    if let Some(f) = frame {
+                        self.handle_open(f, ConnectionState::Opened)
+                    } else {
+                        Ok(None)
+                    }
+                }
+                ConnectionState::Opened => {
+                    let frame = self.transport.read_frame()?;
+                    Ok(None)
+                }
+                _ => Err(AmqpError::NotImplemented),
             }
         }
     }
 
-    fn handle_open(self: &mut Self, next_state: ConnectionState) -> Result<Event> {
-        // Read incoming data if we have some
-        let frame = framing::decode_frame(&mut self.transport.stream)?;
+    fn handle_open(
+        self: &mut Self,
+        frame: framing::Frame,
+        next_state: ConnectionState,
+    ) -> Result<Option<Event>> {
         match frame {
             framing::Frame::AMQP {
                 channel,
@@ -170,7 +247,7 @@ impl Connection {
                 match performative {
                     framing::Performative::Open(open) => {
                         self.state = next_state;
-                        return Ok(Event::RemoteOpen(open));
+                        return Ok(Some(Event::RemoteOpen(open)));
                     }
                 }
             }
@@ -238,41 +315,4 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
-
-    use super::*;
-    use std::io;
-    use std::thread;
-    use std::time;
-
-    #[test]
-    fn check_client() {
-        let mut cont = Container::new("ce8c4a3e-96b3-11e9-9bfd-c85b7644b4a4");
-
-        let mut conn = cont
-            .connect(ConnectionOptions {
-                host: "localhost",
-                port: 5672,
-            })
-            .expect("Error opening connection");
-
-        loop {
-            let event = conn.next_event();
-            match event {
-                Ok(Event::ConnectionInit) => {
-                    println!("Got initialization event");
-                    conn.open();
-                }
-                Ok(e) => println!("Got event: {:?}", e),
-                Err(AmqpError::IoError(ref e)) if e.kind() == io::ErrorKind::WouldBlock => {
-                    thread::sleep(time::Duration::from_millis(100));
-                    continue;
-                }
-                Err(e) => {
-                    println!("Got error: {:?}", e);
-                    assert!(false);
-                }
-            }
-        }
-    }
-}
+mod tests {}

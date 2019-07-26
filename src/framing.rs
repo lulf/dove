@@ -9,6 +9,7 @@ use byteorder::WriteBytesExt;
 use std::any::Any;
 use std::collections::HashMap;
 use std::convert::From;
+use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
 use std::vec::Vec;
@@ -108,12 +109,28 @@ pub fn encode_frame(frame: &Frame, stream: &mut Write) -> Result<usize> {
     }
 }
 
-pub fn decode_frame(stream: &mut Read) -> Result<Frame> {
-    let _sz = stream.read_u32::<NetworkEndian>()? as usize;
-    let mut doff = stream.read_u8()?;
-    let frame_type = stream.read_u8()?;
-    if frame_type == 0 {
-        let channel = stream.read_u16::<NetworkEndian>()?;
+pub struct FrameHeader {
+    size: u32,
+    doff: u8,
+    frame_type: u8,
+    channel: u16,
+}
+
+pub fn read_header(reader: &mut Read) -> Result<FrameHeader> {
+    let mut buf: [u8; 8] = [0; 8];
+    reader.read_exact(&mut buf)?;
+    let mut cursor = Cursor::new(buf);
+    Ok(FrameHeader {
+        size: cursor.read_u32::<NetworkEndian>()?,
+        doff: cursor.read_u8()?,
+        frame_type: cursor.read_u8()?,
+        channel: cursor.read_u16::<NetworkEndian>()?,
+    })
+}
+
+pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
+    if header.frame_type == 0 {
+        let mut doff = header.doff;
         while doff > 2 {
             stream.read_u32::<NetworkEndian>()?;
             doff -= 1;
@@ -182,7 +199,7 @@ pub fn decode_frame(stream: &mut Read) -> Result<Frame> {
             ))),
         }?;
         Ok(Frame::AMQP {
-            channel: channel,
+            channel: header.channel,
             performative: Some(performative),
             payload: None,
         })
@@ -191,7 +208,7 @@ pub fn decode_frame(stream: &mut Read) -> Result<Frame> {
     } else {
         Err(AmqpError::DecodeError(format!(
             "Unknown frame type {}",
-            frame_type
+            header.frame_type
         )))
     }
 }
