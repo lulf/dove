@@ -37,7 +37,9 @@ impl ReadBuffer {
         if self.position < self.capacity {
             let len = reader.read(&mut self.buffer[self.position..self.capacity])?;
             self.position += len;
+            // println!("Filled {} bytes", len);
         }
+        // println!("Position is now {}", self.position);
         Ok(&self.buffer[0..self.position])
     }
 
@@ -45,6 +47,7 @@ impl ReadBuffer {
         self.buffer.drain(0..nbytes);
         self.buffer.resize(self.capacity, 0);
         self.position -= nbytes;
+        // println!("(Consume) Position is now {}", self.position);
         Ok(())
     }
 }
@@ -116,6 +119,7 @@ impl Transport {
         if buf.len() >= 8 {
             let mut remote_version: [u8; 8] = [0; 8];
             buf.read(&mut remote_version)?;
+            self.incoming.consume(8)?;
             Ok(Some(remote_version))
         } else {
             Ok(None)
@@ -124,7 +128,27 @@ impl Transport {
 
     pub fn read_frame(self: &mut Self) -> Result<Option<framing::Frame>> {
         let mut buf = self.incoming.fill(&mut self.stream)?;
-        Ok(None)
+        // println!("Filled {} bytes", buf.len());
+        if buf.len() >= 8 {
+            let header = framing::decode_header(&mut buf)?;
+            let frame_size = header.size as usize;
+            /*
+            println!(
+                "Found enough bytes for header {:?}. Buffer is {} bytes!",
+                header,
+                buf.len()
+            );
+            */
+            if buf.len() >= frame_size - 8 {
+                let frame = framing::decode_frame(header, &mut buf)?;
+                self.incoming.consume(frame_size)?;
+                Ok(Some(frame))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn write_frame(self: &mut Self, frame: &framing::Frame) -> Result<usize> {
@@ -193,50 +217,57 @@ impl ConnectionDriver {
         if self.pending_events.len() > 0 {
             Ok(Some(self.pending_events.remove(0)))
         } else {
-            println!("Checking state...");
-            match self.state {
-                ConnectionState::Start => {
-                    self.transport.write(&AMQP_10_VERSION)?;
-                    self.transport.flush()?;
-                    self.state = ConnectionState::HdrSent;
-                    self.next_event()
-                }
-                ConnectionState::HdrSent => {
-                    println!("Reading remote version...");
-                    let mut remote_version = self.transport.read_protocol_version()?;
-                    println!("Done!");
-                    println!("Received remote version buf: {:?}", remote_version);
-                    self.state = ConnectionState::HdrExch;
-                    Ok(Some(Event::ConnectionInit))
-                }
-                ConnectionState::HdrRcvd => {
-                    self.transport.write(&AMQP_10_VERSION)?;
-                    self.transport.flush()?;
-                    self.state = ConnectionState::HdrExch;
-                    Ok(Some(Event::ConnectionInit))
-                }
-                ConnectionState::HdrExch => {
-                    let frame = self.transport.read_frame()?;
-                    if let Some(f) = frame {
-                        self.handle_open(f, ConnectionState::OpenSent)
-                    } else {
-                        Ok(None)
-                    }
-                }
-                ConnectionState::OpenSent => {
-                    let frame = self.transport.read_frame()?;
-                    if let Some(f) = frame {
-                        self.handle_open(f, ConnectionState::Opened)
-                    } else {
-                        Ok(None)
-                    }
-                }
-                ConnectionState::Opened => {
-                    let frame = self.transport.read_frame()?;
+            let event = self.process();
+            match event {
+                Err(AmqpError::IoError(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     Ok(None)
                 }
-                _ => Err(AmqpError::NotImplemented),
+                Err(e) => Err(e),
+                Ok(o) => Ok(o),
             }
+        }
+    }
+
+    fn process(self: &mut Self) -> Result<Option<Event>> {
+        match self.state {
+            ConnectionState::Start => {
+                self.transport.write(&AMQP_10_VERSION)?;
+                self.transport.flush()?;
+                self.state = ConnectionState::HdrSent;
+                self.next_event()
+            }
+            ConnectionState::HdrSent => {
+                let mut remote_version = self.transport.read_protocol_version()?;
+                self.state = ConnectionState::HdrExch;
+                Ok(Some(Event::ConnectionInit))
+            }
+            ConnectionState::HdrRcvd => {
+                self.transport.write(&AMQP_10_VERSION)?;
+                self.transport.flush()?;
+                self.state = ConnectionState::HdrExch;
+                Ok(Some(Event::ConnectionInit))
+            }
+            ConnectionState::HdrExch => {
+                let frame = self.transport.read_frame()?;
+                if let Some(f) = frame {
+                    self.handle_open(f, ConnectionState::OpenSent)
+                } else {
+                    Ok(None)
+                }
+            }
+            ConnectionState::OpenSent => {
+                let frame = self.transport.read_frame()?;
+                if let Some(f) = frame {
+                    self.handle_open(f, ConnectionState::Opened)
+                } else {
+                    Ok(None)
+                }
+            }
+            ConnectionState::Opened => {
+                let frame = self.transport.read_frame()?;
+                Ok(None)
+            }
+            _ => Err(AmqpError::NotImplemented),
         }
     }
 

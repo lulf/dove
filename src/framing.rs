@@ -109,22 +109,20 @@ pub fn encode_frame(frame: &Frame, stream: &mut Write) -> Result<usize> {
     }
 }
 
+#[derive(Debug)]
 pub struct FrameHeader {
-    size: u32,
+    pub size: u32,
     doff: u8,
     frame_type: u8,
     channel: u16,
 }
 
-pub fn read_header(reader: &mut Read) -> Result<FrameHeader> {
-    let mut buf: [u8; 8] = [0; 8];
-    reader.read_exact(&mut buf)?;
-    let mut cursor = Cursor::new(buf);
+pub fn decode_header(reader: &mut Read) -> Result<FrameHeader> {
     Ok(FrameHeader {
-        size: cursor.read_u32::<NetworkEndian>()?,
-        doff: cursor.read_u8()?,
-        frame_type: cursor.read_u8()?,
-        channel: cursor.read_u16::<NetworkEndian>()?,
+        size: reader.read_u32::<NetworkEndian>()?,
+        doff: reader.read_u8()?,
+        frame_type: reader.read_u8()?,
+        channel: reader.read_u16::<NetworkEndian>()?,
     })
 }
 
@@ -167,23 +165,27 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
 
                     if let Some(outgoing_locales) = it.next() {
                         // TODO:
-                        println!("{:?}", outgoing_locales);
+                        println!("OLOC {:?}", outgoing_locales);
                     }
 
                     if let Some(incoming_locales) = it.next() {
                         // TODO:
+                        println!("ILOC {:?}", incoming_locales);
                     }
 
                     if let Some(offered_capabilities) = it.next() {
                         // TODO:
+                        println!("OCAP {:?}", offered_capabilities);
                     }
 
                     if let Some(desired_capabilities) = it.next() {
                         // TODO:
+                        println!("DCAP {:?}", desired_capabilities);
                     }
 
                     if let Some(properties) = it.next() {
                         // TODO:
+                        println!("PROP {:?}", properties);
                     }
 
                     Ok(Performative::Open(open))
