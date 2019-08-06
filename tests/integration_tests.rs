@@ -7,9 +7,9 @@ use std::io;
 use std::thread;
 use std::time;
 
-extern crate rust_amqp;
+extern crate ramqp;
 
-use rust_amqp::*;
+use ramqp::*;
 
 #[test]
 fn client() {

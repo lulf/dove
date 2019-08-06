@@ -3,9 +3,9 @@
 # License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
 #
 [package]
-name = "rust-amqp"
+name = "ramqp"
 version = "0.1.0"
-authors = ["Ulf Lilleengen <lulf@redhat.com>"]
+authors = ["Ulf Lilleengen <ulf.lilleengen@gmail.com>"]
 edition = "2018"
 
 [dependencies]

@@ -17,22 +17,34 @@ use std::vec::Vec;
 pub use error::Result;
 pub use error::*;
 
+#[derive(Debug)]
 pub struct ReadBuffer {
     buffer: Vec<u8>,
+    capacity: usize,
     position: usize,
 }
 
 impl ReadBuffer {
+    pub fn new(capacity: usize) -> ReadBuffer {
+        ReadBuffer {
+            buffer: vec![0; capacity],
+            capacity: capacity,
+            position: 0,
+        }
+    }
+
     pub fn fill(self: &mut Self, reader: &mut Read) -> Result<&[u8]> {
-        let mut cursor: Cursor<&mut Vec<u8>> = Cursor::new(&mut self.buffer);
-        cursor.set_position(self.position as u64);
-        std::io::copy(reader, &mut cursor)?;
-        //        reader.read(&mut cursor)?;
+        if self.position < self.capacity {
+            let len = reader.read(&mut self.buffer[self.position..self.capacity])?;
+            self.position += len;
+        }
         Ok(&self.buffer[0..self.position])
     }
 
     pub fn consume(self: &mut Self, nbytes: usize) -> Result<()> {
         self.buffer.drain(0..nbytes);
+        self.buffer.resize(self.capacity, 0);
+        self.position -= nbytes;
         Ok(())
     }
 }
@@ -93,10 +105,7 @@ impl Transport {
         stream.set_nonblocking(true)?;
         Ok(Transport {
             stream: stream,
-            incoming: ReadBuffer {
-                buffer: Vec::with_capacity(max_frame_size),
-                position: 0,
-            },
+            incoming: ReadBuffer::new(max_frame_size),
             outgoing: Vec::with_capacity(max_frame_size),
             max_frame_size: max_frame_size,
         })
@@ -150,6 +159,7 @@ impl Container {
             container_id: self.id.clone(),
             transport: transport,
             pending_events: Vec::new(),
+
             opts: opts,
             state: ConnectionState::Start,
         };
@@ -315,4 +325,30 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+
+    use super::ReadBuffer;
+    use std::io::Read;
+
+    #[test]
+    fn readbuffer() {
+        let mut buf = ReadBuffer::new(6);
+
+        let input: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+        let data = buf.fill(&mut &input[..]).expect("Unable to fill buffer");
+
+        assert_eq!(6, data.len());
+        assert_eq!([1, 2, 3, 4, 5, 6], data);
+
+        let data = buf.fill(&mut &input[..]).expect("Unable to fill buffer");
+        assert_eq!(6, data.len());
+        assert_eq!([1, 2, 3, 4, 5, 6], data);
+
+        buf.consume(1).expect("Unable to consume bytes");
+
+        let data = buf.fill(&mut &input[6..]).expect("Unable to fill buffer");
+        assert_eq!(6, data.len());
+        assert_eq!([2, 3, 4, 5, 6, 7], data);
+    }
+}
