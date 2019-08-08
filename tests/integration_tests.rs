@@ -15,7 +15,7 @@ use ramqp::*;
 fn client() {
     let mut cont = Container::new("ce8c4a3e-96b3-11e9-9bfd-c85b7644b4a4");
 
-    let mut conn = cont
+    let mut driver = cont
         .connect(ConnectionOptions {
             host: "localhost",
             port: 5672,
@@ -23,10 +23,11 @@ fn client() {
         .expect("Error opening connection");
 
     loop {
-        let next_event = conn.next_event();
+        let mut next_event = driver.next_event();
         match next_event {
             Ok(Some(event)) => match event {
-                Event::ConnectionInit => {
+                Event::ConnectionInit(mut conn) => {
+                    println!("Opening connection!");
                     conn.open();
                 }
                 e => {

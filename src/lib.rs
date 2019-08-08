@@ -52,15 +52,18 @@ impl ReadBuffer {
     }
 }
 
+#[derive(Debug)]
 pub struct ConnectionOptions {
     pub host: &'static str,
     pub port: u16,
 }
 
+#[derive(Debug)]
 pub struct Container {
     id: String,
 }
 
+#[derive(Debug)]
 enum ConnectionState {
     Start,
     HdrRcvd,
@@ -88,12 +91,12 @@ pub struct Receiver {}
 
 const AMQP_10_VERSION: [u8; 8] = [65, 77, 81, 80, 0, 1, 0, 0];
 
-pub struct ConnectionDriver {
+pub struct ConnectionDriver<'a> {
     opts: ConnectionOptions,
-    pub container_id: String,
     transport: Transport,
+    connection: Connection,
     state: ConnectionState,
-    pending_events: Vec<Event>,
+    pending_events: Vec<Event<'a>>,
 }
 
 pub struct Transport {
@@ -163,6 +166,7 @@ impl Transport {
     pub fn flush(self: &mut Self) -> Result<usize> {
         let len = self.outgoing.len();
         self.stream.write_all(self.outgoing.as_mut())?;
+        self.outgoing.clear();
         Ok(len)
     }
 }
@@ -180,15 +184,29 @@ impl Container {
         let transport: Transport = Transport::new(stream, 1024)?;
 
         let driver = ConnectionDriver {
-            container_id: self.id.clone(),
             transport: transport,
             pending_events: Vec::new(),
-
+            connection: Connection {
+                container_id: self.id.clone(),
+                opened: false,
+            },
             opts: opts,
             state: ConnectionState::Start,
         };
 
         Ok(driver)
+    }
+}
+
+#[derive(Debug)]
+pub struct Connection {
+    pub container_id: String,
+    opened: bool,
+}
+
+impl Connection {
+    pub fn open(self: &mut Self) {
+        self.opened = true;
     }
 }
 
@@ -199,17 +217,18 @@ pub fn listen(&self, opts: ListenOptions) -> io::Result<()> {
 */
 
 #[derive(Debug)]
-pub enum Event {
-    ConnectionInit,
+pub enum Event<'a> {
+    ConnectionInit(&'a mut Connection),
     RemoteOpen(framing::Open),
     LocalOpen(framing::Open),
     UnknownFrame(framing::Frame),
     Transport,
 }
 
-impl ConnectionDriver {
+impl<'a> ConnectionDriver<'a> {
     // Wait for next state event
     pub fn next_event(self: &mut Self) -> Result<Option<Event>> {
+        println!("Next event..., state: {:?}", self.state);
         if self.pending_events.len() > 0 {
             Ok(Some(self.pending_events.remove(0)))
         } else {
@@ -235,19 +254,31 @@ impl ConnectionDriver {
             ConnectionState::HdrSent => {
                 let mut remote_version = self.transport.read_protocol_version()?;
                 self.state = ConnectionState::HdrExch;
-                Ok(Some(Event::ConnectionInit))
+                Ok(Some(Event::ConnectionInit(&mut self.connection)))
             }
             ConnectionState::HdrRcvd => {
                 self.transport.write(&AMQP_10_VERSION)?;
                 self.transport.flush()?;
                 self.state = ConnectionState::HdrExch;
-                Ok(Some(Event::ConnectionInit))
+                Ok(Some(Event::ConnectionInit(&mut self.connection)))
             }
             ConnectionState::HdrExch => {
-                let frame = self.transport.read_frame()?;
-                if let Some(f) = frame {
-                    self.remote_open(f, ConnectionState::OpenRcvd)
+                if self.connection.opened {
+                    self.local_open(ConnectionState::OpenSent)
                 } else {
+                    let frame = self.transport.read_frame()?;
+                    if let Some(f) = frame {
+                        self.remote_open(f, ConnectionState::OpenRcvd)
+                    } else {
+                        Ok(None)
+                    }
+                }
+            }
+            ConnectionState::OpenRcvd => {
+                if self.connection.opened {
+                    self.local_open(ConnectionState::Opened)
+                } else {
+                    println!("Not local open!");
                     Ok(None)
                 }
             }
@@ -260,7 +291,7 @@ impl ConnectionDriver {
                 }
             }
             ConnectionState::Opened => {
-                let frame = self.transport.read_frame()?;
+                //let frame = self.transport.read_frame()?;
                 Ok(None)
             }
             _ => Err(AmqpError::NotImplemented),
@@ -294,15 +325,7 @@ impl ConnectionDriver {
         }
     }
 
-    pub fn open(self: &mut Self) -> Result<()> {
-        match self.state {
-            ConnectionState::HdrExch => self.do_open(ConnectionState::OpenSent),
-            ConnectionState::OpenRcvd => self.do_open(ConnectionState::Opened),
-            _ => Err(AmqpError::InternalError(String::from("Already opened"))),
-        }
-    }
-
-    fn do_open(self: &mut Self, next_state: ConnectionState) -> Result<()> {
+    fn local_open(self: &mut Self, next_state: ConnectionState) -> Result<Option<Event>> {
         let frame = framing::Frame::AMQP {
             channel: 0,
             performative: Some(framing::Performative::Open(framing::Open {
@@ -312,7 +335,9 @@ impl ConnectionDriver {
             payload: None,
         };
 
-        framing::encode_frame(&frame, &mut self.transport.stream)?;
+        // framing::encode_frame(&frame, &mut self.transport.stream)?;
+        self.transport.write_frame(&frame)?;
+        self.transport.flush()?;
 
         self.state = next_state;
         if let framing::Frame::AMQP {
@@ -322,10 +347,10 @@ impl ConnectionDriver {
         } = frame
         {
             if let Some(framing::Performative::Open(data)) = performative {
-                self.pending_events.push(Event::LocalOpen(data));
+                return Ok(Some(Event::LocalOpen(data)));
             }
         }
-        Ok(())
+        Ok(None)
     }
 
     pub fn create_session() -> Result<Session> {
