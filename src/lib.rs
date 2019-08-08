@@ -198,10 +198,6 @@ pub fn listen(&self, opts: ListenOptions) -> io::Result<()> {
 }
 */
 
-struct Context<'a> {
-    connection: Option<&'a ConnectionDriver>,
-}
-
 #[derive(Debug)]
 pub enum Event {
     ConnectionInit,
@@ -250,7 +246,7 @@ impl ConnectionDriver {
             ConnectionState::HdrExch => {
                 let frame = self.transport.read_frame()?;
                 if let Some(f) = frame {
-                    self.handle_open(f, ConnectionState::OpenSent)
+                    self.remote_open(f, ConnectionState::OpenRcvd)
                 } else {
                     Ok(None)
                 }
@@ -258,7 +254,7 @@ impl ConnectionDriver {
             ConnectionState::OpenSent => {
                 let frame = self.transport.read_frame()?;
                 if let Some(f) = frame {
-                    self.handle_open(f, ConnectionState::Opened)
+                    self.remote_open(f, ConnectionState::Opened)
                 } else {
                     Ok(None)
                 }
@@ -271,7 +267,7 @@ impl ConnectionDriver {
         }
     }
 
-    fn handle_open(
+    fn remote_open(
         self: &mut Self,
         frame: framing::Frame,
         next_state: ConnectionState,
