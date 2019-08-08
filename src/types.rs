@@ -22,6 +22,7 @@ pub enum Value {
     Ulong(u64),
     String(String),
     Symbol(Vec<u8>),
+    Array(Vec<Value>),
     List(Vec<Value>),
     Map(BTreeMap<Value, Value>),
 }
@@ -119,6 +120,34 @@ pub fn encode_ref(value: &Value, stream: &mut Write) -> Result<usize> {
                 Ok(2)
             } else {
                 stream.write_u8(TypeCode::Ulong0 as u8)?;
+                Ok(1)
+            }
+        }
+        Value::Array(vec) => {
+            let mut arraybuf = Vec::new();
+            for v in vec.iter() {
+                let code = get_type(v);
+                encode_ref(v, &mut arraybuf)?;
+            }
+
+            if arraybuf.len() > LIST32_MAX {
+                Err(AmqpError::DecodeError(String::from(
+                    "Encoded array size cannot be longer than 4294967291 bytes",
+                )))
+            } else if arraybuf.len() > LIST8_MAX {
+                stream.write_u8(TypeCode::Array32 as u8)?;
+                stream.write_u32::<NetworkEndian>((4 + arraybuf.len()) as u32)?;
+                stream.write_u32::<NetworkEndian>(vec.len() as u32)?;
+                stream.write(&arraybuf[..]);
+                Ok(9 + arraybuf.len())
+            } else if arraybuf.len() > 0 {
+                stream.write_u8(TypeCode::Array8 as u8)?;
+                stream.write_u8((1 + arraybuf.len()) as u8)?;
+                stream.write_u8(vec.len() as u8)?;
+                stream.write(&arraybuf[..]);
+                Ok(3 + arraybuf.len())
+            } else {
+                stream.write_u8(TypeCode::Null as u8)?;
                 Ok(1)
             }
         }

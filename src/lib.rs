@@ -108,7 +108,7 @@ pub struct Transport {
 
 impl Transport {
     pub fn new(stream: TcpStream, max_frame_size: usize) -> Result<Transport> {
-        stream.set_nonblocking(true)?;
+        // stream.set_nonblocking(true)?;
         Ok(Transport {
             stream: stream,
             incoming: ReadBuffer::new(max_frame_size),
@@ -228,7 +228,6 @@ pub enum Event<'a> {
 impl<'a> ConnectionDriver<'a> {
     // Wait for next state event
     pub fn next_event(self: &mut Self) -> Result<Option<Event>> {
-        println!("Next event..., state: {:?}", self.state);
         if self.pending_events.len() > 0 {
             Ok(Some(self.pending_events.remove(0)))
         } else {
@@ -278,7 +277,6 @@ impl<'a> ConnectionDriver<'a> {
                 if self.connection.opened {
                     self.local_open(ConnectionState::Opened)
                 } else {
-                    println!("Not local open!");
                     Ok(None)
                 }
             }
@@ -291,7 +289,7 @@ impl<'a> ConnectionDriver<'a> {
                 }
             }
             ConnectionState::Opened => {
-                //let frame = self.transport.read_frame()?;
+                let frame = self.transport.read_frame()?;
                 Ok(None)
             }
             _ => Err(AmqpError::NotImplemented),

@@ -175,6 +175,10 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
 
                     if let Some(offered_capabilities) = it.next() {
                         // TODO:
+                        if let Value::Symbol(_) = offered_capabilities {
+                            open.offered_capabilities
+                                .push(offered_capabilities.to_string());
+                        }
                         println!("OCAP {:?}", offered_capabilities);
                     }
 
