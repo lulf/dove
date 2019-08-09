@@ -58,76 +58,86 @@ const U32_MAX: usize = std::u32::MAX as usize;
 const LIST8_MAX: usize = (std::u8::MAX as usize) - 1;
 const LIST32_MAX: usize = (std::u32::MAX as usize) - 4;
 
-pub fn encode_ref(value: &Value, stream: &mut Write) -> Result<usize> {
+pub fn encode_ref(value: &Value, writer: &mut Write) -> Result<()> {
+    encode_value(value, writer)?;
+    Ok(())
+}
+
+fn encode_value(value: &Value, writer: &mut Write) -> Result<TypeCode> {
     match value {
         Value::Null => {
-            stream.write_u8(TypeCode::Null as u8)?;
-            Ok(1)
+            writer.write_u8(TypeCode::Null as u8)?;
+            Ok(TypeCode::Null)
         }
         Value::String(val) => {
             if val.len() > U8_MAX {
-                stream.write_u8(TypeCode::Str32 as u8)?;
-                stream.write_u32::<NetworkEndian>(val.len() as u32)?;
-                stream.write(val.as_bytes())?;
-                Ok(5 + val.len())
+                writer.write_u8(TypeCode::Str32 as u8)?;
+                writer.write_u32::<NetworkEndian>(val.len() as u32)?;
+                writer.write(val.as_bytes())?;
+                Ok(TypeCode::Str32)
             } else {
-                stream.write_u8(TypeCode::Str8 as u8)?;
-                stream.write_u8(val.len() as u8)?;
-                stream.write(val.as_bytes())?;
-                Ok(2 + val.len())
+                writer.write_u8(TypeCode::Str8 as u8)?;
+                writer.write_u8(val.len() as u8)?;
+                writer.write(val.as_bytes())?;
+                Ok(TypeCode::Str8)
             }
         }
         Value::Symbol(val) => {
             if val.len() > U8_MAX {
-                stream.write_u8(TypeCode::Sym32 as u8)?;
-                stream.write_u32::<NetworkEndian>(val.len() as u32)?;
-                stream.write(&val[..])?;
-                Ok(5 + val.len())
+                writer.write_u8(TypeCode::Sym32 as u8)?;
+                writer.write_u32::<NetworkEndian>(val.len() as u32)?;
+                writer.write(&val[..])?;
+                Ok(TypeCode::Sym32)
             } else {
-                stream.write_u8(TypeCode::Sym8 as u8)?;
-                stream.write_u8(val.len() as u8)?;
-                stream.write(&val[..])?;
-                Ok(2 + val.len())
+                writer.write_u8(TypeCode::Sym8 as u8)?;
+                writer.write_u8(val.len() as u8)?;
+                writer.write(&val[..])?;
+                Ok(TypeCode::Sym8)
             }
         }
         Value::Ushort(val) => {
-            stream.write_u8(TypeCode::Ushort as u8)?;
-            stream.write_u16::<NetworkEndian>(*val)?;
-            Ok(3)
+            writer.write_u8(TypeCode::Ushort as u8)?;
+            writer.write_u16::<NetworkEndian>(*val)?;
+            Ok(TypeCode::Ushort)
         }
         Value::Uint(val) => {
             if *val > U8_MAX as u32 {
-                stream.write_u8(TypeCode::Uint as u8)?;
-                stream.write_u32::<NetworkEndian>(*val)?;
-                Ok(5)
+                writer.write_u8(TypeCode::Uint as u8)?;
+                writer.write_u32::<NetworkEndian>(*val)?;
+                Ok(TypeCode::Uint)
             } else if *val > 0 {
-                stream.write_u8(TypeCode::Uintsmall as u8)?;
-                stream.write_u8(*val as u8)?;
-                Ok(2)
+                writer.write_u8(TypeCode::Uintsmall as u8)?;
+                writer.write_u8(*val as u8)?;
+                Ok(TypeCode::Uintsmall)
             } else {
-                stream.write_u8(TypeCode::Uint0 as u8)?;
-                Ok(1)
+                writer.write_u8(TypeCode::Uint0 as u8)?;
+                Ok(TypeCode::Uint0)
             }
         }
         Value::Ulong(val) => {
             if *val > U8_MAX as u64 {
-                stream.write_u8(TypeCode::Ulong as u8)?;
-                stream.write_u64::<NetworkEndian>(*val)?;
-                Ok(9)
+                writer.write_u8(TypeCode::Ulong as u8)?;
+                writer.write_u64::<NetworkEndian>(*val)?;
+                Ok(TypeCode::Ulong)
             } else if *val > 0 {
-                stream.write_u8(TypeCode::Ulongsmall as u8)?;
-                stream.write_u8(*val as u8)?;
-                Ok(2)
+                writer.write_u8(TypeCode::Ulongsmall as u8)?;
+                writer.write_u8(*val as u8)?;
+                Ok(TypeCode::Ulongsmall)
             } else {
-                stream.write_u8(TypeCode::Ulong0 as u8)?;
-                Ok(1)
+                writer.write_u8(TypeCode::Ulong0 as u8)?;
+                Ok(TypeCode::Ulong0)
             }
         }
         Value::Array(vec) => {
             let mut arraybuf = Vec::new();
+            let mut code = 0;
             for v in vec.iter() {
-                let code = get_type(v);
-                encode_ref(v, &mut arraybuf)?;
+                let mut valuebuf = Vec::new();
+                encode_ref(v, &mut valuebuf)?;
+                if code == 0 {
+                    code = valuebuf[0];
+                }
+                arraybuf.extend_from_slice(&valuebuf[1..]);
             }
 
             if arraybuf.len() > LIST32_MAX {
@@ -135,20 +145,22 @@ pub fn encode_ref(value: &Value, stream: &mut Write) -> Result<usize> {
                     "Encoded array size cannot be longer than 4294967291 bytes",
                 )))
             } else if arraybuf.len() > LIST8_MAX {
-                stream.write_u8(TypeCode::Array32 as u8)?;
-                stream.write_u32::<NetworkEndian>((4 + arraybuf.len()) as u32)?;
-                stream.write_u32::<NetworkEndian>(vec.len() as u32)?;
-                stream.write(&arraybuf[..]);
-                Ok(9 + arraybuf.len())
+                writer.write_u8(TypeCode::Array32 as u8)?;
+                writer.write_u32::<NetworkEndian>((5 + arraybuf.len()) as u32)?;
+                writer.write_u32::<NetworkEndian>(vec.len() as u32)?;
+                writer.write_u8(code)?;
+                writer.write(&arraybuf[..]);
+                Ok(TypeCode::Array32)
             } else if arraybuf.len() > 0 {
-                stream.write_u8(TypeCode::Array8 as u8)?;
-                stream.write_u8((1 + arraybuf.len()) as u8)?;
-                stream.write_u8(vec.len() as u8)?;
-                stream.write(&arraybuf[..]);
-                Ok(3 + arraybuf.len())
+                writer.write_u8(TypeCode::Array8 as u8)?;
+                writer.write_u8((2 + arraybuf.len()) as u8)?;
+                writer.write_u8(vec.len() as u8)?;
+                writer.write_u8(code)?;
+                writer.write(&arraybuf[..]);
+                Ok(TypeCode::Array8)
             } else {
-                stream.write_u8(TypeCode::Null as u8)?;
-                Ok(1)
+                writer.write_u8(TypeCode::Null as u8)?;
+                Ok(TypeCode::Null)
             }
         }
         Value::List(vec) => {
@@ -162,20 +174,20 @@ pub fn encode_ref(value: &Value, stream: &mut Write) -> Result<usize> {
                     "Encoded list size cannot be longer than 4294967291 bytes",
                 )))
             } else if listbuf.len() > LIST8_MAX {
-                stream.write_u8(TypeCode::List32 as u8)?;
-                stream.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
-                stream.write_u32::<NetworkEndian>(vec.len() as u32)?;
-                stream.write(&listbuf[..]);
-                Ok(9 + listbuf.len())
+                writer.write_u8(TypeCode::List32 as u8)?;
+                writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
+                writer.write_u32::<NetworkEndian>(vec.len() as u32)?;
+                writer.write(&listbuf[..]);
+                Ok(TypeCode::List32)
             } else if listbuf.len() > 0 {
-                stream.write_u8(TypeCode::List8 as u8)?;
-                stream.write_u8((1 + listbuf.len()) as u8)?;
-                stream.write_u8(vec.len() as u8)?;
-                stream.write(&listbuf[..]);
-                Ok(3 + listbuf.len())
+                writer.write_u8(TypeCode::List8 as u8)?;
+                writer.write_u8((1 + listbuf.len()) as u8)?;
+                writer.write_u8(vec.len() as u8)?;
+                writer.write(&listbuf[..]);
+                Ok(TypeCode::List8)
             } else {
-                stream.write_u8(TypeCode::List0 as u8)?;
-                Ok(1)
+                writer.write_u8(TypeCode::List0 as u8)?;
+                Ok(TypeCode::List0)
             }
         }
         Value::Map(m) => {
@@ -192,108 +204,133 @@ pub fn encode_ref(value: &Value, stream: &mut Write) -> Result<usize> {
                     "Encoded map size cannot be longer than 4294967291 bytes",
                 )))
             } else if listbuf.len() > LIST8_MAX || n_items > U8_MAX {
-                stream.write_u8(TypeCode::Map32 as u8)?;
-                stream.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
-                stream.write_u32::<NetworkEndian>(n_items as u32)?;
-                stream.write(&listbuf[..]);
-                Ok(9 + listbuf.len())
+                writer.write_u8(TypeCode::Map32 as u8)?;
+                writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
+                writer.write_u32::<NetworkEndian>(n_items as u32)?;
+                writer.write(&listbuf[..]);
+                Ok(TypeCode::Map32)
             } else {
-                stream.write_u8(TypeCode::Map8 as u8)?;
-                stream.write_u8((1 + listbuf.len()) as u8)?;
-                stream.write_u8(n_items as u8)?;
-                stream.write(&listbuf[..]);
-                Ok(3 + listbuf.len())
+                writer.write_u8(TypeCode::Map8 as u8)?;
+                writer.write_u8((1 + listbuf.len()) as u8)?;
+                writer.write_u8(n_items as u8)?;
+                writer.write(&listbuf[..]);
+                Ok(TypeCode::Map8)
             }
         }
     }
 }
 
-pub fn decode(stream: &mut Read) -> Result<Value> {
-    let raw_code: u8 = stream.read_u8()?;
+pub fn decode(reader: &mut Read) -> Result<Value> {
+    let raw_code: u8 = reader.read_u8()?;
+    decode_with_ctor(raw_code, reader)
+}
+fn decode_with_ctor(raw_code: u8, reader: &mut Read) -> Result<Value> {
     if raw_code == 0 {
-        let descriptor = decode(stream)?;
+        let descriptor = decode(reader)?;
         Ok(descriptor)
     } else {
         let code = decode_type(raw_code)?;
         match code {
             TypeCode::Null => Ok(Value::Null),
             TypeCode::Ushort => {
-                let val = stream.read_u16::<NetworkEndian>()?;
+                let val = reader.read_u16::<NetworkEndian>()?;
                 Ok(Value::Ushort(val))
             }
             TypeCode::Uint => {
-                let val = stream.read_u32::<NetworkEndian>()?;
+                let val = reader.read_u32::<NetworkEndian>()?;
                 Ok(Value::Uint(val))
             }
             TypeCode::Uintsmall => {
-                let val = stream.read_u8()? as u32;
+                let val = reader.read_u8()? as u32;
                 Ok(Value::Uint(val))
             }
             TypeCode::Uint0 => Ok(Value::Uint(0)),
             TypeCode::Ulong => {
-                let val = stream.read_u64::<NetworkEndian>()?;
+                let val = reader.read_u64::<NetworkEndian>()?;
                 Ok(Value::Ulong(val))
             }
             TypeCode::Ulongsmall => {
-                let val = stream.read_u8()? as u64;
+                let val = reader.read_u8()? as u64;
                 Ok(Value::Ulong(val))
             }
             TypeCode::Ulong0 => Ok(Value::Ulong(0)),
             TypeCode::Str8 => {
-                let len = stream.read_u8()? as usize;
+                let len = reader.read_u8()? as usize;
                 let mut buffer = vec![0u8; len];
-                stream.read_exact(&mut buffer)?;
+                reader.read_exact(&mut buffer)?;
                 let s = String::from_utf8(buffer)?;
                 Ok(Value::String(s))
             }
             TypeCode::Str32 => {
-                let len = stream.read_u32::<NetworkEndian>()? as usize;
+                let len = reader.read_u32::<NetworkEndian>()? as usize;
                 let mut buffer = vec![0u8; len];
-                stream.read_exact(&mut buffer)?;
+                reader.read_exact(&mut buffer)?;
                 let s = String::from_utf8(buffer)?;
                 Ok(Value::String(s))
             }
             TypeCode::Sym8 => {
-                let len = stream.read_u8()? as usize;
+                let len = reader.read_u8()? as usize;
                 let mut buffer = vec![0u8; len];
-                stream.read_exact(&mut buffer)?;
+                reader.read_exact(&mut buffer)?;
                 Ok(Value::Symbol(buffer))
             }
             TypeCode::Sym32 => {
-                let len = stream.read_u32::<NetworkEndian>()? as usize;
+                let len = reader.read_u32::<NetworkEndian>()? as usize;
                 let mut buffer = vec![0u8; len];
-                stream.read_exact(&mut buffer)?;
+                reader.read_exact(&mut buffer)?;
                 Ok(Value::Symbol(buffer))
             }
             TypeCode::List0 => Ok(Value::List(Vec::new())),
             TypeCode::List8 => {
-                let _sz = stream.read_u8()? as usize;
-                let count = stream.read_u8()? as usize;
+                let _sz = reader.read_u8()? as usize;
+                let count = reader.read_u8()? as usize;
                 let mut data: Vec<Value> = Vec::new();
                 for _num in 0..count {
-                    let result = decode(stream)?;
+                    let result = decode(reader)?;
                     data.push(result);
                 }
                 Ok(Value::List(data))
             }
             TypeCode::List32 => {
-                let _sz = stream.read_u32::<NetworkEndian>()? as usize;
-                let count = stream.read_u32::<NetworkEndian>()? as usize;
+                let _sz = reader.read_u32::<NetworkEndian>()? as usize;
+                let count = reader.read_u32::<NetworkEndian>()? as usize;
                 let mut data: Vec<Value> = Vec::new();
                 for _num in 0..count {
-                    let result = decode(stream)?;
+                    let result = decode(reader)?;
                     data.push(result);
                 }
                 Ok(Value::List(data))
             }
+            TypeCode::Array8 => {
+                let _sz = reader.read_u8()? as usize;
+                let count = reader.read_u8()? as usize;
+                let ctype = reader.read_u8()?;
+                let mut data: Vec<Value> = Vec::new();
+                for _num in 0..count {
+                    let result = decode_with_ctor(ctype, reader)?;
+                    data.push(result);
+                }
+                Ok(Value::Array(data))
+            }
+            TypeCode::Array32 => {
+                let _sz = reader.read_u32::<NetworkEndian>()? as usize;
+                let count = reader.read_u32::<NetworkEndian>()? as usize;
+                let ctype = reader.read_u8()?;
+                let mut data: Vec<Value> = Vec::new();
+                for _num in 0..count {
+                    let result = decode_with_ctor(ctype, reader)?;
+                    data.push(result);
+                }
+                Ok(Value::Array(data))
+            }
             TypeCode::Map8 => {
                 /*
-                let sz = stream.read_u8()? as usize;
-                let count = stream.read_u8()? as usize / 2;
+                let sz = reader.read_u8()? as usize;
+                let count = reader.read_u8()? as usize / 2;
                 let mut data: BTreeMap<Value, Value> = BTreeMap::new();
                 for num in (0..count) {
-                    let key = decode(stream)?;
-                    let value = decode(stream)?;
+                    let key = decode(reader)?;
+                    let value = decode(reader)?;
                     data.insert(key, value);
                 }
                 Ok(Value::Map(data))
@@ -302,12 +339,12 @@ pub fn decode(stream: &mut Read) -> Result<Value> {
             }
             TypeCode::Map32 => {
                 /*
-                let sz = stream.read_u32::<NetworkEndian>()? as usize;
-                let count = stream.read_u32::<NetworkEndian>()? as usize / 2;
+                let sz = reader.read_u32::<NetworkEndian>()? as usize;
+                let count = reader.read_u32::<NetworkEndian>()? as usize / 2;
                 let mut data: BTreeMap<Value, Value> = BTreeMap::new();
                 for num in (0..count) {
-                    let key = decode(stream)?;
-                    let value = decode(stream)?;
+                    let key = decode(reader)?;
+                    let value = decode(reader)?;
                     data.insert(key, value);
                 }
                 Ok(Value::Map(data))
@@ -319,6 +356,7 @@ pub fn decode(stream: &mut Read) -> Result<Value> {
 }
 
 #[repr(u8)]
+#[derive(Clone, PartialEq, Debug, PartialOrd)]
 enum TypeCode {
     Null = 0x40,
     Ushort = 0x60,
@@ -337,6 +375,8 @@ enum TypeCode {
     List32 = 0xD0,
     Map8 = 0xC1,
     Map32 = 0xD1,
+    Array8 = 0xE0,
+    Array32 = 0xF0,
 }
 
 fn decode_type(code: u8) -> Result<TypeCode> {
@@ -358,6 +398,8 @@ fn decode_type(code: u8) -> Result<TypeCode> {
         0xD0 => Ok(TypeCode::List32),
         0xC1 => Ok(TypeCode::Map8),
         0xD1 => Ok(TypeCode::Map32),
+        0xE0 => Ok(TypeCode::Array8),
+        0xF0 => Ok(TypeCode::Array32),
         _ => Err(AmqpError::DecodeError(format!(
             "Unknown type code: 0x{:X}",
             code
@@ -598,10 +640,10 @@ mod tests {
     use super::*;
     use crate::error::*;
 
-    fn assert_type(value: &Value, expected_len: usize) {
+    fn assert_type(value: &Value, expected_len: usize, expected_type: TypeCode) {
         let mut output: Vec<u8> = Vec::new();
-        let len = encode_ref(value, &mut output).unwrap();
-        assert_eq!(expected_len, len);
+        let ctype = encode_value(value, &mut output).unwrap();
+        assert_eq!(expected_type, ctype);
         assert_eq!(expected_len, output.len());
 
         let decoded = decode(&mut &output[..]).unwrap();
@@ -610,10 +652,14 @@ mod tests {
 
     #[test]
     fn check_types() {
-        assert_type(&Value::Ulong(123), 2);
-        assert_type(&Value::Ulong(1234), 9);
-        assert_type(&Value::String(String::from("Hello, world")), 14);
-        assert_type(&Value::String(String::from("aaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbcccccccccccccccccccccccdddddddddddddddddddddddddeeeeeeeeeeeeeeeeeeeeeeeeeffffffffffffffffffffgggggggggggggggggggggggghhhhhhhhhhhhhhhhhhhhhhhiiiiiiiiiiiiiiiiiiiiiiiijjjjjjjjjjjjjjjjjjjkkkkkkkkkkkkkkkkkkkkkkllllllllllllllllllllmmmmmmmmmmmmmmmmmmmmnnnnnnnnnnnnnnnnnnnnooooooooooooooooooooppppppppppppppppppqqqqqqqqqqqqqqqq")), 370);
+        assert_type(&Value::Ulong(123), 2, TypeCode::Ulongsmall);
+        assert_type(&Value::Ulong(1234), 9, TypeCode::Ulong);
+        assert_type(
+            &Value::String(String::from("Hello, world")),
+            14,
+            TypeCode::Str8,
+        );
+        assert_type(&Value::String(String::from("aaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbcccccccccccccccccccccccdddddddddddddddddddddddddeeeeeeeeeeeeeeeeeeeeeeeeeffffffffffffffffffffgggggggggggggggggggggggghhhhhhhhhhhhhhhhhhhhhhhiiiiiiiiiiiiiiiiiiiiiiiijjjjjjjjjjjjjjjjjjjkkkkkkkkkkkkkkkkkkkkkkllllllllllllllllllllmmmmmmmmmmmmmmmmmmmmnnnnnnnnnnnnnnnnnnnnooooooooooooooooooooppppppppppppppppppqqqqqqqqqqqqqqqq")), 370, TypeCode::Str32);
         assert_type(
             &Value::List(vec![
                 Value::Ulong(1),
@@ -621,6 +667,7 @@ mod tests {
                 Value::String(String::from("Hello, world")),
             ]),
             21,
+            TypeCode::List8,
         );
     }
 }

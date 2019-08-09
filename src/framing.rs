@@ -64,46 +64,50 @@ pub enum Frame {
     SASL,
 }
 
-pub fn encode_frame(frame: &Frame, stream: &mut Write) -> Result<usize> {
-    let mut buf: Vec<u8> = Vec::new();
-    let doff = 2;
-    let mut sz = 8;
-
-    buf.write_u8(doff)?;
-    buf.write_u8(0)?;
-
+pub fn encode_frame(frame: &Frame, writer: &mut Write) -> Result<usize> {
+    let mut header: FrameHeader = FrameHeader {
+        size: 8,
+        doff: 2,
+        frame_type: 0,
+        ext: 0,
+    };
     match frame {
         Frame::AMQP {
             channel,
             performative,
             payload,
         } => {
-            buf.write_u16::<NetworkEndian>(*channel)?;
+            header.frame_type = 0;
+            header.ext = *channel;
+
+            let mut body: Vec<u8> = Vec::new();
 
             if let Some(performative) = performative {
                 match performative {
                     Performative::Open(open) => {
-                        buf.write_u8(0)?;
-                        sz += encode_ref(&Value::Ulong(0x10), &mut buf)? + 1;
+                        body.write_u8(0)?;
+                        encode_ref(&Value::Ulong(0x10), &mut body)?;
                         let args = vec![
                             Value::String(open.container_id.clone()),
                             Value::String(open.hostname.clone()),
                             Value::Uint(open.max_frame_size),
                             Value::Ushort(open.channel_max),
                         ];
-                        sz += encode_ref(&Value::List(args), &mut buf)?;
+                        encode_ref(&Value::List(args), &mut body)?;
                     }
                 }
             }
 
             if let Some(payload) = payload {
-                sz += buf.write(payload)?;
+                body.write(payload)?;
             }
 
-            stream.write_u32::<NetworkEndian>(sz as u32);
-            stream.write(&buf[..]);
+            header.size += body.len() as u32;
 
-            Ok(sz)
+            encode_header(&header, writer)?;
+            writer.write_all(&body[..]);
+
+            Ok(header.size as usize)
         }
         Frame::SASL => Err(AmqpError::NotImplemented),
     }
@@ -114,7 +118,7 @@ pub struct FrameHeader {
     pub size: u32,
     doff: u8,
     frame_type: u8,
-    channel: u16,
+    ext: u16,
 }
 
 pub fn decode_header(reader: &mut Read) -> Result<FrameHeader> {
@@ -122,8 +126,16 @@ pub fn decode_header(reader: &mut Read) -> Result<FrameHeader> {
         size: reader.read_u32::<NetworkEndian>()?,
         doff: reader.read_u8()?,
         frame_type: reader.read_u8()?,
-        channel: reader.read_u16::<NetworkEndian>()?,
+        ext: reader.read_u16::<NetworkEndian>()?,
     })
+}
+
+pub fn encode_header(header: &FrameHeader, writer: &mut Write) -> Result<()> {
+    writer.write_u32::<NetworkEndian>(header.size)?;
+    writer.write_u8(header.doff)?;
+    writer.write_u8(header.frame_type)?;
+    writer.write_u16::<NetworkEndian>(header.ext)?;
+    Ok(())
 }
 
 pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
@@ -205,7 +217,7 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
             ))),
         }?;
         Ok(Frame::AMQP {
-            channel: header.channel,
+            channel: header.ext,
             performative: Some(performative),
             payload: None,
         })
