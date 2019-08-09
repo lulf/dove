@@ -15,12 +15,14 @@ use ramqp::*;
 fn client() {
     let mut cont = Container::new("ce8c4a3e-96b3-11e9-9bfd-c85b7644b4a4");
 
-    let mut driver = cont
+    let mut connection = cont
         .connect(ConnectionOptions {
             host: "localhost",
             port: 5672,
         })
         .expect("Error opening connection");
+
+    let mut driver = ConnectionDriver::new(connection);
 
     loop {
         let mut next_event = driver.next_event();
@@ -35,7 +37,7 @@ fn client() {
                     conn.close(None);
                 }
                 e => {
-                    println!("Unhandled event: {:?}", e);
+                    println!("Unhandled event: {:#?}", e);
                 }
             },
             Ok(None) => {

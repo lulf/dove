@@ -91,19 +91,29 @@ pub struct Receiver {}
 
 const AMQP_10_VERSION: [u8; 8] = [65, 77, 81, 80, 0, 1, 0, 0];
 
+#[derive(Debug)]
 pub struct ConnectionDriver<'a> {
-    opts: ConnectionOptions,
-    transport: Transport,
     connection: Connection,
     state: ConnectionState,
     pending_events: Vec<Event<'a>>,
 }
 
+#[derive(Debug)]
 pub struct Transport {
     stream: TcpStream,
     incoming: ReadBuffer,
     outgoing: Vec<u8>,
     max_frame_size: usize,
+}
+
+#[derive(Debug)]
+pub struct Connection {
+    pub container_id: String,
+    pub hostname: String,
+    transport: Transport,
+    opened: bool,
+    closed: bool,
+    close_condition: Option<ErrorCondition>,
 }
 
 impl Transport {
@@ -178,47 +188,12 @@ impl Container {
         }
     }
 
-    pub fn connect(&self, opts: ConnectionOptions) -> Result<ConnectionDriver> {
+    pub fn connect(&self, opts: ConnectionOptions) -> Result<Connection> {
         let stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
         // TODO: SASL support
         let transport: Transport = Transport::new(stream, 1024)?;
 
-        let driver = ConnectionDriver {
-            transport: transport,
-            pending_events: Vec::new(),
-            connection: Connection::new(self.id.clone()),
-            opts: opts,
-            state: ConnectionState::Start,
-        };
-
-        Ok(driver)
-    }
-}
-
-#[derive(Debug)]
-pub struct Connection {
-    pub container_id: String,
-    opened: bool,
-    closed: bool,
-    close_condition: Option<ErrorCondition>,
-}
-
-impl Connection {
-    pub fn new(container_id: String) -> Connection {
-        Connection {
-            container_id: container_id,
-            opened: false,
-            closed: false,
-            close_condition: None,
-        }
-    }
-    pub fn open(self: &mut Self) {
-        self.opened = true;
-    }
-
-    pub fn close(self: &mut Self, condition: Option<ErrorCondition>) {
-        self.closed = true;
-        self.close_condition = condition;
+        Ok(Connection::new(self.id.as_str(), opts.host, transport))
     }
 }
 
@@ -238,6 +213,13 @@ pub enum Event<'a> {
 }
 
 impl<'a> ConnectionDriver<'a> {
+    pub fn new(connection: Connection) -> ConnectionDriver<'a> {
+        ConnectionDriver {
+            pending_events: Vec::new(),
+            connection: connection,
+            state: ConnectionState::Start,
+        }
+    }
     // Wait for next state event
     pub fn next_event(self: &mut Self) -> Result<Option<Event>> {
         if self.pending_events.len() > 0 {
@@ -258,19 +240,19 @@ impl<'a> ConnectionDriver<'a> {
         // TODO: Clean up this state handling
         match self.state {
             ConnectionState::Start => {
-                self.transport.write(&AMQP_10_VERSION)?;
-                self.transport.flush()?;
+                self.connection.transport.write(&AMQP_10_VERSION)?;
+                self.connection.transport.flush()?;
                 self.state = ConnectionState::HdrSent;
-                self.next_event()
+                Ok(None)
             }
             ConnectionState::HdrSent => {
-                let mut remote_version = self.transport.read_protocol_version()?;
+                let mut remote_version = self.connection.transport.read_protocol_version()?;
                 self.state = ConnectionState::HdrExch;
                 Ok(Some(Event::ConnectionInit(&mut self.connection)))
             }
             ConnectionState::HdrRcvd => {
-                self.transport.write(&AMQP_10_VERSION)?;
-                self.transport.flush()?;
+                self.connection.transport.write(&AMQP_10_VERSION)?;
+                self.connection.transport.flush()?;
                 self.state = ConnectionState::HdrExch;
                 Ok(Some(Event::ConnectionInit(&mut self.connection)))
             }
@@ -278,7 +260,7 @@ impl<'a> ConnectionDriver<'a> {
                 if self.connection.opened {
                     self.local_open(ConnectionState::OpenSent)
                 } else {
-                    let frame = self.transport.read_frame()?;
+                    let frame = self.connection.transport.read_frame()?;
                     if let Some(f) = frame {
                         self.remote_open(f, ConnectionState::OpenRcvd)
                     } else {
@@ -294,7 +276,7 @@ impl<'a> ConnectionDriver<'a> {
                 }
             }
             ConnectionState::OpenSent => {
-                let frame = self.transport.read_frame()?;
+                let frame = self.connection.transport.read_frame()?;
                 if let Some(f) = frame {
                     self.remote_open(f, ConnectionState::Opened)
                 } else {
@@ -305,7 +287,7 @@ impl<'a> ConnectionDriver<'a> {
                 if self.connection.closed {
                     self.local_close(ConnectionState::CloseSent)
                 } else {
-                    let frame = self.transport.read_frame()?;
+                    let frame = self.connection.transport.read_frame()?;
                     if let Some(f) = frame {
                         self.handle_frame(f)
                     } else {
@@ -321,7 +303,7 @@ impl<'a> ConnectionDriver<'a> {
                 }
             }
             ConnectionState::CloseSent => {
-                let frame = self.transport.read_frame()?;
+                let frame = self.connection.transport.read_frame()?;
                 if let Some(f) = frame {
                     self.handle_frame(f)
                 } else {
@@ -374,15 +356,14 @@ impl<'a> ConnectionDriver<'a> {
         let frame = framing::Frame::AMQP {
             channel: 0,
             performative: Some(framing::Performative::Open(framing::Open {
-                hostname: String::from(self.opts.host),
+                hostname: self.connection.hostname.clone(),
                 ..Default::default()
             })),
             payload: None,
         };
 
-        // framing::encode_frame(&frame, &mut self.transport.stream)?;
-        self.transport.write_frame(&frame)?;
-        self.transport.flush()?;
+        self.connection.transport.write_frame(&frame)?;
+        self.connection.transport.flush()?;
 
         self.state = next_state;
         if let framing::Frame::AMQP {
@@ -407,9 +388,8 @@ impl<'a> ConnectionDriver<'a> {
             payload: None,
         };
 
-        // framing::encode_frame(&frame, &mut self.transport.stream)?;
-        self.transport.write_frame(&frame)?;
-        self.transport.flush()?;
+        self.connection.transport.write_frame(&frame)?;
+        self.connection.transport.flush()?;
 
         self.state = next_state;
 
@@ -445,6 +425,28 @@ impl<'a> ConnectionDriver<'a> {
                 ))
             }
         }
+    }
+}
+
+impl Connection {
+    pub fn new(container_id: &str, hostname: &str, transport: Transport) -> Connection {
+        Connection {
+            container_id: container_id.to_string(),
+            hostname: hostname.to_string(),
+            opened: false,
+            closed: false,
+            close_condition: None,
+            transport: transport,
+        }
+    }
+
+    pub fn open(self: &mut Self) {
+        self.opened = true;
+    }
+
+    pub fn close(self: &mut Self, condition: Option<ErrorCondition>) {
+        self.closed = true;
+        self.close_condition = condition;
     }
 }
 
