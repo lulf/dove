@@ -14,12 +14,17 @@ use std::vec::Vec;
 
 use crate::error::*;
 
-#[derive(Clone, PartialEq, Debug, PartialOrd)]
+#[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq)]
 pub enum Value {
     Null,
+    Ubyte(u8),
     Ushort(u16),
     Uint(u32),
     Ulong(u64),
+    Byte(i8),
+    Short(i16),
+    Int(i32),
+    Long(i64),
     String(String),
     Symbol(Vec<u8>),
     Array(Vec<Value>),
@@ -28,13 +33,15 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn to_string(self: &Self) -> String {
+    pub fn try_to_string(self: &Self) -> Option<String> {
         match self {
-            Value::String(v) => v.clone(),
-            Value::Symbol(v) => String::from_utf8(v.to_vec()).expect("Error decoding symbol"),
-            Value::Null => String::new(),
-            t => panic!("Unexpected type: {:?}", t),
+            Value::String(v) => Some(v.clone()),
+            Value::Symbol(v) => Some(String::from_utf8(v.to_vec()).expect("Error decoding symbol")),
+            _ => None,
         }
+    }
+    pub fn to_string(self: &Self) -> String {
+        self.try_to_string().expect("Unexpected type!")
     }
 
     pub fn to_u32(self: &Self) -> u32 {
@@ -55,6 +62,8 @@ impl Value {
 
 const U8_MAX: usize = std::u8::MAX as usize;
 const U32_MAX: usize = std::u32::MAX as usize;
+const I8_MAX: usize = std::i8::MAX as usize;
+const I32_MAX: usize = std::i32::MAX as usize;
 const LIST8_MAX: usize = (std::u8::MAX as usize) - 1;
 const LIST32_MAX: usize = (std::u32::MAX as usize) - 4;
 
@@ -95,6 +104,11 @@ fn encode_value(value: &Value, writer: &mut Write) -> Result<TypeCode> {
                 Ok(TypeCode::Sym8)
             }
         }
+        Value::Ubyte(val) => {
+            writer.write_u8(TypeCode::Ubyte as u8)?;
+            writer.write_u8(*val)?;
+            Ok(TypeCode::Ubyte)
+        }
         Value::Ushort(val) => {
             writer.write_u8(TypeCode::Ushort as u8)?;
             writer.write_u16::<NetworkEndian>(*val)?;
@@ -128,6 +142,38 @@ fn encode_value(value: &Value, writer: &mut Write) -> Result<TypeCode> {
                 Ok(TypeCode::Ulong0)
             }
         }
+        Value::Byte(val) => {
+            writer.write_u8(TypeCode::Byte as u8)?;
+            writer.write_i8(*val)?;
+            Ok(TypeCode::Byte)
+        }
+        Value::Short(val) => {
+            writer.write_u8(TypeCode::Short as u8)?;
+            writer.write_i16::<NetworkEndian>(*val)?;
+            Ok(TypeCode::Short)
+        }
+        Value::Int(val) => {
+            if *val > I8_MAX as i32 {
+                writer.write_u8(TypeCode::Int as u8)?;
+                writer.write_i32::<NetworkEndian>(*val)?;
+                Ok(TypeCode::Int)
+            } else {
+                writer.write_u8(TypeCode::Intsmall as u8)?;
+                writer.write_i8(*val as i8)?;
+                Ok(TypeCode::Intsmall)
+            }
+        }
+        Value::Long(val) => {
+            if *val > I8_MAX as i64 {
+                writer.write_u8(TypeCode::Long as u8)?;
+                writer.write_i64::<NetworkEndian>(*val)?;
+                Ok(TypeCode::Long)
+            } else {
+                writer.write_u8(TypeCode::Longsmall as u8)?;
+                writer.write_i8(*val as i8)?;
+                Ok(TypeCode::Longsmall)
+            }
+        }
         Value::Array(vec) => {
             let mut arraybuf = Vec::new();
             let mut code = 0;
@@ -141,9 +187,10 @@ fn encode_value(value: &Value, writer: &mut Write) -> Result<TypeCode> {
             }
 
             if arraybuf.len() > LIST32_MAX {
-                Err(AmqpError::DecodeError(String::from(
-                    "Encoded array size cannot be longer than 4294967291 bytes",
-                )))
+                Err(AmqpError::amqp_error(
+                    condition::DECODE_ERROR,
+                    Some("Encoded array size cannot be longer than 4294967291 bytes"),
+                ))
             } else if arraybuf.len() > LIST8_MAX {
                 writer.write_u8(TypeCode::Array32 as u8)?;
                 writer.write_u32::<NetworkEndian>((5 + arraybuf.len()) as u32)?;
@@ -170,9 +217,10 @@ fn encode_value(value: &Value, writer: &mut Write) -> Result<TypeCode> {
             }
 
             if listbuf.len() > LIST32_MAX {
-                Err(AmqpError::DecodeError(String::from(
-                    "Encoded list size cannot be longer than 4294967291 bytes",
-                )))
+                Err(AmqpError::amqp_error(
+                    condition::DECODE_ERROR,
+                    Some("Encoded list size cannot be longer than 4294967291 bytes"),
+                ))
             } else if listbuf.len() > LIST8_MAX {
                 writer.write_u8(TypeCode::List32 as u8)?;
                 writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
@@ -200,9 +248,10 @@ fn encode_value(value: &Value, writer: &mut Write) -> Result<TypeCode> {
             let n_items = m.len() * 2;
 
             if listbuf.len() > LIST32_MAX {
-                Err(AmqpError::DecodeError(String::from(
-                    "Encoded map size cannot be longer than 4294967291 bytes",
-                )))
+                Err(AmqpError::amqp_error(
+                    condition::DECODE_ERROR,
+                    Some("Encoded map size cannot be longer than 4294967291 bytes"),
+                ))
             } else if listbuf.len() > LIST8_MAX || n_items > U8_MAX {
                 writer.write_u8(TypeCode::Map32 as u8)?;
                 writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
@@ -232,6 +281,10 @@ fn decode_with_ctor(raw_code: u8, reader: &mut Read) -> Result<Value> {
         let code = decode_type(raw_code)?;
         match code {
             TypeCode::Null => Ok(Value::Null),
+            TypeCode::Ubyte => {
+                let val = reader.read_u8()?;
+                Ok(Value::Ubyte(val))
+            }
             TypeCode::Ushort => {
                 let val = reader.read_u16::<NetworkEndian>()?;
                 Ok(Value::Ushort(val))
@@ -254,6 +307,30 @@ fn decode_with_ctor(raw_code: u8, reader: &mut Read) -> Result<Value> {
                 Ok(Value::Ulong(val))
             }
             TypeCode::Ulong0 => Ok(Value::Ulong(0)),
+            TypeCode::Byte => {
+                let val = reader.read_i8()?;
+                Ok(Value::Byte(val))
+            }
+            TypeCode::Short => {
+                let val = reader.read_i16::<NetworkEndian>()?;
+                Ok(Value::Short(val))
+            }
+            TypeCode::Int => {
+                let val = reader.read_i32::<NetworkEndian>()?;
+                Ok(Value::Int(val))
+            }
+            TypeCode::Intsmall => {
+                let val = reader.read_i8()? as i32;
+                Ok(Value::Int(val))
+            }
+            TypeCode::Long => {
+                let val = reader.read_i64::<NetworkEndian>()?;
+                Ok(Value::Long(val))
+            }
+            TypeCode::Longsmall => {
+                let val = reader.read_i8()? as i64;
+                Ok(Value::Long(val))
+            }
             TypeCode::Str8 => {
                 let len = reader.read_u8()? as usize;
                 let mut buffer = vec![0u8; len];
@@ -324,7 +401,6 @@ fn decode_with_ctor(raw_code: u8, reader: &mut Read) -> Result<Value> {
                 Ok(Value::Array(data))
             }
             TypeCode::Map8 => {
-                /*
                 let sz = reader.read_u8()? as usize;
                 let count = reader.read_u8()? as usize / 2;
                 let mut data: BTreeMap<Value, Value> = BTreeMap::new();
@@ -334,11 +410,8 @@ fn decode_with_ctor(raw_code: u8, reader: &mut Read) -> Result<Value> {
                     data.insert(key, value);
                 }
                 Ok(Value::Map(data))
-                */
-                Ok(Value::Null)
             }
             TypeCode::Map32 => {
-                /*
                 let sz = reader.read_u32::<NetworkEndian>()? as usize;
                 let count = reader.read_u32::<NetworkEndian>()? as usize / 2;
                 let mut data: BTreeMap<Value, Value> = BTreeMap::new();
@@ -348,8 +421,6 @@ fn decode_with_ctor(raw_code: u8, reader: &mut Read) -> Result<Value> {
                     data.insert(key, value);
                 }
                 Ok(Value::Map(data))
-                    */
-                Ok(Value::Null)
             }
         }
     }
@@ -359,6 +430,7 @@ fn decode_with_ctor(raw_code: u8, reader: &mut Read) -> Result<Value> {
 #[derive(Clone, PartialEq, Debug, PartialOrd)]
 enum TypeCode {
     Null = 0x40,
+    Ubyte = 0x50,
     Ushort = 0x60,
     Uint = 0x70,
     Uintsmall = 0x52,
@@ -366,6 +438,12 @@ enum TypeCode {
     Ulong = 0x80,
     Ulongsmall = 0x53,
     Ulong0 = 0x44,
+    Byte = 0x51,
+    Short = 0x61,
+    Int = 0x71,
+    Intsmall = 0x54,
+    Long = 0x81,
+    Longsmall = 0x55,
     Str8 = 0xA1,
     Str32 = 0xB1,
     Sym8 = 0xA3,
@@ -382,6 +460,7 @@ enum TypeCode {
 fn decode_type(code: u8) -> Result<TypeCode> {
     match code {
         0x40 => Ok(TypeCode::Null),
+        0x50 => Ok(TypeCode::Ubyte),
         0x60 => Ok(TypeCode::Ushort),
         0x70 => Ok(TypeCode::Uint),
         0x52 => Ok(TypeCode::Uintsmall),
@@ -389,6 +468,12 @@ fn decode_type(code: u8) -> Result<TypeCode> {
         0x80 => Ok(TypeCode::Ulong),
         0x53 => Ok(TypeCode::Ulongsmall),
         0x44 => Ok(TypeCode::Ulong0),
+        0x51 => Ok(TypeCode::Byte),
+        0x61 => Ok(TypeCode::Short),
+        0x71 => Ok(TypeCode::Int),
+        0x54 => Ok(TypeCode::Intsmall),
+        0x81 => Ok(TypeCode::Long),
+        0x55 => Ok(TypeCode::Longsmall),
         0xA1 => Ok(TypeCode::Str8),
         0xA3 => Ok(TypeCode::Sym8),
         0xB1 => Ok(TypeCode::Str32),
@@ -400,10 +485,10 @@ fn decode_type(code: u8) -> Result<TypeCode> {
         0xD1 => Ok(TypeCode::Map32),
         0xE0 => Ok(TypeCode::Array8),
         0xF0 => Ok(TypeCode::Array32),
-        _ => Err(AmqpError::DecodeError(format!(
-            "Unknown type code: 0x{:X}",
-            code
-        ))),
+        _ => Err(AmqpError::amqp_error(
+            condition::DECODE_ERROR,
+            Some(format!("Unknown type code: 0x{:X}", code).as_str()),
+        )),
     }
 }
 

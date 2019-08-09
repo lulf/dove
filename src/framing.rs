@@ -29,7 +29,12 @@ pub struct Open {
     pub incoming_locales: Vec<String>,
     pub offered_capabilities: Vec<String>,
     pub desired_capabilities: Vec<String>,
-    pub properties: HashMap<String, Box<Any>>,
+    pub properties: HashMap<String, Box<Value>>,
+}
+
+#[derive(Debug)]
+pub struct Close {
+    pub error: Option<AmqpError>,
 }
 
 impl Default for Open {
@@ -109,7 +114,7 @@ pub fn encode_frame(frame: &Frame, writer: &mut Write) -> Result<usize> {
 
             Ok(header.size as usize)
         }
-        Frame::SASL => Err(AmqpError::NotImplemented),
+        Frame::SASL => Err(AmqpError::amqp_error(condition::NOT_IMPLEMENTED, None)),
     }
 }
 
@@ -160,7 +165,7 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
                     }
 
                     if let Some(hostname) = it.next() {
-                        open.hostname = hostname.to_string();
+                        open.hostname = hostname.try_to_string().unwrap_or_else(|| String::new());
                     }
 
                     if let Some(max_frame_size) = it.next() {
@@ -186,35 +191,62 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
                     }
 
                     if let Some(offered_capabilities) = it.next() {
-                        // TODO:
-                        if let Value::Symbol(_) = offered_capabilities {
-                            open.offered_capabilities
-                                .push(offered_capabilities.to_string());
+                        if let Value::Array(vec) = offered_capabilities {
+                            for val in vec.iter() {
+                                open.offered_capabilities.push(val.to_string())
+                            }
+                        } else {
+                            offered_capabilities
+                                .try_to_string()
+                                .map(|s| open.offered_capabilities.push(s));
                         }
-                        println!("OCAP {:?}", offered_capabilities);
                     }
 
                     if let Some(desired_capabilities) = it.next() {
-                        // TODO:
-                        println!("DCAP {:?}", desired_capabilities);
+                        if let Value::Array(vec) = desired_capabilities {
+                            for val in vec.iter() {
+                                open.desired_capabilities.push(val.to_string())
+                            }
+                        } else {
+                            desired_capabilities
+                                .try_to_string()
+                                .map(|s| open.desired_capabilities.push(s));
+                        }
                     }
 
                     if let Some(properties) = it.next() {
-                        // TODO:
-                        println!("PROP {:?}", properties);
+                        if let Value::Map(m) = properties {
+                            for (key, value) in m.iter() {
+                                open.properties
+                                    .insert(key.to_string(), Box::new(value.clone()));
+                            }
+                        }
                     }
 
                     Ok(Performative::Open(open))
                 } else {
-                    Err(AmqpError::DecodeError(String::from(
-                        "Missing expected arguments for open performative",
-                    )))
+                    Err(AmqpError::amqp_error(
+                        condition::DECODE_ERROR,
+                        Some("Missing expected arguments for open performative"),
+                    ))
                 }
             }
-            v => Err(AmqpError::DecodeError(format!(
-                "Unexpected descriptor value: {:?}",
-                v
-            ))),
+            /*
+            Value::Ulong(0x18) => {
+                let list = decode(stream)?;
+                if let Value::List(args) = list {
+                    Ok
+                } else {
+                    Err(AmqpError::amqp_error(
+                        condition::DECODE_ERROR,
+                        Some("Missing expected arguments for close performative"),
+                    ))
+                }
+            }*/
+            v => Err(AmqpError::amqp_error(
+                condition::DECODE_ERROR,
+                Some(format!("Unexpected descriptor value: {:?}", v).as_str()),
+            )),
         }?;
         Ok(Frame::AMQP {
             channel: header.ext,
@@ -224,10 +256,10 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
     //} else if frame_type == 1 {
     // SASL
     } else {
-        Err(AmqpError::DecodeError(format!(
-            "Unknown frame type {}",
-            header.frame_type
-        )))
+        Err(AmqpError::amqp_error(
+            condition::connection::FRAMING_ERROR,
+            Some(format!("Unknown frame type {}", header.frame_type).as_str()),
+        ))
     }
 }
 

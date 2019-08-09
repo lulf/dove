@@ -292,7 +292,10 @@ impl<'a> ConnectionDriver<'a> {
                 let frame = self.transport.read_frame()?;
                 Ok(None)
             }
-            _ => Err(AmqpError::NotImplemented),
+            _ => Err(AmqpError::amqp_error(
+                error::condition::NOT_IMPLEMENTED,
+                None,
+            )),
         }
     }
 
@@ -318,7 +321,10 @@ impl<'a> ConnectionDriver<'a> {
                 }
             }
             _ => {
-                return Err(AmqpError::InternalError(String::from("Framing error")));
+                return Err(AmqpError::amqp_error(
+                    error::condition::connection::FRAMING_ERROR,
+                    None,
+                ))
             }
         }
     }
@@ -349,28 +355,6 @@ impl<'a> ConnectionDriver<'a> {
             }
         }
         Ok(None)
-    }
-
-    pub fn create_session() -> Result<Session> {
-        Err(AmqpError::NotImplemented)
-    }
-
-    pub fn create_sender(&self, _name: String) -> Result<Sender> {
-        Err(AmqpError::NotImplemented)
-    }
-
-    pub fn create_receiver(&self, _name: String) -> Result<Receiver> {
-        Err(AmqpError::NotImplemented)
-    }
-}
-
-impl Session {
-    pub fn create_sender(&self, _name: String) -> Result<Sender> {
-        Err(AmqpError::NotImplemented)
-    }
-
-    pub fn create_receiver(&self, _name: String) -> Result<Receiver> {
-        Err(AmqpError::NotImplemented)
     }
 }
 

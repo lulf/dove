@@ -3,6 +3,7 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+use std::collections::HashMap;
 use std::error;
 use std::fmt;
 use std::io;
@@ -12,10 +13,38 @@ pub type Result<T> = std::result::Result<T, AmqpError>;
 #[derive(Debug)]
 pub enum AmqpError {
     IoError(io::Error),
-    InternalError(String),
-    DecodeError(String),
-    NotImplemented,
+    Amqp(ErrorCondition),
     Generic(String),
+}
+
+#[derive(Debug)]
+pub struct ErrorCondition {
+    condition: String,
+    description: String,
+    info: HashMap<String, String>,
+}
+
+pub mod condition {
+    pub const INTERNAL_ERROR: &'static str = "amqp:internal-error";
+    pub const NOT_FOUND: &'static str = "amqp:not-found";
+    pub const DECODE_ERROR: &'static str = "amqp:decode-error";
+    pub const NOT_IMPLEMENTED: &'static str = "amqp:not-implemented";
+
+    pub mod connection {
+        pub const CONNECTION_FORCED: &'static str = "amqp:connection:forced";
+        pub const FRAMING_ERROR: &'static str = "amqp:connection:framing-error";
+        pub const REDIRECT: &'static str = "amqp:connection:redirect";
+    }
+}
+
+impl AmqpError {
+    pub fn amqp_error(condition: &'static str, description: Option<&str>) -> AmqpError {
+        AmqpError::Amqp(ErrorCondition {
+            condition: condition.to_string(),
+            description: description.unwrap_or("").to_string(),
+            info: HashMap::new(),
+        })
+    }
 }
 
 impl error::Error for AmqpError {
@@ -28,9 +57,7 @@ impl fmt::Display for AmqpError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             AmqpError::IoError(e) => write!(f, "{}", e.to_string()),
-            AmqpError::InternalError(s) => write!(f, "{}", s),
-            AmqpError::DecodeError(s) => write!(f, "{}", s),
-            AmqpError::NotImplemented => write!(f, "Not Implemented"),
+            AmqpError::Amqp(s) => write!(f, "{:?}", s),
             AmqpError::Generic(s) => write!(f, "{}", s),
         }
     }
