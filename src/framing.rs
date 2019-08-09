@@ -34,7 +34,7 @@ pub struct Open {
 
 #[derive(Debug)]
 pub struct Close {
-    pub error: Option<AmqpError>,
+    pub error: Option<ErrorCondition>,
 }
 
 impl Default for Open {
@@ -57,6 +57,7 @@ impl Default for Open {
 #[derive(Debug)]
 pub enum Performative {
     Open(Open),
+    Close(Close),
 }
 
 #[derive(Debug)]
@@ -98,6 +99,12 @@ pub fn encode_frame(frame: &Frame, writer: &mut Write) -> Result<usize> {
                             Value::Uint(open.max_frame_size),
                             Value::Ushort(open.channel_max),
                         ];
+                        encode_ref(&Value::List(args), &mut body)?;
+                    }
+                    Performative::Close(close) => {
+                        body.write_u8(0)?;
+                        encode_ref(&Value::Ulong(0x18), &mut body)?;
+                        let args = vec![Value::List(Vec::new())];
                         encode_ref(&Value::List(args), &mut body)?;
                     }
                 }
@@ -231,18 +238,34 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
                     ))
                 }
             }
-            /*
             Value::Ulong(0x18) => {
-                let list = decode(stream)?;
-                if let Value::List(args) = list {
-                    Ok
-                } else {
-                    Err(AmqpError::amqp_error(
-                        condition::DECODE_ERROR,
-                        Some("Missing expected arguments for close performative"),
-                    ))
+                let mut close = Close { error: None };
+                if let Value::List(args) = decode(stream)? {
+                    if args.len() > 0 {
+                        if let Value::Ulong(0x1D) = args[0] {
+                            let list = decode(stream)?;
+                            println!("Decoded: {:?}", list);
+                            if let Value::List(args) = list {
+                                let mut it = args.iter();
+                                let mut error_condition = ErrorCondition {
+                                    condition: String::new(),
+                                    description: String::new(),
+                                };
+
+                                if let Some(condition) = it.next() {
+                                    error_condition.condition = condition.to_string();
+                                }
+
+                                if let Some(description) = it.next() {
+                                    error_condition.description = description.to_string();
+                                }
+                                close.error = Some(error_condition);
+                            }
+                        }
+                    }
                 }
-            }*/
+                Ok(Performative::Close(close))
+            }
             v => Err(AmqpError::amqp_error(
                 condition::DECODE_ERROR,
                 Some(format!("Unexpected descriptor value: {:?}", v).as_str()),

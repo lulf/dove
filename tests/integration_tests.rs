@@ -30,6 +30,10 @@ fn client() {
                     println!("Opening connection!");
                     conn.open();
                 }
+                Event::RemoteClose(mut conn, _) => {
+                    println!("Received close from peer, closing connection!");
+                    conn.close(None);
+                }
                 e => {
                     println!("Unhandled event: {:?}", e);
                 }

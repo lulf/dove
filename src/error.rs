@@ -17,11 +17,10 @@ pub enum AmqpError {
     Generic(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ErrorCondition {
-    condition: String,
-    description: String,
-    info: HashMap<String, String>,
+    pub condition: String,
+    pub description: String,
 }
 
 pub mod condition {
@@ -42,7 +41,6 @@ impl AmqpError {
         AmqpError::Amqp(ErrorCondition {
             condition: condition.to_string(),
             description: description.unwrap_or("").to_string(),
-            info: HashMap::new(),
         })
     }
 }
