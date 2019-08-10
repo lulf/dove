@@ -77,28 +77,26 @@ impl Transport {
         }
     }
 
-    pub fn read_frame(self: &mut Self) -> Result<Option<Frame>> {
-        let mut buf = self.incoming.fill(&mut self.stream)?;
-        // println!("Filled {} bytes", buf.len());
-        if buf.len() >= 8 {
-            let header = decode_header(&mut buf)?;
-            let frame_size = header.size as usize;
-            /*
-            println!(
-                "Found enough bytes for header {:?}. Buffer is {} bytes!",
-                header,
-                buf.len()
-            );
-            */
-            if buf.len() >= frame_size - 8 {
-                let frame = decode_frame(header, &mut buf)?;
-                self.incoming.consume(frame_size)?;
-                Ok(Some(frame))
-            } else {
-                Ok(None)
+    pub fn read_frame(self: &mut Self) -> Result<Frame> {
+        loop {
+            let mut buf = self.incoming.fill(&mut self.stream)?;
+            // println!("Filled {} bytes", buf.len());
+            if buf.len() >= 8 {
+                let header = decode_header(&mut buf)?;
+                let frame_size = header.size as usize;
+                /*
+                println!(
+                    "Found enough bytes for header {:?}. Buffer is {} bytes!",
+                    header,
+                    buf.len()
+                );
+                */
+                if buf.len() >= frame_size - 8 {
+                    let frame = decode_frame(header, &mut buf)?;
+                    self.incoming.consume(frame_size)?;
+                    return Ok(frame);
+                }
             }
-        } else {
-            Ok(None)
         }
     }
 

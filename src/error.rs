@@ -36,6 +36,10 @@ pub mod condition {
 }
 
 impl AmqpError {
+    pub fn framing_error() -> AmqpError {
+        AmqpError::amqp_error(condition::connection::FRAMING_ERROR, None)
+    }
+
     pub fn amqp_error(condition: &'static str, description: Option<&str>) -> AmqpError {
         AmqpError::Amqp(ErrorCondition {
             condition: condition.to_string(),

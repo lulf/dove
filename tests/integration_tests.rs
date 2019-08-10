@@ -38,6 +38,11 @@ fn client() {
                             println!("Opening connection!");
                             conn.open();
                         }
+                        Event::RemoteOpen(_) => {
+                            println!("Remote opened!");
+                            let session = conn.session();
+                            session.begin();
+                        }
                         Event::RemoteClose(_) => {
                             println!("Received close from peer, closing connection!");
                             conn.close(None);
