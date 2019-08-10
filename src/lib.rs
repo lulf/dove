@@ -5,6 +5,7 @@
 
 mod error;
 mod framing;
+mod transport;
 mod types;
 
 use std::convert::From;
@@ -16,41 +17,6 @@ use std::vec::Vec;
 
 pub use error::Result;
 pub use error::*;
-
-#[derive(Debug)]
-pub struct ReadBuffer {
-    buffer: Vec<u8>,
-    capacity: usize,
-    position: usize,
-}
-
-impl ReadBuffer {
-    pub fn new(capacity: usize) -> ReadBuffer {
-        ReadBuffer {
-            buffer: vec![0; capacity],
-            capacity: capacity,
-            position: 0,
-        }
-    }
-
-    pub fn fill(self: &mut Self, reader: &mut Read) -> Result<&[u8]> {
-        if self.position < self.capacity {
-            let len = reader.read(&mut self.buffer[self.position..self.capacity])?;
-            self.position += len;
-            // println!("Filled {} bytes", len);
-        }
-        // println!("Position is now {}", self.position);
-        Ok(&self.buffer[0..self.position])
-    }
-
-    pub fn consume(self: &mut Self, nbytes: usize) -> Result<()> {
-        self.buffer.drain(0..nbytes);
-        self.buffer.resize(self.capacity, 0);
-        self.position -= nbytes;
-        // println!("(Consume) Position is now {}", self.position);
-        Ok(())
-    }
-}
 
 #[derive(Debug)]
 pub struct ConnectionOptions {
@@ -99,86 +65,13 @@ pub struct ConnectionDriver<'a> {
 }
 
 #[derive(Debug)]
-pub struct Transport {
-    stream: TcpStream,
-    incoming: ReadBuffer,
-    outgoing: Vec<u8>,
-    max_frame_size: usize,
-}
-
-#[derive(Debug)]
 pub struct Connection {
     pub container_id: String,
     pub hostname: String,
-    transport: Transport,
+    transport: transport::Transport,
     opened: bool,
     closed: bool,
     close_condition: Option<ErrorCondition>,
-}
-
-impl Transport {
-    pub fn new(stream: TcpStream, max_frame_size: usize) -> Result<Transport> {
-        // stream.set_nonblocking(true)?;
-        Ok(Transport {
-            stream: stream,
-            incoming: ReadBuffer::new(max_frame_size),
-            outgoing: Vec::with_capacity(max_frame_size),
-            max_frame_size: max_frame_size,
-        })
-    }
-
-    pub fn read_protocol_version(self: &mut Self) -> Result<Option<[u8; 8]>> {
-        let mut buf = self.incoming.fill(&mut self.stream)?;
-        if buf.len() >= 8 {
-            let mut remote_version: [u8; 8] = [0; 8];
-            buf.read(&mut remote_version)?;
-            self.incoming.consume(8)?;
-            Ok(Some(remote_version))
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub fn read_frame(self: &mut Self) -> Result<Option<framing::Frame>> {
-        let mut buf = self.incoming.fill(&mut self.stream)?;
-        // println!("Filled {} bytes", buf.len());
-        if buf.len() >= 8 {
-            let header = framing::decode_header(&mut buf)?;
-            let frame_size = header.size as usize;
-            /*
-            println!(
-                "Found enough bytes for header {:?}. Buffer is {} bytes!",
-                header,
-                buf.len()
-            );
-            */
-            if buf.len() >= frame_size - 8 {
-                let frame = framing::decode_frame(header, &mut buf)?;
-                self.incoming.consume(frame_size)?;
-                Ok(Some(frame))
-            } else {
-                Ok(None)
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub fn write_frame(self: &mut Self, frame: &framing::Frame) -> Result<usize> {
-        framing::encode_frame(frame, &mut self.outgoing)
-    }
-
-    pub fn write(self: &mut Self, data: &[u8]) -> Result<usize> {
-        self.outgoing.write_all(data)?;
-        Ok(data.len())
-    }
-
-    pub fn flush(self: &mut Self) -> Result<usize> {
-        let len = self.outgoing.len();
-        self.stream.write_all(self.outgoing.as_mut())?;
-        self.outgoing.clear();
-        Ok(len)
-    }
 }
 
 impl Container {
@@ -191,17 +84,18 @@ impl Container {
     pub fn connect(&self, opts: ConnectionOptions) -> Result<Connection> {
         let stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
         // TODO: SASL support
-        let transport: Transport = Transport::new(stream, 1024)?;
+        let transport: transport::Transport = transport::Transport::new(stream, 1024)?;
 
         Ok(Connection::new(self.id.as_str(), opts.host, transport))
     }
-}
 
-/*
-pub fn listen(&self, opts: ListenOptions) -> io::Result<()> {
-    return Ok(());
+    /*
+    pub fn listen(&self, opts: ListenOptions) -> Result<Connection> {
+        let stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
+        return Ok(());
+    }
+    */
 }
-*/
 
 #[derive(Debug)]
 pub enum Event<'a> {
@@ -429,7 +323,7 @@ impl<'a> ConnectionDriver<'a> {
 }
 
 impl Connection {
-    pub fn new(container_id: &str, hostname: &str, transport: Transport) -> Connection {
+    pub fn new(container_id: &str, hostname: &str, transport: transport::Transport) -> Connection {
         Connection {
             container_id: container_id.to_string(),
             hostname: hostname.to_string(),
@@ -447,34 +341,5 @@ impl Connection {
     pub fn close(self: &mut Self, condition: Option<ErrorCondition>) {
         self.closed = true;
         self.close_condition = condition;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::ReadBuffer;
-    use std::io::Read;
-
-    #[test]
-    fn readbuffer() {
-        let mut buf = ReadBuffer::new(6);
-
-        let input: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-
-        let data = buf.fill(&mut &input[..]).expect("Unable to fill buffer");
-
-        assert_eq!(6, data.len());
-        assert_eq!([1, 2, 3, 4, 5, 6], data);
-
-        let data = buf.fill(&mut &input[..]).expect("Unable to fill buffer");
-        assert_eq!(6, data.len());
-        assert_eq!([1, 2, 3, 4, 5, 6], data);
-
-        buf.consume(1).expect("Unable to consume bytes");
-
-        let data = buf.fill(&mut &input[6..]).expect("Unable to fill buffer");
-        assert_eq!(6, data.len());
-        assert_eq!([2, 3, 4, 5, 6, 7], data);
     }
 }

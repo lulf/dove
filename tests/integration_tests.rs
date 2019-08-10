@@ -7,9 +7,9 @@ use std::io;
 use std::thread;
 use std::time;
 
-extern crate ramqp;
+extern crate knall;
 
-use ramqp::*;
+use knall::*;
 
 #[test]
 fn client() {
