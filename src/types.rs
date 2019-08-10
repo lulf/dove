@@ -7,7 +7,6 @@ use byteorder::NetworkEndian;
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
 use std::collections::BTreeMap;
-use std::convert::From;
 use std::io::Read;
 use std::io::Write;
 use std::vec::Vec;
@@ -61,9 +60,7 @@ impl Value {
 }
 
 const U8_MAX: usize = std::u8::MAX as usize;
-const U32_MAX: usize = std::u32::MAX as usize;
 const I8_MAX: usize = std::i8::MAX as usize;
-const I32_MAX: usize = std::i32::MAX as usize;
 const LIST8_MAX: usize = (std::u8::MAX as usize) - 1;
 const LIST32_MAX: usize = (std::u32::MAX as usize) - 4;
 
@@ -401,10 +398,10 @@ fn decode_with_ctor(raw_code: u8, reader: &mut Read) -> Result<Value> {
                 Ok(Value::Array(data))
             }
             TypeCode::Map8 => {
-                let sz = reader.read_u8()? as usize;
+                let _sz = reader.read_u8()? as usize;
                 let count = reader.read_u8()? as usize / 2;
                 let mut data: BTreeMap<Value, Value> = BTreeMap::new();
-                for num in (0..count) {
+                for _num in 0..count {
                     let key = decode(reader)?;
                     let value = decode(reader)?;
                     data.insert(key, value);
@@ -412,10 +409,10 @@ fn decode_with_ctor(raw_code: u8, reader: &mut Read) -> Result<Value> {
                 Ok(Value::Map(data))
             }
             TypeCode::Map32 => {
-                let sz = reader.read_u32::<NetworkEndian>()? as usize;
+                let _sz = reader.read_u32::<NetworkEndian>()? as usize;
                 let count = reader.read_u32::<NetworkEndian>()? as usize / 2;
                 let mut data: BTreeMap<Value, Value> = BTreeMap::new();
-                for num in (0..count) {
+                for _num in 0..count {
                     let key = decode(reader)?;
                     let value = decode(reader)?;
                     data.insert(key, value);

@@ -3,7 +3,6 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
-use std::collections::HashMap;
 use std::error;
 use std::fmt;
 use std::io;

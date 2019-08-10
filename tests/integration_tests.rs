@@ -22,24 +22,32 @@ fn client() {
         })
         .expect("Error opening connection");
 
-    let mut driver = ConnectionDriver::new(connection);
+    let mut driver = ConnectionDriver::new();
+
+    let client = driver.register(connection);
+
+    let mut event_buffer = EventBuffer::new();
 
     loop {
-        let mut next_event = driver.next_event();
-        match next_event {
-            Ok(Some(event)) => match event {
-                Event::ConnectionInit(mut conn) => {
-                    println!("Opening connection!");
-                    conn.open();
+        match driver.poll(&mut event_buffer) {
+            Ok(Some(handle)) => {
+                let conn = driver.connection(&handle).unwrap();
+                for event in event_buffer.drain(..) {
+                    match event {
+                        Event::ConnectionInit => {
+                            println!("Opening connection!");
+                            conn.open();
+                        }
+                        Event::RemoteClose(_) => {
+                            println!("Received close from peer, closing connection!");
+                            conn.close(None);
+                        }
+                        e => {
+                            println!("Unhandled event: {:#?}", e);
+                        }
+                    }
                 }
-                Event::RemoteClose(mut conn, _) => {
-                    println!("Received close from peer, closing connection!");
-                    conn.close(None);
-                }
-                e => {
-                    println!("Unhandled event: {:#?}", e);
-                }
-            },
+            }
             Ok(None) => {
                 thread::sleep(time::Duration::from_millis(100));
                 continue;

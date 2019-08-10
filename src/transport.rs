@@ -3,8 +3,6 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
-use std::convert::From;
-use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
 use std::net::TcpStream;
@@ -12,7 +10,6 @@ use std::vec::Vec;
 
 use crate::error::*;
 use crate::framing::*;
-use crate::types::*;
 
 #[derive(Debug)]
 pub struct ReadBuffer {
@@ -59,7 +56,7 @@ pub struct Transport {
 
 impl Transport {
     pub fn new(stream: TcpStream, max_frame_size: usize) -> Result<Transport> {
-        // stream.set_nonblocking(true)?;
+        stream.set_nonblocking(true)?;
         Ok(Transport {
             stream: stream,
             incoming: ReadBuffer::new(max_frame_size),

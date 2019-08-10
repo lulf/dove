@@ -6,10 +6,8 @@
 use byteorder::NetworkEndian;
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
-use std::any::Any;
 use std::collections::HashMap;
 use std::convert::From;
-use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
 use std::vec::Vec;
@@ -101,7 +99,7 @@ pub fn encode_frame(frame: &Frame, writer: &mut Write) -> Result<usize> {
                         ];
                         encode_ref(&Value::List(args), &mut body)?;
                     }
-                    Performative::Close(close) => {
+                    Performative::Close(_close) => {
                         body.write_u8(0)?;
                         encode_ref(&Value::Ulong(0x18), &mut body)?;
                         let args = vec![Value::List(Vec::new())];

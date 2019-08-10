@@ -8,10 +8,8 @@ mod framing;
 mod transport;
 mod types;
 
+use std::collections::HashMap;
 use std::convert::From;
-use std::io::Cursor;
-use std::io::Read;
-use std::io::Write;
 use std::net::TcpStream;
 use std::vec::Vec;
 
@@ -57,17 +55,21 @@ pub struct Receiver {}
 
 const AMQP_10_VERSION: [u8; 8] = [65, 77, 81, 80, 0, 1, 0, 0];
 
+type Handle = usize;
+
 #[derive(Debug)]
-pub struct ConnectionDriver<'a> {
-    connection: Connection,
-    state: ConnectionState,
-    pending_events: Vec<Event<'a>>,
+pub struct ConnectionDriver {
+    connections: HashMap<Handle, Connection>,
+    handles: Vec<Handle>,
+    id_counter: usize,
+    last_checked: Handle,
 }
 
 #[derive(Debug)]
 pub struct Connection {
     pub container_id: String,
     pub hostname: String,
+    state: ConnectionState,
     transport: transport::Transport,
     opened: bool,
     closed: bool,
@@ -97,236 +99,78 @@ impl Container {
     */
 }
 
+pub type EventBuffer = Vec<Event>;
+
 #[derive(Debug)]
-pub enum Event<'a> {
-    ConnectionInit(&'a mut Connection),
-    RemoteOpen(&'a mut Connection, framing::Open),
-    LocalOpen(&'a mut Connection, framing::Open),
-    RemoteClose(&'a mut Connection, framing::Close),
-    LocalClose(&'a mut Connection, Option<ErrorCondition>),
+pub enum Event {
+    ConnectionInit,
+    RemoteOpen(framing::Open),
+    LocalOpen(framing::Open),
+    RemoteClose(framing::Close),
+    LocalClose(Option<ErrorCondition>),
 }
 
-impl<'a> ConnectionDriver<'a> {
-    pub fn new(connection: Connection) -> ConnectionDriver<'a> {
+impl ConnectionDriver {
+    pub fn new() -> ConnectionDriver {
         ConnectionDriver {
-            pending_events: Vec::new(),
-            connection: connection,
-            state: ConnectionState::Start,
-        }
-    }
-    // Wait for next state event
-    pub fn next_event(self: &mut Self) -> Result<Option<Event>> {
-        if self.pending_events.len() > 0 {
-            Ok(Some(self.pending_events.remove(0)))
-        } else {
-            let event = self.process();
-            match event {
-                Err(AmqpError::IoError(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    Ok(None)
-                }
-                Err(e) => Err(e),
-                Ok(o) => Ok(o),
-            }
+            connections: HashMap::new(),
+            handles: Vec::new(),
+            id_counter: 0,
+            last_checked: 0,
         }
     }
 
-    fn process(self: &mut Self) -> Result<Option<Event>> {
-        // TODO: Clean up this state handling
-        match self.state {
-            ConnectionState::Start => {
-                self.connection.transport.write(&AMQP_10_VERSION)?;
-                self.connection.transport.flush()?;
-                self.state = ConnectionState::HdrSent;
-                Ok(None)
-            }
-            ConnectionState::HdrSent => {
-                let mut remote_version = self.connection.transport.read_protocol_version()?;
-                self.state = ConnectionState::HdrExch;
-                Ok(Some(Event::ConnectionInit(&mut self.connection)))
-            }
-            ConnectionState::HdrRcvd => {
-                self.connection.transport.write(&AMQP_10_VERSION)?;
-                self.connection.transport.flush()?;
-                self.state = ConnectionState::HdrExch;
-                Ok(Some(Event::ConnectionInit(&mut self.connection)))
-            }
-            ConnectionState::HdrExch => {
-                if self.connection.opened {
-                    self.local_open(ConnectionState::OpenSent)
-                } else {
-                    let frame = self.connection.transport.read_frame()?;
-                    if let Some(f) = frame {
-                        self.remote_open(f, ConnectionState::OpenRcvd)
-                    } else {
-                        Ok(None)
-                    }
-                }
-            }
-            ConnectionState::OpenRcvd => {
-                if self.connection.opened {
-                    self.local_open(ConnectionState::Opened)
-                } else {
-                    Ok(None)
-                }
-            }
-            ConnectionState::OpenSent => {
-                let frame = self.connection.transport.read_frame()?;
-                if let Some(f) = frame {
-                    self.remote_open(f, ConnectionState::Opened)
-                } else {
-                    Ok(None)
-                }
-            }
-            ConnectionState::Opened => {
-                if self.connection.closed {
-                    self.local_close(ConnectionState::CloseSent)
-                } else {
-                    let frame = self.connection.transport.read_frame()?;
-                    if let Some(f) = frame {
-                        self.handle_frame(f)
-                    } else {
-                        Ok(None)
-                    }
-                }
-            }
-            ConnectionState::CloseRcvd => {
-                if self.connection.closed {
-                    self.local_close(ConnectionState::End)
-                } else {
-                    Ok(None)
-                }
-            }
-            ConnectionState::CloseSent => {
-                let frame = self.connection.transport.read_frame()?;
-                if let Some(f) = frame {
-                    self.handle_frame(f)
-                } else {
-                    Ok(None)
-                }
-            }
-            ConnectionState::End => Ok(None),
-            _ => Err(AmqpError::amqp_error(
-                error::condition::NOT_IMPLEMENTED,
-                None,
-            )),
-        }
+    fn next_handle(self: &mut Self, current: Handle) -> Handle {
+        (current + 1) % self.connections.len()
     }
 
-    fn remote_open(
-        self: &mut Self,
-        frame: framing::Frame,
-        next_state: ConnectionState,
-    ) -> Result<Option<Event>> {
-        match frame {
-            framing::Frame::AMQP {
-                channel,
-                performative,
-                payload,
-            } => {
-                // Handle AMQP
-                let performative =
-                    performative.expect("Missing required performative for AMQP frame");
-                match performative {
-                    framing::Performative::Open(open) => {
-                        self.state = next_state;
-                        return Ok(Some(Event::RemoteOpen(&mut self.connection, open)));
-                    }
-                    _ => Err(AmqpError::amqp_error(
-                        error::condition::connection::FRAMING_ERROR,
-                        None,
-                    )),
-                }
-            }
-            _ => {
-                return Err(AmqpError::amqp_error(
-                    error::condition::connection::FRAMING_ERROR,
-                    None,
-                ))
-            }
-        }
+    pub fn register(self: &mut Self, connection: Connection) -> Handle {
+        let handle = self.id_counter;
+        self.connections.insert(handle, connection);
+        self.handles.push(handle);
+        self.id_counter += 1;
+        handle
     }
 
-    fn local_open(self: &mut Self, next_state: ConnectionState) -> Result<Option<Event>> {
-        let frame = framing::Frame::AMQP {
-            channel: 0,
-            performative: Some(framing::Performative::Open(framing::Open {
-                hostname: self.connection.hostname.clone(),
-                ..Default::default()
-            })),
-            payload: None,
-        };
+    pub fn connection(self: &mut Self, handle: &Handle) -> Option<&mut Connection> {
+        self.connections.get_mut(handle)
+    }
 
-        self.connection.transport.write_frame(&frame)?;
-        self.connection.transport.flush()?;
+    // Poll for events on one of the handles registered with this driver and push the events to the provided buffer.
+    pub fn poll(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<Option<Handle>> {
+        if self.handles.len() > 0 {
+            let last: Handle = self.last_checked;
+            loop {
+                let next = self.next_handle(self.last_checked);
 
-        self.state = next_state;
-        if let framing::Frame::AMQP {
-            channel,
-            performative,
-            payload,
-        } = frame
-        {
-            if let Some(framing::Performative::Open(data)) = performative {
-                return Ok(Some(Event::LocalOpen(&mut self.connection, data)));
+                let conn = self
+                    .connections
+                    .get_mut(&next)
+                    .expect(format!("Handle {:?} missing!", next).as_str());
+                let found = conn.poll(event_buffer);
+                self.last_checked = next;
+                match found {
+                    Err(AmqpError::IoError(ref e))
+                        if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(e) => return Err(e),
+                    Ok(true) => return Ok(Some(next)),
+                    _ => {}
+                }
+                if next == last {
+                    return Ok(None);
+                }
             }
         }
         Ok(None)
     }
-
-    fn local_close(self: &mut Self, next_state: ConnectionState) -> Result<Option<Event>> {
-        let frame = framing::Frame::AMQP {
-            channel: 0,
-            performative: Some(framing::Performative::Close(framing::Close {
-                error: self.connection.close_condition.clone(),
-            })),
-            payload: None,
-        };
-
-        self.connection.transport.write_frame(&frame)?;
-        self.connection.transport.flush()?;
-
-        self.state = next_state;
-
-        let condition = self.connection.close_condition.clone();
-        Ok(Some(Event::LocalClose(&mut self.connection, condition)))
-    }
-
-    fn handle_frame(self: &mut Self, frame: framing::Frame) -> Result<Option<Event>> {
-        match frame {
-            framing::Frame::AMQP {
-                channel,
-                performative,
-                payload,
-            } => {
-                // Handle AMQP
-                let performative =
-                    performative.expect("Missing required performative for AMQP frame");
-                match performative {
-                    framing::Performative::Close(close) => {
-                        self.state = ConnectionState::CloseRcvd;
-                        Ok(Some(Event::RemoteClose(&mut self.connection, close)))
-                    }
-                    _ => Err(AmqpError::amqp_error(
-                        error::condition::connection::FRAMING_ERROR,
-                        None,
-                    )),
-                }
-            }
-            _ => {
-                return Err(AmqpError::amqp_error(
-                    error::condition::connection::FRAMING_ERROR,
-                    None,
-                ))
-            }
-        }
-    }
 }
 
-impl Connection {
+impl<'a> Connection {
     pub fn new(container_id: &str, hostname: &str, transport: transport::Transport) -> Connection {
         Connection {
             container_id: container_id.to_string(),
             hostname: hostname.to_string(),
+            state: ConnectionState::Start,
             opened: false,
             closed: false,
             close_condition: None,
@@ -341,5 +185,203 @@ impl Connection {
     pub fn close(self: &mut Self, condition: Option<ErrorCondition>) {
         self.closed = true;
         self.close_condition = condition;
+    }
+
+    fn poll(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<bool> {
+        let before = event_buffer.len();
+        self.do_work(event_buffer)?;
+
+        Ok(before != event_buffer.len())
+    }
+
+    fn do_work(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
+        // TODO: Clean up this state handling
+        match self.state {
+            ConnectionState::Start => {
+                self.transport.write(&AMQP_10_VERSION)?;
+                self.transport.flush()?;
+                self.state = ConnectionState::HdrSent;
+            }
+            ConnectionState::HdrSent => {
+                let mut _remote_version = self.transport.read_protocol_version()?;
+                self.state = ConnectionState::HdrExch;
+                event_buffer.push(Event::ConnectionInit);
+            }
+            ConnectionState::HdrRcvd => {
+                self.transport.write(&AMQP_10_VERSION)?;
+                self.transport.flush()?;
+                self.state = ConnectionState::HdrExch;
+                event_buffer.push(Event::ConnectionInit);
+            }
+            ConnectionState::HdrExch => {
+                if self.opened {
+                    self.local_open(event_buffer, ConnectionState::OpenSent)?;
+                } else {
+                    let frame = self.transport.read_frame()?;
+                    if let Some(f) = frame {
+                        self.remote_open(f, event_buffer, ConnectionState::OpenRcvd)?;
+                    }
+                }
+            }
+            ConnectionState::OpenRcvd => {
+                if self.opened {
+                    self.local_open(event_buffer, ConnectionState::Opened)?;
+                }
+            }
+            ConnectionState::OpenSent => {
+                let frame = self.transport.read_frame()?;
+                if let Some(f) = frame {
+                    self.remote_open(f, event_buffer, ConnectionState::Opened)?;
+                }
+            }
+            ConnectionState::Opened => {
+                if self.closed {
+                    self.local_close(event_buffer, ConnectionState::CloseSent)?;
+                } else {
+                    let frame = self.transport.read_frame()?;
+                    if let Some(f) = frame {
+                        self.handle_frame(f, event_buffer)?;
+                    }
+                }
+            }
+            ConnectionState::CloseRcvd => {
+                if self.closed {
+                    self.local_close(event_buffer, ConnectionState::End)?;
+                }
+            }
+            ConnectionState::CloseSent => {
+                let frame = self.transport.read_frame()?;
+                if let Some(f) = frame {
+                    self.handle_frame(f, event_buffer)?;
+                }
+            }
+            ConnectionState::End => {}
+        }
+        Ok(())
+    }
+
+    fn remote_open(
+        self: &mut Self,
+        frame: framing::Frame,
+        event_buffer: &mut EventBuffer,
+        next_state: ConnectionState,
+    ) -> Result<()> {
+        match frame {
+            framing::Frame::AMQP {
+                channel: _,
+                performative,
+                payload: _,
+            } => {
+                // Handle AMQP
+                let performative =
+                    performative.expect("Missing required performative for AMQP frame");
+                match performative {
+                    framing::Performative::Open(open) => {
+                        self.state = next_state;
+                        event_buffer.push(Event::RemoteOpen(open));
+                        Ok(())
+                    }
+                    _ => Err(AmqpError::amqp_error(
+                        error::condition::connection::FRAMING_ERROR,
+                        None,
+                    )),
+                }
+            }
+            _ => {
+                return Err(AmqpError::amqp_error(
+                    error::condition::connection::FRAMING_ERROR,
+                    None,
+                ))
+            }
+        }
+    }
+
+    fn local_open(
+        self: &mut Self,
+        event_buffer: &mut EventBuffer,
+        next_state: ConnectionState,
+    ) -> Result<()> {
+        let frame = framing::Frame::AMQP {
+            channel: 0,
+            performative: Some(framing::Performative::Open(framing::Open {
+                hostname: self.hostname.clone(),
+                ..Default::default()
+            })),
+            payload: None,
+        };
+
+        self.transport.write_frame(&frame)?;
+        self.transport.flush()?;
+
+        self.state = next_state;
+        if let framing::Frame::AMQP {
+            channel: _,
+            performative,
+            payload: _,
+        } = frame
+        {
+            if let Some(framing::Performative::Open(data)) = performative {
+                event_buffer.push(Event::LocalOpen(data));
+            }
+        }
+        Ok(())
+    }
+
+    fn local_close(
+        self: &mut Self,
+        event_buffer: &mut EventBuffer,
+        next_state: ConnectionState,
+    ) -> Result<()> {
+        let frame = framing::Frame::AMQP {
+            channel: 0,
+            performative: Some(framing::Performative::Close(framing::Close {
+                error: self.close_condition.clone(),
+            })),
+            payload: None,
+        };
+
+        self.transport.write_frame(&frame)?;
+        self.transport.flush()?;
+
+        self.state = next_state;
+
+        let condition = self.close_condition.clone();
+        event_buffer.push(Event::LocalClose(condition));
+        Ok(())
+    }
+
+    fn handle_frame(
+        self: &mut Self,
+        frame: framing::Frame,
+        event_buffer: &mut EventBuffer,
+    ) -> Result<()> {
+        match frame {
+            framing::Frame::AMQP {
+                channel: _,
+                performative,
+                payload: _,
+            } => {
+                // Handle AMQP
+                let performative =
+                    performative.expect("Missing required performative for AMQP frame");
+                match performative {
+                    framing::Performative::Close(close) => {
+                        self.state = ConnectionState::CloseRcvd;
+                        event_buffer.push(Event::RemoteClose(close));
+                        Ok(())
+                    }
+                    _ => Err(AmqpError::amqp_error(
+                        error::condition::connection::FRAMING_ERROR,
+                        None,
+                    )),
+                }
+            }
+            _ => {
+                return Err(AmqpError::amqp_error(
+                    error::condition::connection::FRAMING_ERROR,
+                    None,
+                ))
+            }
+        }
     }
 }
