@@ -9,6 +9,7 @@ use std::time;
 
 extern crate knall;
 
+use knall::error::*;
 use knall::*;
 
 #[test]
@@ -42,6 +43,9 @@ fn client() {
                             println!("Remote opened!");
                             let session = conn.session();
                             session.begin();
+                        }
+                        Event::RemoteBegin(_, _) => {
+                            println!("Remote begin");
                         }
                         Event::RemoteClose(_) => {
                             println!("Received close from peer, closing connection!");

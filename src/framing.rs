@@ -144,11 +144,22 @@ pub fn encode_frame(frame: &Frame, writer: &mut Write) -> Result<usize> {
                         ];
                         encode_ref(&Value::List(args), &mut buf)?;
                     }
-                    Performative::Close(_close) => {
+                    Performative::Close(close) => {
                         buf.write_u8(0)?;
                         encode_ref(&Value::Ulong(0x18), &mut buf)?;
-                        // TODO
-                        let args = vec![Value::List(Vec::new())];
+
+                        let args = if close.error.is_none() {
+                            vec![Value::Null]
+                        } else {
+                            let e = close.error.as_ref().unwrap();
+                            vec![
+                                Value::Ulong(0x1D),
+                                Value::List(vec![
+                                    Value::Symbol(e.condition.clone().into_bytes()),
+                                    Value::String(e.description.clone()),
+                                ]),
+                            ]
+                        };
                         encode_ref(&Value::List(args), &mut buf)?;
                     }
                     Performative::Begin(begin) => {
@@ -186,11 +197,21 @@ pub fn encode_frame(frame: &Frame, writer: &mut Write) -> Result<usize> {
                         ];
                         encode_ref(&Value::List(args), &mut buf)?;
                     }
-                    Performative::End(_end) => {
+                    Performative::End(end) => {
                         buf.write_u8(0)?;
                         encode_ref(&Value::Ulong(0x18), &mut buf)?;
-                        // TODO
-                        let args = vec![Value::List(Vec::new())];
+                        let args = if end.error.is_none() {
+                            vec![Value::Null]
+                        } else {
+                            let e = end.error.as_ref().unwrap();
+                            vec![
+                                Value::Ulong(0x1D),
+                                Value::List(vec![
+                                    Value::Symbol(e.condition.clone().into_bytes()),
+                                    Value::String(e.description.clone()),
+                                ]),
+                            ]
+                        };
                         encode_ref(&Value::List(args), &mut buf)?;
                     }
                 }
