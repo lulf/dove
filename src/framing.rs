@@ -38,7 +38,7 @@ impl Default for Open {
             hostname: String::new(),
             max_frame_size: 4294967295,
             channel_max: 65535,
-            idle_timeout: 0,
+            idle_timeout: 3000,
             outgoing_locales: Vec::new(),
             incoming_locales: Vec::new(),
             offered_capabilities: Vec::new(),
@@ -82,8 +82,7 @@ pub enum Performative {
 pub enum Frame {
     AMQP {
         channel: u16,
-        performative: Option<Performative>,
-        payload: Option<Box<Vec<u8>>>,
+        body: Option<Performative>,
     },
     SASL,
 }
@@ -96,21 +95,17 @@ pub fn encode_frame(frame: &Frame, writer: &mut Write) -> Result<usize> {
         ext: 0,
     };
     match frame {
-        Frame::AMQP {
-            channel,
-            performative,
-            payload,
-        } => {
+        Frame::AMQP { channel, body } => {
             header.frame_type = 0;
             header.ext = *channel;
 
-            let mut body: Vec<u8> = Vec::new();
+            let mut buf: Vec<u8> = Vec::new();
 
-            if let Some(performative) = performative {
-                match performative {
+            if let Some(body) = body {
+                match body {
                     Performative::Open(open) => {
-                        body.write_u8(0)?;
-                        encode_ref(&Value::Ulong(0x10), &mut body)?;
+                        buf.write_u8(0)?;
+                        encode_ref(&Value::Ulong(0x10), &mut buf)?;
                         let args = vec![
                             Value::String(open.container_id.clone()),
                             Value::String(open.hostname.clone()),
@@ -147,18 +142,18 @@ pub fn encode_frame(frame: &Frame, writer: &mut Write) -> Result<usize> {
                                     .map(|(k, v)| (Value::String(k.clone()), v.clone())),
                             )),
                         ];
-                        encode_ref(&Value::List(args), &mut body)?;
+                        encode_ref(&Value::List(args), &mut buf)?;
                     }
                     Performative::Close(_close) => {
-                        body.write_u8(0)?;
-                        encode_ref(&Value::Ulong(0x18), &mut body)?;
+                        buf.write_u8(0)?;
+                        encode_ref(&Value::Ulong(0x18), &mut buf)?;
                         // TODO
                         let args = vec![Value::List(Vec::new())];
-                        encode_ref(&Value::List(args), &mut body)?;
+                        encode_ref(&Value::List(args), &mut buf)?;
                     }
                     Performative::Begin(begin) => {
-                        body.write_u8(0)?;
-                        encode_ref(&Value::Ulong(0x11), &mut body)?;
+                        buf.write_u8(0)?;
+                        encode_ref(&Value::Ulong(0x11), &mut buf)?;
                         let remote_channel = begin
                             .remote_channel
                             .map_or_else(|| Value::Null, |c| Value::Ushort(c));
@@ -189,26 +184,21 @@ pub fn encode_frame(frame: &Frame, writer: &mut Write) -> Result<usize> {
                                     .map(|(k, v)| (Value::String(k.clone()), v.clone())),
                             )),
                         ];
-                        encode_ref(&Value::List(args), &mut body)?;
+                        encode_ref(&Value::List(args), &mut buf)?;
                     }
                     Performative::End(_end) => {
-                        body.write_u8(0)?;
-                        encode_ref(&Value::Ulong(0x18), &mut body)?;
+                        buf.write_u8(0)?;
+                        encode_ref(&Value::Ulong(0x18), &mut buf)?;
                         // TODO
                         let args = vec![Value::List(Vec::new())];
-                        encode_ref(&Value::List(args), &mut body)?;
+                        encode_ref(&Value::List(args), &mut buf)?;
                     }
                 }
             }
-
-            if let Some(payload) = payload {
-                body.write(payload)?;
-            }
-
-            header.size += body.len() as u32;
+            header.size += buf.len() as u32;
 
             encode_header(&header, writer)?;
-            writer.write_all(&body[..]);
+            writer.write_all(&buf[..]);
 
             Ok(header.size as usize)
         }
@@ -243,228 +233,232 @@ pub fn encode_header(header: &FrameHeader, writer: &mut Write) -> Result<()> {
 
 pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
     if header.frame_type == 0 {
-        let mut doff = header.doff;
-        while doff > 2 {
-            stream.read_u32::<NetworkEndian>()?;
-            doff -= 1;
-        }
-        let descriptor = decode(stream)?;
-        let performative = match descriptor {
-            Value::Ulong(0x10) => {
-                let list = decode(stream)?;
-                if let Value::List(args) = list {
-                    let mut open = Open {
-                        hostname: String::from("localhost"), // TODO: Set to my hostname if not found
-                        ..Default::default()
-                    };
-                    let mut it = args.iter();
-                    if let Some(container_id) = it.next() {
-                        open.container_id = container_id.to_string();
-                    }
-
-                    if let Some(hostname) = it.next() {
-                        open.hostname = hostname.try_to_string().unwrap_or_else(|| String::new());
-                    }
-
-                    if let Some(max_frame_size) = it.next() {
-                        open.max_frame_size = max_frame_size.to_u32();
-                    }
-
-                    if let Some(channel_max) = it.next() {
-                        open.channel_max = channel_max.to_u16();
-                    }
-
-                    if let Some(idle_timeout) = it.next() {
-                        open.idle_timeout = idle_timeout.to_u32();
-                    }
-
-                    if let Some(outgoing_locales) = it.next() {
-                        // TODO:
-                        println!("OLOC {:?}", outgoing_locales);
-                    }
-
-                    if let Some(incoming_locales) = it.next() {
-                        // TODO:
-                        println!("ILOC {:?}", incoming_locales);
-                    }
-
-                    if let Some(offered_capabilities) = it.next() {
-                        if let Value::Array(vec) = offered_capabilities {
-                            for val in vec.iter() {
-                                open.offered_capabilities.push(val.to_string())
-                            }
-                        } else {
-                            offered_capabilities
-                                .try_to_string()
-                                .map(|s| open.offered_capabilities.push(s));
-                        }
-                    }
-
-                    if let Some(desired_capabilities) = it.next() {
-                        if let Value::Array(vec) = desired_capabilities {
-                            for val in vec.iter() {
-                                open.desired_capabilities.push(val.to_string())
-                            }
-                        } else {
-                            desired_capabilities
-                                .try_to_string()
-                                .map(|s| open.desired_capabilities.push(s));
-                        }
-                    }
-
-                    if let Some(properties) = it.next() {
-                        if let Value::Map(m) = properties {
-                            for (key, value) in m.iter() {
-                                open.properties.insert(key.to_string(), value.clone());
-                            }
-                        }
-                    }
-
-                    Ok(Performative::Open(open))
-                } else {
-                    Err(AmqpError::amqp_error(
-                        condition::DECODE_ERROR,
-                        Some("Missing expected arguments for open performative"),
-                    ))
-                }
+        let body = if header.size > 8 {
+            let mut doff = header.doff;
+            while doff > 2 {
+                stream.read_u32::<NetworkEndian>()?;
+                doff -= 1;
             }
-            Value::Ulong(0x18) => {
-                let mut close = Close { error: None };
-                if let Value::List(args) = decode(stream)? {
-                    if args.len() > 0 {
-                        if let Value::Ulong(0x1D) = args[0] {
-                            let list = decode(stream)?;
-                            if let Value::List(args) = list {
-                                let mut it = args.iter();
-                                let mut error_condition = ErrorCondition {
-                                    condition: String::new(),
-                                    description: String::new(),
-                                };
+            let descriptor = decode(stream)?;
+            Some(match descriptor {
+                Value::Ulong(0x10) => {
+                    let list = decode(stream)?;
+                    if let Value::List(args) = list {
+                        let mut open = Open {
+                            hostname: String::from("localhost"), // TODO: Set to my hostname if not found
+                            ..Default::default()
+                        };
+                        let mut it = args.iter();
+                        if let Some(container_id) = it.next() {
+                            open.container_id = container_id.to_string();
+                        }
 
-                                if let Some(condition) = it.next() {
-                                    error_condition.condition = condition.to_string();
-                                }
+                        if let Some(hostname) = it.next() {
+                            open.hostname =
+                                hostname.try_to_string().unwrap_or_else(|| String::new());
+                        }
 
-                                if let Some(description) = it.next() {
-                                    error_condition.description = description.to_string();
+                        if let Some(max_frame_size) = it.next() {
+                            open.max_frame_size = max_frame_size.to_u32();
+                        }
+
+                        if let Some(channel_max) = it.next() {
+                            open.channel_max = channel_max.to_u16();
+                        }
+
+                        if let Some(idle_timeout) = it.next() {
+                            open.idle_timeout = idle_timeout.to_u32();
+                        }
+
+                        if let Some(outgoing_locales) = it.next() {
+                            // TODO:
+                            println!("OLOC {:?}", outgoing_locales);
+                        }
+
+                        if let Some(incoming_locales) = it.next() {
+                            // TODO:
+                            println!("ILOC {:?}", incoming_locales);
+                        }
+
+                        if let Some(offered_capabilities) = it.next() {
+                            if let Value::Array(vec) = offered_capabilities {
+                                for val in vec.iter() {
+                                    open.offered_capabilities.push(val.to_string())
                                 }
-                                close.error = Some(error_condition);
+                            } else {
+                                offered_capabilities
+                                    .try_to_string()
+                                    .map(|s| open.offered_capabilities.push(s));
                             }
                         }
+
+                        if let Some(desired_capabilities) = it.next() {
+                            if let Value::Array(vec) = desired_capabilities {
+                                for val in vec.iter() {
+                                    open.desired_capabilities.push(val.to_string())
+                                }
+                            } else {
+                                desired_capabilities
+                                    .try_to_string()
+                                    .map(|s| open.desired_capabilities.push(s));
+                            }
+                        }
+
+                        if let Some(properties) = it.next() {
+                            if let Value::Map(m) = properties {
+                                for (key, value) in m.iter() {
+                                    open.properties.insert(key.to_string(), value.clone());
+                                }
+                            }
+                        }
+
+                        Ok(Performative::Open(open))
+                    } else {
+                        Err(AmqpError::amqp_error(
+                            condition::DECODE_ERROR,
+                            Some("Missing expected arguments for open performative"),
+                        ))
                     }
                 }
-                Ok(Performative::Close(close))
-            }
-            Value::Ulong(0x11) => {
-                let list = decode(stream)?;
-                if let Value::List(args) = list {
-                    let mut begin = Begin {
-                        remote_channel: None,
-                        next_outgoing_id: 0,
-                        incoming_window: 0,
-                        outgoing_window: 0,
-                        handle_max: std::u32::MAX,
-                        offered_capabilities: Vec::new(),
-                        desired_capabilities: Vec::new(),
-                        properties: BTreeMap::new(),
-                    };
-                    let mut it = args.iter();
-                    if let Some(remote_channel) = it.next() {
-                        begin.remote_channel = remote_channel.try_to_u16();
-                    }
+                Value::Ulong(0x18) => {
+                    let mut close = Close { error: None };
+                    if let Value::List(args) = decode(stream)? {
+                        if args.len() > 0 {
+                            if let Value::Ulong(0x1D) = args[0] {
+                                let list = decode(stream)?;
+                                if let Value::List(args) = list {
+                                    let mut it = args.iter();
+                                    let mut error_condition = ErrorCondition {
+                                        condition: String::new(),
+                                        description: String::new(),
+                                    };
 
-                    if let Some(next_outgoing_id) = it.next() {
-                        begin.next_outgoing_id = next_outgoing_id.to_u32();
-                    }
+                                    if let Some(condition) = it.next() {
+                                        error_condition.condition = condition.to_string();
+                                    }
 
-                    if let Some(incoming_window) = it.next() {
-                        begin.incoming_window = incoming_window.to_u32();
-                    }
-
-                    if let Some(outgoing_window) = it.next() {
-                        begin.outgoing_window = outgoing_window.to_u32();
-                    }
-
-                    if let Some(handle_max) = it.next() {
-                        begin.handle_max = handle_max.to_u32();
-                    }
-
-                    if let Some(offered_capabilities) = it.next() {
-                        if let Value::Array(vec) = offered_capabilities {
-                            for val in vec.iter() {
-                                begin.offered_capabilities.push(val.to_string())
-                            }
-                        } else {
-                            offered_capabilities
-                                .try_to_string()
-                                .map(|s| begin.offered_capabilities.push(s));
-                        }
-                    }
-
-                    if let Some(desired_capabilities) = it.next() {
-                        if let Value::Array(vec) = desired_capabilities {
-                            for val in vec.iter() {
-                                begin.desired_capabilities.push(val.to_string())
-                            }
-                        } else {
-                            desired_capabilities
-                                .try_to_string()
-                                .map(|s| begin.desired_capabilities.push(s));
-                        }
-                    }
-
-                    if let Some(properties) = it.next() {
-                        if let Value::Map(m) = properties {
-                            for (key, value) in m.iter() {
-                                begin.properties.insert(key.to_string(), value.clone());
-                            }
-                        }
-                    }
-
-                    Ok(Performative::Begin(begin))
-                } else {
-                    Err(AmqpError::amqp_error(
-                        condition::DECODE_ERROR,
-                        Some("Missing expected arguments for begin performative"),
-                    ))
-                }
-            }
-            Value::Ulong(0x17) => {
-                let mut end = End { error: None };
-                if let Value::List(args) = decode(stream)? {
-                    if args.len() > 0 {
-                        if let Value::Ulong(0x1D) = args[0] {
-                            let list = decode(stream)?;
-                            if let Value::List(args) = list {
-                                let mut it = args.iter();
-                                let mut error_condition = ErrorCondition {
-                                    condition: String::new(),
-                                    description: String::new(),
-                                };
-
-                                if let Some(condition) = it.next() {
-                                    error_condition.condition = condition.to_string();
+                                    if let Some(description) = it.next() {
+                                        error_condition.description = description.to_string();
+                                    }
+                                    close.error = Some(error_condition);
                                 }
-
-                                if let Some(description) = it.next() {
-                                    error_condition.description = description.to_string();
-                                }
-                                end.error = Some(error_condition);
                             }
                         }
                     }
+                    Ok(Performative::Close(close))
                 }
-                Ok(Performative::End(end))
-            }
-            v => Err(AmqpError::amqp_error(
-                condition::DECODE_ERROR,
-                Some(format!("Unexpected descriptor value: {:?}", v).as_str()),
-            )),
-        }?;
+                Value::Ulong(0x11) => {
+                    let list = decode(stream)?;
+                    if let Value::List(args) = list {
+                        let mut begin = Begin {
+                            remote_channel: None,
+                            next_outgoing_id: 0,
+                            incoming_window: 0,
+                            outgoing_window: 0,
+                            handle_max: std::u32::MAX,
+                            offered_capabilities: Vec::new(),
+                            desired_capabilities: Vec::new(),
+                            properties: BTreeMap::new(),
+                        };
+                        let mut it = args.iter();
+                        if let Some(remote_channel) = it.next() {
+                            begin.remote_channel = remote_channel.try_to_u16();
+                        }
+
+                        if let Some(next_outgoing_id) = it.next() {
+                            begin.next_outgoing_id = next_outgoing_id.to_u32();
+                        }
+
+                        if let Some(incoming_window) = it.next() {
+                            begin.incoming_window = incoming_window.to_u32();
+                        }
+
+                        if let Some(outgoing_window) = it.next() {
+                            begin.outgoing_window = outgoing_window.to_u32();
+                        }
+
+                        if let Some(handle_max) = it.next() {
+                            begin.handle_max = handle_max.to_u32();
+                        }
+
+                        if let Some(offered_capabilities) = it.next() {
+                            if let Value::Array(vec) = offered_capabilities {
+                                for val in vec.iter() {
+                                    begin.offered_capabilities.push(val.to_string())
+                                }
+                            } else {
+                                offered_capabilities
+                                    .try_to_string()
+                                    .map(|s| begin.offered_capabilities.push(s));
+                            }
+                        }
+
+                        if let Some(desired_capabilities) = it.next() {
+                            if let Value::Array(vec) = desired_capabilities {
+                                for val in vec.iter() {
+                                    begin.desired_capabilities.push(val.to_string())
+                                }
+                            } else {
+                                desired_capabilities
+                                    .try_to_string()
+                                    .map(|s| begin.desired_capabilities.push(s));
+                            }
+                        }
+
+                        if let Some(properties) = it.next() {
+                            if let Value::Map(m) = properties {
+                                for (key, value) in m.iter() {
+                                    begin.properties.insert(key.to_string(), value.clone());
+                                }
+                            }
+                        }
+
+                        Ok(Performative::Begin(begin))
+                    } else {
+                        Err(AmqpError::amqp_error(
+                            condition::DECODE_ERROR,
+                            Some("Missing expected arguments for begin performative"),
+                        ))
+                    }
+                }
+                Value::Ulong(0x17) => {
+                    let mut end = End { error: None };
+                    if let Value::List(args) = decode(stream)? {
+                        if args.len() > 0 {
+                            if let Value::Ulong(0x1D) = args[0] {
+                                let list = decode(stream)?;
+                                if let Value::List(args) = list {
+                                    let mut it = args.iter();
+                                    let mut error_condition = ErrorCondition {
+                                        condition: String::new(),
+                                        description: String::new(),
+                                    };
+
+                                    if let Some(condition) = it.next() {
+                                        error_condition.condition = condition.to_string();
+                                    }
+
+                                    if let Some(description) = it.next() {
+                                        error_condition.description = description.to_string();
+                                    }
+                                    end.error = Some(error_condition);
+                                }
+                            }
+                        }
+                    }
+                    Ok(Performative::End(end))
+                }
+                v => Err(AmqpError::amqp_error(
+                    condition::DECODE_ERROR,
+                    Some(format!("Unexpected descriptor value: {:?}", v).as_str()),
+                )),
+            }?)
+        } else {
+            None
+        };
         Ok(Frame::AMQP {
             channel: header.ext,
-            performative: Some(performative),
-            payload: None,
+            body: body,
         })
     //} else if frame_type == 1 {
     // SASL

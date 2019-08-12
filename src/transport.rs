@@ -84,13 +84,11 @@ impl Transport {
             if buf.len() >= 8 {
                 let header = decode_header(&mut buf)?;
                 let frame_size = header.size as usize;
-                /*
                 println!(
                     "Found enough bytes for header {:?}. Buffer is {} bytes!",
                     header,
                     buf.len()
                 );
-                */
                 if buf.len() >= frame_size - 8 {
                     let frame = decode_frame(header, &mut buf)?;
                     self.incoming.consume(frame_size)?;

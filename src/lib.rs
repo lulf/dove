@@ -196,13 +196,12 @@ fn unwrap_frame(frame: framing::Frame) -> Result<(ChannelId, framing::Performati
     match frame {
         framing::Frame::AMQP {
             channel: channel,
-            performative,
-            payload: _,
+            body: body,
         } => {
             // Handle AMQP
-            let performative = performative.expect("Missing required performative for AMQP frame");
+            let body = body.expect("Missing required performative for AMQP frame");
 
-            return Ok((channel as ChannelId, performative));
+            return Ok((channel as ChannelId, body));
         }
         _ => return Err(AmqpError::framing_error()),
     }
@@ -269,7 +268,6 @@ impl Connection {
     }
 
     fn do_work(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
-        // TODO: Clean up this state handling
         match self.state {
             ConnectionState::Start => {
                 self.transport.write(&AMQP_10_VERSION)?;
@@ -287,8 +285,8 @@ impl Connection {
                     self.state = ConnectionState::OpenSent;
                 } else {
                     let frame = self.transport.read_frame()?;
-                    let (_, performative) = unwrap_frame(frame)?;
-                    match performative {
+                    let (_, body) = unwrap_frame(frame)?;
+                    match body {
                         framing::Performative::Open(open) => {
                             event_buffer.push(Event::RemoteOpen(open));
                             self.state = ConnectionState::OpenRcvd;
@@ -388,6 +386,11 @@ impl Connection {
                 _ => return Err(AmqpError::not_implemented()),
             }
         }
+
+        /*
+        let now = SystemTime::now();
+        if self.last_keepalive < self.idle_timeout
+        */
         Ok(())
     }
 
@@ -446,11 +449,10 @@ impl Connection {
     fn local_open(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
         let frame = framing::Frame::AMQP {
             channel: 0,
-            performative: Some(framing::Performative::Open(framing::Open {
+            body: Some(framing::Performative::Open(framing::Open {
                 hostname: self.hostname.clone(),
                 ..Default::default()
             })),
-            payload: None,
         };
 
         self.transport.write_frame(&frame)?;
@@ -458,11 +460,10 @@ impl Connection {
 
         if let framing::Frame::AMQP {
             channel: _,
-            performative,
-            payload: _,
+            body: body,
         } = frame
         {
-            if let Some(framing::Performative::Open(data)) = performative {
+            if let Some(framing::Performative::Open(data)) = body {
                 event_buffer.push(Event::LocalOpen(data));
             }
         }
@@ -472,10 +473,9 @@ impl Connection {
     fn local_close(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
         let frame = framing::Frame::AMQP {
             channel: 0,
-            performative: Some(framing::Performative::Close(framing::Close {
+            body: Some(framing::Performative::Close(framing::Close {
                 error: self.close_condition.clone(),
             })),
-            payload: None,
         };
 
         self.transport.write_frame(&frame)?;
@@ -526,7 +526,7 @@ impl Session {
     ) -> Result<()> {
         let frame = framing::Frame::AMQP {
             channel: self.local_channel as u16,
-            performative: Some(framing::Performative::Begin(framing::Begin {
+            body: Some(framing::Performative::Begin(framing::Begin {
                 remote_channel: self.remote_channel,
                 next_outgoing_id: 0,
                 incoming_window: 10,
@@ -536,19 +536,13 @@ impl Session {
                 desired_capabilities: Vec::new(),
                 properties: BTreeMap::new(),
             })),
-            payload: None,
         };
 
         transport.write_frame(&frame)?;
         transport.flush()?;
 
-        if let framing::Frame::AMQP {
-            channel: _,
-            performative,
-            payload: _,
-        } = frame
-        {
-            if let Some(framing::Performative::Begin(data)) = performative {
+        if let framing::Frame::AMQP { channel: _, body } = frame {
+            if let Some(framing::Performative::Begin(data)) = body {
                 event_buffer.push(Event::LocalBegin(self.local_channel, data));
             }
         }
