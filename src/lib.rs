@@ -8,6 +8,7 @@ mod framing;
 mod transport;
 mod types;
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::convert::From;
 use std::net::TcpStream;
@@ -63,21 +64,34 @@ pub struct ConnectionDriver {
 pub struct Connection {
     pub container_id: String,
     pub hostname: String,
+    pub channel_max: u16,
     state: ConnectionState,
     transport: transport::Transport,
     opened: bool,
     closed: bool,
     close_condition: Option<ErrorCondition>,
-
-    sessions: HashMap<SessionId, Session>,
+    sessions: HashMap<ChannelId, Session>,
+    remote_channel_map: HashMap<ChannelId, ChannelId>,
 }
 
-type SessionId = u32;
+type ChannelId = u16;
+
+#[derive(Debug)]
+enum SessionState {
+    Unmapped,
+    BeginSent,
+    BeginRcvd,
+    Mapped,
+    EndSent,
+    EndRcvd,
+    Discarding,
+}
 
 #[derive(Debug)]
 pub struct Session {
-    pub local_id: SessionId,
-    remote_id: SessionId,
+    pub local_channel: ChannelId,
+    remote_channel: Option<ChannelId>,
+    state: SessionState,
     begun: bool,
     ended: bool,
 }
@@ -114,12 +128,12 @@ pub enum Event {
     LocalOpen(framing::Open),
     RemoteClose(framing::Close),
     LocalClose(Option<ErrorCondition>),
+    SessionInit(ChannelId),
+    LocalBegin(ChannelId, framing::Begin),
+    RemoteBegin(ChannelId, framing::Begin),
     /*
-    SessionInit(SessionId),
-    LocalBegin(SessionId, framing::Begin),
-    RemoteBegin(SessionId, framing::Begin),
-    LocalEnd(SessionId, framing::End),
-    RemoteEnd(SessionId, framing::End),
+    LocalEnd(ChannelId, framing::End),
+    RemoteEnd(ChannelId, framing::End),
     */
 }
 
@@ -178,7 +192,7 @@ impl ConnectionDriver {
     }
 }
 
-fn unwrap_frame(frame: framing::Frame) -> Result<(u16, framing::Performative)> {
+fn unwrap_frame(frame: framing::Frame) -> Result<(ChannelId, framing::Performative)> {
     match frame {
         framing::Frame::AMQP {
             channel: channel,
@@ -188,7 +202,7 @@ fn unwrap_frame(frame: framing::Frame) -> Result<(u16, framing::Performative)> {
             // Handle AMQP
             let performative = performative.expect("Missing required performative for AMQP frame");
 
-            return Ok((channel, performative));
+            return Ok((channel as ChannelId, performative));
         }
         _ => return Err(AmqpError::framing_error()),
     }
@@ -200,9 +214,11 @@ impl Connection {
             container_id: container_id.to_string(),
             hostname: hostname.to_string(),
             state: ConnectionState::Start,
+            channel_max: std::u16::MAX,
             opened: false,
             closed: false,
             sessions: HashMap::new(),
+            remote_channel_map: HashMap::new(),
             close_condition: None,
             transport: transport,
         }
@@ -212,16 +228,32 @@ impl Connection {
         self.opened = true;
     }
 
+    fn allocate_channel(self: &mut Self) -> Option<ChannelId> {
+        for i in 0..self.channel_max {
+            let chan = i as ChannelId;
+            if !self.sessions.contains_key(&chan) {
+                return Some(chan);
+            }
+        }
+        None
+    }
+
     pub fn session(self: &mut Self) -> &mut Session {
-        let id = 0;
+        self.session_internal(None)
+    }
+
+    fn session_internal(self: &mut Self, channel_id: Option<ChannelId>) -> &mut Session {
+        let chan = self.allocate_channel().unwrap();
         let s = Session {
-            local_id: id,
-            remote_id: 0,
+            remote_channel: channel_id,
+            local_channel: chan,
             begun: false,
             ended: false,
+            state: SessionState::Unmapped,
         };
-        self.sessions.insert(id, s);
-        self.sessions.get_mut(&id).unwrap()
+        self.sessions.insert(chan, s);
+        channel_id.map(|c| self.remote_channel_map.insert(c, chan));
+        self.sessions.get_mut(&chan).unwrap()
     }
 
     pub fn close(self: &mut Self, condition: Option<ErrorCondition>) {
@@ -296,8 +328,9 @@ impl Connection {
                     self.local_close(event_buffer)?;
                     self.state = ConnectionState::CloseSent;
                 } else {
+                    self.dispatch_work(event_buffer)?;
                     let frame = self.transport.read_frame()?;
-                    self.handle_frame(frame, event_buffer)?;
+                    self.dispatch_frame(frame, event_buffer)?;
                 }
             }
             ConnectionState::ClosePipe => {
@@ -333,22 +366,81 @@ impl Connection {
         Ok(())
     }
 
-    // Handle frames in normal operation
-    fn handle_frame(
+    // Dispatch to work performed by sub-endpoints
+    fn dispatch_work(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
+        for (channel_id, session) in self.sessions.iter_mut() {
+            match session.state {
+                SessionState::Unmapped => {
+                    if session.begun {
+                        let frame = session.local_begin(&mut self.transport, event_buffer)?;
+                        session.state = SessionState::BeginSent;
+                    }
+                }
+                SessionState::BeginRcvd => {
+                    if session.begun {
+                        let frame = session.local_begin(&mut self.transport, event_buffer)?;
+                        session.state = SessionState::Mapped;
+                    }
+                }
+                SessionState::BeginSent | SessionState::Mapped => {
+                    session.dispatch_work(&mut self.transport, event_buffer)?;
+                }
+                _ => return Err(AmqpError::not_implemented()),
+            }
+        }
+        Ok(())
+    }
+
+    // Dispatch frame to relevant endpoint
+    fn dispatch_frame(
         self: &mut Self,
         frame: framing::Frame,
         event_buffer: &mut EventBuffer,
     ) -> Result<()> {
-        let (_, performative) = unwrap_frame(frame)?;
-        match performative {
-            // TODO: Handle sessions, links etc...
-            framing::Performative::Close(close) => {
-                event_buffer.push(Event::RemoteClose(close));
-                self.state = ConnectionState::CloseRcvd;
-            }
-            _ => return Err(AmqpError::framing_error()),
+        let (channel_id, performative) = unwrap_frame(frame)?;
+
+        let mut consumed = self.process_frame(channel_id, &performative, event_buffer)?;
+        let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
+        if let Some(local_channel) = local_channel_opt {
+            let session = self.sessions.get_mut(&local_channel).unwrap();
+            consumed |= session.process_frame(performative, event_buffer)?;
         }
-        Ok(())
+        if !consumed {
+            Err(AmqpError::framing_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    // Handle frames for a connection
+    fn process_frame(
+        self: &mut Self,
+        channel_id: ChannelId,
+        performative: &framing::Performative,
+        event_buffer: &mut EventBuffer,
+    ) -> Result<bool> {
+        Ok(match performative {
+            // TODO: Handle sessions, links etc...
+            framing::Performative::Begin(begin) => {
+                let session = self.session_internal(Some(channel_id));
+                session.state = SessionState::BeginRcvd;
+                session.remote_channel = Some(channel_id);
+                let local_channel = session.local_channel;
+                //self.remote_channel_map .insert(channel_id, session.local_channel);
+                event_buffer.push(Event::RemoteBegin(session.local_channel, begin.clone()));
+                true
+            }
+            framing::Performative::Close(close) => {
+                if channel_id == 0 {
+                    event_buffer.push(Event::RemoteClose(close.clone()));
+                    self.state = ConnectionState::CloseRcvd;
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        })
     }
 
     fn local_open(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
@@ -398,5 +490,76 @@ impl Connection {
 impl Session {
     pub fn begin(self: &mut Self) {
         self.begun = true;
+    }
+
+    fn process_frame(
+        self: &mut Self,
+        performative: framing::Performative,
+        event_buffer: &mut EventBuffer,
+    ) -> Result<bool> {
+        Ok(match self.state {
+            SessionState::Unmapped => match performative {
+                framing::Performative::Begin(begin) => {
+                    self.remote_channel = begin.remote_channel;
+                    event_buffer.push(Event::RemoteBegin(self.local_channel, begin));
+                    self.state = SessionState::BeginRcvd;
+                    true
+                }
+                _ => false,
+            },
+            SessionState::BeginSent => match performative {
+                framing::Performative::Begin(begin) => {
+                    event_buffer.push(Event::RemoteBegin(self.local_channel, begin));
+                    self.state = SessionState::Mapped;
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
+        })
+    }
+
+    fn local_begin(
+        self: &mut Self,
+        transport: &mut transport::Transport,
+        event_buffer: &mut EventBuffer,
+    ) -> Result<()> {
+        let frame = framing::Frame::AMQP {
+            channel: self.local_channel as u16,
+            performative: Some(framing::Performative::Begin(framing::Begin {
+                remote_channel: self.remote_channel,
+                next_outgoing_id: 0,
+                incoming_window: 10,
+                outgoing_window: 10,
+                handle_max: std::u32::MAX,
+                offered_capabilities: Vec::new(),
+                desired_capabilities: Vec::new(),
+                properties: BTreeMap::new(),
+            })),
+            payload: None,
+        };
+
+        transport.write_frame(&frame)?;
+        transport.flush()?;
+
+        if let framing::Frame::AMQP {
+            channel: _,
+            performative,
+            payload: _,
+        } = frame
+        {
+            if let Some(framing::Performative::Begin(data)) = performative {
+                event_buffer.push(Event::LocalBegin(self.local_channel, data));
+            }
+        }
+        Ok(())
+    }
+
+    fn dispatch_work(
+        self: &mut Self,
+        transport: &mut transport::Transport,
+        event_buffer: &mut EventBuffer,
+    ) -> Result<()> {
+        Ok(())
     }
 }

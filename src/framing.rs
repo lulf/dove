@@ -6,17 +6,18 @@
 use byteorder::NetworkEndian;
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::convert::From;
 use std::io::Read;
 use std::io::Write;
+use std::iter::FromIterator;
 use std::vec::Vec;
 use uuid::Uuid;
 
 use crate::error::*;
 use crate::types::*;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Open {
     pub container_id: String,
     pub hostname: String,
@@ -27,12 +28,7 @@ pub struct Open {
     pub incoming_locales: Vec<String>,
     pub offered_capabilities: Vec<String>,
     pub desired_capabilities: Vec<String>,
-    pub properties: HashMap<String, Box<Value>>,
-}
-
-#[derive(Debug)]
-pub struct Close {
-    pub error: Option<ErrorCondition>,
+    pub properties: BTreeMap<String, Value>,
 }
 
 impl Default for Open {
@@ -47,15 +43,39 @@ impl Default for Open {
             incoming_locales: Vec::new(),
             offered_capabilities: Vec::new(),
             desired_capabilities: Vec::new(),
-            properties: HashMap::new(),
+            properties: BTreeMap::new(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct Close {
+    pub error: Option<ErrorCondition>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Begin {
+    pub remote_channel: Option<u16>,
+    pub next_outgoing_id: u32,
+    pub incoming_window: u32,
+    pub outgoing_window: u32,
+    pub handle_max: u32,
+    pub offered_capabilities: Vec<String>,
+    pub desired_capabilities: Vec<String>,
+    pub properties: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone)]
+pub struct End {
+    pub error: Option<ErrorCondition>,
 }
 
 #[derive(Debug)]
 pub enum Performative {
     Open(Open),
     Close(Close),
+    Begin(Begin),
+    End(End),
 }
 
 #[derive(Debug)]
@@ -96,12 +116,85 @@ pub fn encode_frame(frame: &Frame, writer: &mut Write) -> Result<usize> {
                             Value::String(open.hostname.clone()),
                             Value::Uint(open.max_frame_size),
                             Value::Ushort(open.channel_max),
+                            Value::Uint(open.idle_timeout),
+                            Value::Array(
+                                open.outgoing_locales
+                                    .iter()
+                                    .map(|l| Value::Symbol(l.clone().into_bytes()))
+                                    .collect(),
+                            ),
+                            Value::Array(
+                                open.incoming_locales
+                                    .iter()
+                                    .map(|l| Value::Symbol(l.clone().into_bytes()))
+                                    .collect(),
+                            ),
+                            Value::Array(
+                                open.offered_capabilities
+                                    .iter()
+                                    .map(|c| Value::Symbol(c.clone().into_bytes()))
+                                    .collect(),
+                            ),
+                            Value::Array(
+                                open.desired_capabilities
+                                    .iter()
+                                    .map(|c| Value::Symbol(c.clone().into_bytes()))
+                                    .collect(),
+                            ),
+                            Value::Map(BTreeMap::from_iter(
+                                open.properties
+                                    .iter()
+                                    .map(|(k, v)| (Value::String(k.clone()), v.clone())),
+                            )),
                         ];
                         encode_ref(&Value::List(args), &mut body)?;
                     }
                     Performative::Close(_close) => {
                         body.write_u8(0)?;
                         encode_ref(&Value::Ulong(0x18), &mut body)?;
+                        // TODO
+                        let args = vec![Value::List(Vec::new())];
+                        encode_ref(&Value::List(args), &mut body)?;
+                    }
+                    Performative::Begin(begin) => {
+                        body.write_u8(0)?;
+                        encode_ref(&Value::Ulong(0x11), &mut body)?;
+                        let remote_channel = begin
+                            .remote_channel
+                            .map_or_else(|| Value::Null, |c| Value::Ushort(c));
+                        let args = vec![
+                            remote_channel,
+                            Value::Uint(begin.next_outgoing_id),
+                            Value::Uint(begin.incoming_window),
+                            Value::Uint(begin.outgoing_window),
+                            Value::Uint(begin.handle_max),
+                            Value::Array(
+                                begin
+                                    .offered_capabilities
+                                    .iter()
+                                    .map(|c| Value::Symbol(c.clone().into_bytes()))
+                                    .collect(),
+                            ),
+                            Value::Array(
+                                begin
+                                    .desired_capabilities
+                                    .iter()
+                                    .map(|c| Value::Symbol(c.clone().into_bytes()))
+                                    .collect(),
+                            ),
+                            Value::Map(BTreeMap::from_iter(
+                                begin
+                                    .properties
+                                    .iter()
+                                    .map(|(k, v)| (Value::String(k.clone()), v.clone())),
+                            )),
+                        ];
+                        encode_ref(&Value::List(args), &mut body)?;
+                    }
+                    Performative::End(_end) => {
+                        body.write_u8(0)?;
+                        encode_ref(&Value::Ulong(0x18), &mut body)?;
+                        // TODO
                         let args = vec![Value::List(Vec::new())];
                         encode_ref(&Value::List(args), &mut body)?;
                     }
@@ -222,8 +315,7 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
                     if let Some(properties) = it.next() {
                         if let Value::Map(m) = properties {
                             for (key, value) in m.iter() {
-                                open.properties
-                                    .insert(key.to_string(), Box::new(value.clone()));
+                                open.properties.insert(key.to_string(), value.clone());
                             }
                         }
                     }
@@ -242,7 +334,6 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
                     if args.len() > 0 {
                         if let Value::Ulong(0x1D) = args[0] {
                             let list = decode(stream)?;
-                            println!("Decoded: {:?}", list);
                             if let Value::List(args) = list {
                                 let mut it = args.iter();
                                 let mut error_condition = ErrorCondition {
@@ -263,6 +354,107 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
                     }
                 }
                 Ok(Performative::Close(close))
+            }
+            Value::Ulong(0x11) => {
+                let list = decode(stream)?;
+                if let Value::List(args) = list {
+                    let mut begin = Begin {
+                        remote_channel: None,
+                        next_outgoing_id: 0,
+                        incoming_window: 0,
+                        outgoing_window: 0,
+                        handle_max: std::u32::MAX,
+                        offered_capabilities: Vec::new(),
+                        desired_capabilities: Vec::new(),
+                        properties: BTreeMap::new(),
+                    };
+                    let mut it = args.iter();
+                    if let Some(remote_channel) = it.next() {
+                        begin.remote_channel = remote_channel.try_to_u16();
+                    }
+
+                    if let Some(next_outgoing_id) = it.next() {
+                        begin.next_outgoing_id = next_outgoing_id.to_u32();
+                    }
+
+                    if let Some(incoming_window) = it.next() {
+                        begin.incoming_window = incoming_window.to_u32();
+                    }
+
+                    if let Some(outgoing_window) = it.next() {
+                        begin.outgoing_window = outgoing_window.to_u32();
+                    }
+
+                    if let Some(handle_max) = it.next() {
+                        begin.handle_max = handle_max.to_u32();
+                    }
+
+                    if let Some(offered_capabilities) = it.next() {
+                        if let Value::Array(vec) = offered_capabilities {
+                            for val in vec.iter() {
+                                begin.offered_capabilities.push(val.to_string())
+                            }
+                        } else {
+                            offered_capabilities
+                                .try_to_string()
+                                .map(|s| begin.offered_capabilities.push(s));
+                        }
+                    }
+
+                    if let Some(desired_capabilities) = it.next() {
+                        if let Value::Array(vec) = desired_capabilities {
+                            for val in vec.iter() {
+                                begin.desired_capabilities.push(val.to_string())
+                            }
+                        } else {
+                            desired_capabilities
+                                .try_to_string()
+                                .map(|s| begin.desired_capabilities.push(s));
+                        }
+                    }
+
+                    if let Some(properties) = it.next() {
+                        if let Value::Map(m) = properties {
+                            for (key, value) in m.iter() {
+                                begin.properties.insert(key.to_string(), value.clone());
+                            }
+                        }
+                    }
+
+                    Ok(Performative::Begin(begin))
+                } else {
+                    Err(AmqpError::amqp_error(
+                        condition::DECODE_ERROR,
+                        Some("Missing expected arguments for begin performative"),
+                    ))
+                }
+            }
+            Value::Ulong(0x17) => {
+                let mut end = End { error: None };
+                if let Value::List(args) = decode(stream)? {
+                    if args.len() > 0 {
+                        if let Value::Ulong(0x1D) = args[0] {
+                            let list = decode(stream)?;
+                            if let Value::List(args) = list {
+                                let mut it = args.iter();
+                                let mut error_condition = ErrorCondition {
+                                    condition: String::new(),
+                                    description: String::new(),
+                                };
+
+                                if let Some(condition) = it.next() {
+                                    error_condition.condition = condition.to_string();
+                                }
+
+                                if let Some(description) = it.next() {
+                                    error_condition.description = description.to_string();
+                                }
+                                end.error = Some(error_condition);
+                            }
+                        }
+                    }
+                }
+                Ok(Performative::End(end))
             }
             v => Err(AmqpError::amqp_error(
                 condition::DECODE_ERROR,

@@ -57,6 +57,13 @@ impl Value {
             _ => panic!("Unexpected type"),
         }
     }
+
+    pub fn try_to_u16(self: &Self) -> Option<u16> {
+        match self {
+            Value::Ushort(v) => Some(*v as u16),
+            _ => None,
+        }
+    }
 }
 
 const U8_MAX: usize = std::u8::MAX as usize;
