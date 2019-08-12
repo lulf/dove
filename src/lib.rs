@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::convert::From;
 use std::net::TcpStream;
+use std::time::Duration;
+use std::time::Instant;
 use std::vec::Vec;
 
 pub use error::Result;
@@ -65,6 +67,10 @@ pub struct Connection {
     pub container_id: String,
     pub hostname: String,
     pub channel_max: u16,
+    pub idle_timeout: Duration,
+    pub remote_idle_timeout: Duration,
+    pub remote_container_id: String,
+    pub remote_channel_max: u16,
     state: ConnectionState,
     transport: transport::Transport,
     opened: bool,
@@ -192,15 +198,12 @@ impl ConnectionDriver {
     }
 }
 
-fn unwrap_frame(frame: framing::Frame) -> Result<(ChannelId, framing::Performative)> {
+fn unwrap_frame(frame: framing::Frame) -> Result<(ChannelId, Option<framing::Performative>)> {
     match frame {
         framing::Frame::AMQP {
             channel: channel,
             body: body,
         } => {
-            // Handle AMQP
-            let body = body.expect("Missing required performative for AMQP frame");
-
             return Ok((channel as ChannelId, body));
         }
         _ => return Err(AmqpError::framing_error()),
@@ -212,8 +215,12 @@ impl Connection {
         Connection {
             container_id: container_id.to_string(),
             hostname: hostname.to_string(),
-            state: ConnectionState::Start,
+            idle_timeout: Duration::from_millis(5000),
             channel_max: std::u16::MAX,
+            remote_container_id: String::new(),
+            remote_channel_max: 0,
+            remote_idle_timeout: Duration::from_millis(0),
+            state: ConnectionState::Start,
             opened: false,
             closed: false,
             sessions: HashMap::new(),
@@ -286,12 +293,15 @@ impl Connection {
                 } else {
                     let frame = self.transport.read_frame()?;
                     let (_, body) = unwrap_frame(frame)?;
-                    match body {
-                        framing::Performative::Open(open) => {
-                            event_buffer.push(Event::RemoteOpen(open));
-                            self.state = ConnectionState::OpenRcvd;
+                    if let Some(body) = body {
+                        match body {
+                            framing::Performative::Open(open) => {
+                                self.update_connection_info(&open);
+                                event_buffer.push(Event::RemoteOpen(open));
+                                self.state = ConnectionState::OpenRcvd;
+                            }
+                            _ => return Err(AmqpError::framing_error()),
                         }
-                        _ => return Err(AmqpError::framing_error()),
                     }
                 }
             }
@@ -307,17 +317,20 @@ impl Connection {
                     self.state = ConnectionState::ClosePipe;
                 } else {
                     let frame = self.transport.read_frame()?;
-                    let (_, performative) = unwrap_frame(frame)?;
-                    match performative {
-                        framing::Performative::Open(open) => {
-                            event_buffer.push(Event::RemoteOpen(open));
-                            self.state = ConnectionState::Opened;
+                    let (_, body) = unwrap_frame(frame)?;
+                    if let Some(body) = body {
+                        match body {
+                            framing::Performative::Open(open) => {
+                                self.update_connection_info(&open);
+                                event_buffer.push(Event::RemoteOpen(open));
+                                self.state = ConnectionState::Opened;
+                            }
+                            framing::Performative::Close(close) => {
+                                event_buffer.push(Event::RemoteClose(close));
+                                self.state = ConnectionState::ClosePipe;
+                            }
+                            _ => return Err(AmqpError::framing_error()),
                         }
-                        framing::Performative::Close(close) => {
-                            event_buffer.push(Event::RemoteClose(close));
-                            self.state = ConnectionState::ClosePipe;
-                        }
-                        _ => return Err(AmqpError::framing_error()),
                     }
                 }
             }
@@ -327,19 +340,22 @@ impl Connection {
                     self.state = ConnectionState::CloseSent;
                 } else {
                     self.dispatch_work(event_buffer)?;
+                    self.keepalive(event_buffer)?;
                     let frame = self.transport.read_frame()?;
                     self.dispatch_frame(frame, event_buffer)?;
                 }
             }
             ConnectionState::ClosePipe => {
                 let frame = self.transport.read_frame()?;
-                let (_, performative) = unwrap_frame(frame)?;
-                match performative {
-                    framing::Performative::Open(open) => {
-                        event_buffer.push(Event::RemoteOpen(open));
-                        self.state = ConnectionState::CloseSent;
+                let (_, body) = unwrap_frame(frame)?;
+                if let Some(body) = body {
+                    match body {
+                        framing::Performative::Open(open) => {
+                            event_buffer.push(Event::RemoteOpen(open));
+                            self.state = ConnectionState::CloseSent;
+                        }
+                        _ => return Err(AmqpError::framing_error()),
                     }
-                    _ => return Err(AmqpError::framing_error()),
                 }
             }
             ConnectionState::CloseRcvd => {
@@ -350,18 +366,27 @@ impl Connection {
             }
             ConnectionState::CloseSent => {
                 let frame = self.transport.read_frame()?;
-                let (_, performative) = unwrap_frame(frame)?;
-                match performative {
-                    framing::Performative::Close(close) => {
-                        event_buffer.push(Event::RemoteClose(close));
-                        self.state = ConnectionState::End;
+                let (_, body) = unwrap_frame(frame)?;
+
+                if let Some(body) = body {
+                    match body {
+                        framing::Performative::Close(close) => {
+                            event_buffer.push(Event::RemoteClose(close));
+                            self.state = ConnectionState::End;
+                        }
+                        _ => return Err(AmqpError::framing_error()),
                     }
-                    _ => return Err(AmqpError::framing_error()),
                 }
             }
             ConnectionState::End => {}
         }
         Ok(())
+    }
+
+    fn update_connection_info(self: &mut Self, open: &framing::Open) {
+        self.remote_container_id = open.container_id.clone();
+        self.remote_idle_timeout = Duration::from_millis(open.idle_timeout as u64);
+        self.remote_channel_max = open.channel_max;
     }
 
     // Dispatch to work performed by sub-endpoints
@@ -386,11 +411,33 @@ impl Connection {
                 _ => return Err(AmqpError::not_implemented()),
             }
         }
+        Ok(())
+    }
 
-        /*
-        let now = SystemTime::now();
-        if self.last_keepalive < self.idle_timeout
-        */
+    fn keepalive(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
+        // Sent out keepalives...
+        let now = Instant::now();
+        if self.remote_idle_timeout.as_millis() > 0 {
+            if now - self.transport.last_sent() >= self.remote_idle_timeout {
+                let frame = framing::Frame::AMQP {
+                    channel: 0,
+                    body: None,
+                };
+                self.transport.write_frame(&frame)?;
+                self.transport.flush()?;
+            }
+        }
+
+        if self.idle_timeout.as_millis() > 0 {
+            // Ensure our peer honors our keepalive
+            if now - self.transport.last_received() > self.idle_timeout * 2 {
+                self.close_condition = Some(ErrorCondition {
+                    condition: error::condition::RESOURCE_LIMIT_EXCEEDED.to_string(),
+                    description: "local-idle-timeout expired".to_string(),
+                });
+                self.local_close(event_buffer)?;
+            }
+        }
         Ok(())
     }
 
@@ -400,13 +447,18 @@ impl Connection {
         frame: framing::Frame,
         event_buffer: &mut EventBuffer,
     ) -> Result<()> {
-        let (channel_id, performative) = unwrap_frame(frame)?;
+        let (channel_id, body) = unwrap_frame(frame)?;
 
-        let mut consumed = self.process_frame(channel_id, &performative, event_buffer)?;
+        if body.is_none() {
+            return Ok(());
+        }
+
+        let body = body.unwrap();
+        let mut consumed = self.process_frame(channel_id, &body, event_buffer)?;
         let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
         if let Some(local_channel) = local_channel_opt {
             let session = self.sessions.get_mut(&local_channel).unwrap();
-            consumed |= session.process_frame(performative, event_buffer)?;
+            consumed |= session.process_frame(body, event_buffer)?;
         }
         if !consumed {
             Err(AmqpError::framing_error())
@@ -419,10 +471,10 @@ impl Connection {
     fn process_frame(
         self: &mut Self,
         channel_id: ChannelId,
-        performative: &framing::Performative,
+        body: &framing::Performative,
         event_buffer: &mut EventBuffer,
     ) -> Result<bool> {
-        Ok(match performative {
+        Ok(match body {
             // TODO: Handle sessions, links etc...
             framing::Performative::Begin(begin) => {
                 let session = self.session_internal(Some(channel_id));
@@ -450,7 +502,10 @@ impl Connection {
         let frame = framing::Frame::AMQP {
             channel: 0,
             body: Some(framing::Performative::Open(framing::Open {
+                container_id: self.container_id.clone(),
                 hostname: self.hostname.clone(),
+                channel_max: self.channel_max,
+                idle_timeout: self.idle_timeout.as_millis() as u32,
                 ..Default::default()
             })),
         };

@@ -6,6 +6,7 @@
 use std::io::Read;
 use std::io::Write;
 use std::net::TcpStream;
+use std::time::Instant;
 use std::vec::Vec;
 
 use crate::error::*;
@@ -52,6 +53,8 @@ pub struct Transport {
     incoming: ReadBuffer,
     outgoing: Vec<u8>,
     max_frame_size: usize,
+    last_sent: Instant,
+    last_received: Instant,
 }
 
 impl Transport {
@@ -62,6 +65,8 @@ impl Transport {
             incoming: ReadBuffer::new(max_frame_size),
             outgoing: Vec::with_capacity(max_frame_size),
             max_frame_size: max_frame_size,
+            last_sent: Instant::now(),
+            last_received: Instant::now(),
         })
     }
 
@@ -84,14 +89,15 @@ impl Transport {
             if buf.len() >= 8 {
                 let header = decode_header(&mut buf)?;
                 let frame_size = header.size as usize;
-                println!(
+                /*println!(
                     "Found enough bytes for header {:?}. Buffer is {} bytes!",
                     header,
                     buf.len()
-                );
+                );*/
                 if buf.len() >= frame_size - 8 {
                     let frame = decode_frame(header, &mut buf)?;
                     self.incoming.consume(frame_size)?;
+                    self.last_received = Instant::now();
                     return Ok(frame);
                 }
             }
@@ -99,7 +105,9 @@ impl Transport {
     }
 
     pub fn write_frame(self: &mut Self, frame: &Frame) -> Result<usize> {
-        encode_frame(frame, &mut self.outgoing)
+        let sz = encode_frame(frame, &mut self.outgoing)?;
+        self.last_sent = Instant::now();
+        Ok(sz)
     }
 
     pub fn write(self: &mut Self, data: &[u8]) -> Result<usize> {
@@ -112,6 +120,14 @@ impl Transport {
         self.stream.write_all(self.outgoing.as_mut())?;
         self.outgoing.clear();
         Ok(len)
+    }
+
+    pub fn last_received(self: &Self) -> Instant {
+        self.last_received
+    }
+
+    pub fn last_sent(self: &Self) -> Instant {
+        self.last_sent
     }
 }
 

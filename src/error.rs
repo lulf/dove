@@ -27,6 +27,7 @@ pub mod condition {
     pub const NOT_FOUND: &'static str = "amqp:not-found";
     pub const DECODE_ERROR: &'static str = "amqp:decode-error";
     pub const NOT_IMPLEMENTED: &'static str = "amqp:not-implemented";
+    pub const RESOURCE_LIMIT_EXCEEDED: &'static str = "amqp:resource-limit-exceeded";
 
     pub mod connection {
         pub const CONNECTION_FORCED: &'static str = "amqp:connection:forced";

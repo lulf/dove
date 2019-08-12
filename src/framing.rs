@@ -38,7 +38,7 @@ impl Default for Open {
             hostname: String::new(),
             max_frame_size: 4294967295,
             channel_max: 65535,
-            idle_timeout: 3000,
+            idle_timeout: 0,
             outgoing_locales: Vec::new(),
             incoming_locales: Vec::new(),
             offered_capabilities: Vec::new(),
