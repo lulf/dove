@@ -9,6 +9,7 @@ use std::time;
 
 extern crate knall;
 
+use knall::core::*;
 use knall::error::*;
 use knall::*;
 
