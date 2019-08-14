@@ -17,6 +17,31 @@ use uuid::Uuid;
 use crate::error::*;
 use crate::types::*;
 
+#[derive(Debug)]
+pub struct FrameHeader {
+    pub size: u32,
+    doff: u8,
+    frame_type: u8,
+    ext: u16,
+}
+
+#[derive(Debug)]
+pub enum Frame {
+    AMQP {
+        channel: u16,
+        body: Option<Performative>,
+    },
+    SASL,
+}
+
+#[derive(Debug)]
+pub enum Performative {
+    Open(Open),
+    Close(Close),
+    Begin(Begin),
+    End(End),
+}
+
 #[derive(Debug, Clone)]
 pub struct Open {
     pub container_id: String,
@@ -31,12 +56,39 @@ pub struct Open {
     pub properties: Option<BTreeMap<String, Value>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct Begin {
+    pub remote_channel: Option<u16>,
+    pub next_outgoing_id: u32,
+    pub incoming_window: u32,
+    pub outgoing_window: u32,
+    pub handle_max: Option<u32>,
+    pub offered_capabilities: Option<Vec<String>>,
+    pub desired_capabilities: Option<Vec<String>>,
+    pub properties: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct End {
+    pub error: Option<ErrorCondition>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Close {
+    pub error: Option<ErrorCondition>,
+}
+
+const DESC_OPEN: Value = Value::Ulong(0x10);
+const DESC_BEGIN: Value = Value::Ulong(0x11);
+const DESC_END: Value = Value::Ulong(0x17);
+const DESC_CLOSE: Value = Value::Ulong(0x18);
+
 impl Open {
     pub fn new(container_id: &str) -> Open {
         Open {
             container_id: container_id.to_string(),
             hostname: None,
-            max_frame_size: None, //4294967295,
+            max_frame_size: None,
             channel_max: None,
             idle_timeout: None,
             outgoing_locales: None,
@@ -48,15 +100,17 @@ impl Open {
     }
 }
 
-trait OptionValue<T> {
-    fn to_value<F: Fn(&T) -> Value>(&self, f: F) -> Value;
-}
-
-impl<T> OptionValue<T> for Option<T> {
-    fn to_value<F: Fn(&T) -> Value>(&self, f: F) -> Value {
-        match self {
-            Some(ref val) => f(val),
-            None => Value::Null,
+impl Begin {
+    pub fn new(next_outgoing_id: u32, incoming_window: u32, outgoing_window: u32) -> Begin {
+        Begin {
+            remote_channel: None,
+            next_outgoing_id: next_outgoing_id,
+            incoming_window: incoming_window,
+            outgoing_window: outgoing_window,
+            handle_max: None,
+            offered_capabilities: None,
+            desired_capabilities: None,
+            properties: None,
         }
     }
 }
@@ -103,10 +157,7 @@ impl ToValue for Open {
                 ))
             }),
         ];
-        Value::Described(
-            Box::new(Value::Ulong(PerformativeCode::Open as u64)),
-            Box::new(Value::List(args)),
-        )
+        Value::Described(Box::new(DESC_OPEN), Box::new(Value::List(args)))
     }
 }
 
@@ -141,10 +192,7 @@ impl ToValue for Begin {
                 ))
             }),
         ];
-        Value::Described(
-            Box::new(Value::Ulong(PerformativeCode::Begin as u64)),
-            Box::new(Value::List(args)),
-        )
+        Value::Described(Box::new(DESC_BEGIN), Box::new(Value::List(args)))
     }
 }
 
@@ -159,10 +207,7 @@ impl ToValue for End {
                 ])),
             )
         });
-        Value::Described(
-            Box::new(Value::Ulong(PerformativeCode::Close as u64)),
-            Box::new(Value::List(vec![val])),
-        )
+        Value::Described(Box::new(DESC_CLOSE), Box::new(Value::List(vec![val])))
     }
 }
 
@@ -177,74 +222,8 @@ impl ToValue for Close {
                 ])),
             )
         });
-        Value::Described(
-            Box::new(Value::Ulong(PerformativeCode::Close as u64)),
-            Box::new(Value::List(vec![val])),
-        )
+        Value::Described(Box::new(DESC_CLOSE), Box::new(Value::List(vec![val])))
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct Close {
-    pub error: Option<ErrorCondition>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Begin {
-    pub remote_channel: Option<u16>,
-    pub next_outgoing_id: u32,
-    pub incoming_window: u32,
-    pub outgoing_window: u32,
-    pub handle_max: Option<u32>,
-    pub offered_capabilities: Option<Vec<String>>,
-    pub desired_capabilities: Option<Vec<String>>,
-    pub properties: Option<BTreeMap<String, Value>>,
-}
-
-impl Begin {
-    fn new(next_outgoing_id: u32, incoming_window: u32, outgoing_window: u32) -> Begin {
-        Begin {
-            remote_channel: None,
-            next_outgoing_id: next_outgoing_id,
-            incoming_window: incoming_window,
-            outgoing_window: outgoing_window,
-            handle_max: None,
-            offered_capabilities: None,
-            desired_capabilities: None,
-            properties: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct End {
-    pub error: Option<ErrorCondition>,
-}
-
-#[derive(Debug)]
-pub enum Performative {
-    Open(Open),
-    Close(Close),
-    Begin(Begin),
-    End(End),
-}
-
-#[repr(u64)]
-#[derive(Clone, PartialEq, Debug, PartialOrd)]
-pub enum PerformativeCode {
-    Open = 0x10,
-    Begin = 0x11,
-    End = 0x17,
-    Close = 0x18,
-}
-
-#[derive(Debug)]
-pub enum Frame {
-    AMQP {
-        channel: u16,
-        body: Option<Performative>,
-    },
-    SASL,
 }
 
 pub fn encode_frame(frame: &Frame, writer: &mut Write) -> Result<usize> {
@@ -288,14 +267,6 @@ pub fn encode_frame(frame: &Frame, writer: &mut Write) -> Result<usize> {
     }
 }
 
-#[derive(Debug)]
-pub struct FrameHeader {
-    pub size: u32,
-    doff: u8,
-    frame_type: u8,
-    ext: u16,
-}
-
 pub fn decode_header(reader: &mut Read) -> Result<FrameHeader> {
     Ok(FrameHeader {
         size: reader.read_u32::<NetworkEndian>()?,
@@ -323,7 +294,7 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
             }
             if let Value::Described(descriptor, value) = decode_value(stream)? {
                 Some(match *descriptor {
-                    Value::Ulong(0x10) => {
+                    DESC_OPEN => {
                         if let Value::List(args) = *value {
                             let mut it = args.iter();
 

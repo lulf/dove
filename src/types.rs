@@ -17,6 +17,19 @@ pub trait ToValue {
     fn to_value(&self) -> Value;
 }
 
+pub trait OptionValue<T> {
+    fn to_value<F: Fn(&T) -> Value>(&self, f: F) -> Value;
+}
+
+impl<T> OptionValue<T> for Option<T> {
+    fn to_value<F: Fn(&T) -> Value>(&self, f: F) -> Value {
+        match self {
+            Some(ref val) => f(val),
+            None => Value::Null,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq)]
 pub enum Value {
     Described(Box<Value>, Box<Value>),
