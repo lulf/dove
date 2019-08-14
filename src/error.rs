@@ -45,6 +45,10 @@ impl AmqpError {
         AmqpError::amqp_error(condition::NOT_IMPLEMENTED, None)
     }
 
+    pub fn decode_error(description: Option<&str>) -> AmqpError {
+        AmqpError::amqp_error(condition::DECODE_ERROR, description)
+    }
+
     pub fn amqp_error(condition: &'static str, description: Option<&str>) -> AmqpError {
         AmqpError::Amqp(ErrorCondition {
             condition: condition.to_string(),

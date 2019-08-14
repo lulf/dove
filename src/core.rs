@@ -492,15 +492,14 @@ impl Connection {
     }
 
     fn local_open(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
+        let mut args = Open::new(self.container_id.as_str());
+        args.hostname = self.hostname.clone();
+        args.channel_max = self.channel_max;
+        args.idle_timeout = self.idle_timeout.as_millis() as u32;
+
         let frame = Frame::AMQP {
             channel: 0,
-            body: Some(Performative::Open(Open {
-                container_id: self.container_id.clone(),
-                hostname: self.hostname.clone(),
-                channel_max: self.channel_max,
-                idle_timeout: self.idle_timeout.as_millis() as u32,
-                ..Default::default()
-            })),
+            body: Some(Performative::Open(args)),
         };
 
         self.transport.write_frame(&frame)?;
