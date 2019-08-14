@@ -47,6 +47,12 @@ fn client() {
                         }
                         Event::RemoteBegin(_, _) => {
                             println!("Remote begin");
+                            /*
+                            conn.close(Some(ErrorCondition {
+                                condition: condition::RESOURCE_LIMIT_EXCEEDED.to_string(),
+                                description: "Buhuu".to_string(),
+                            }))
+                            */
                         }
                         Event::RemoteClose(_) => {
                             println!("Received close from peer, closing connection!");
