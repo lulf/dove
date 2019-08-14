@@ -578,10 +578,10 @@ impl Session {
                 next_outgoing_id: 0,
                 incoming_window: 10,
                 outgoing_window: 10,
-                handle_max: std::u32::MAX,
-                offered_capabilities: Vec::new(),
-                desired_capabilities: Vec::new(),
-                properties: BTreeMap::new(),
+                handle_max: None,
+                offered_capabilities: None,
+                desired_capabilities: None,
+                properties: None,
             })),
         };
 

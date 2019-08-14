@@ -120,24 +120,26 @@ impl ToValue for Begin {
             Value::Uint(self.next_outgoing_id),
             Value::Uint(self.incoming_window),
             Value::Uint(self.outgoing_window),
-            Value::Uint(self.handle_max),
-            Value::Array(
-                self.offered_capabilities
-                    .iter()
-                    .map(|c| Value::Symbol(c.clone().into_bytes()))
-                    .collect(),
-            ),
-            Value::Array(
-                self.desired_capabilities
-                    .iter()
-                    .map(|c| Value::Symbol(c.clone().into_bytes()))
-                    .collect(),
-            ),
-            Value::Map(BTreeMap::from_iter(
-                self.properties
-                    .iter()
-                    .map(|(k, v)| (Value::String(k.clone()), v.clone())),
-            )),
+            self.handle_max.to_value(|v| Value::Uint(*v)),
+            self.offered_capabilities.to_value(|v| {
+                Value::Array(
+                    v.iter()
+                        .map(|c| Value::Symbol(c.clone().into_bytes()))
+                        .collect(),
+                )
+            }),
+            self.desired_capabilities.to_value(|v| {
+                Value::Array(
+                    v.iter()
+                        .map(|c| Value::Symbol(c.clone().into_bytes()))
+                        .collect(),
+                )
+            }),
+            self.properties.to_value(|v| {
+                Value::Map(BTreeMap::from_iter(
+                    v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
+                ))
+            }),
         ];
         Value::Described(
             Box::new(Value::Ulong(PerformativeCode::Begin as u64)),
@@ -148,42 +150,36 @@ impl ToValue for Begin {
 
 impl ToValue for End {
     fn to_value(&self) -> Value {
-        let args = if self.error.is_none() {
-            vec![Value::Null]
-        } else {
-            let e = self.error.as_ref().unwrap();
-            vec![
-                Value::Ulong(0x1D),
-                Value::List(vec![
+        let val = self.error.to_value(|e| {
+            Value::Described(
+                Box::new(Value::Ulong(0x1D)),
+                Box::new(Value::List(vec![
                     Value::Symbol(e.condition.clone().into_bytes()),
                     Value::String(e.description.clone()),
-                ]),
-            ]
-        };
+                ])),
+            )
+        });
         Value::Described(
-            Box::new(Value::Ulong(PerformativeCode::End as u64)),
-            Box::new(Value::List(args)),
+            Box::new(Value::Ulong(PerformativeCode::Close as u64)),
+            Box::new(Value::List(vec![val])),
         )
     }
 }
 
 impl ToValue for Close {
     fn to_value(&self) -> Value {
-        let args = if self.error.is_none() {
-            vec![Value::Null]
-        } else {
-            let e = self.error.as_ref().unwrap();
-            vec![
-                Value::Ulong(0x1D),
-                Value::List(vec![
+        let val = self.error.to_value(|e| {
+            Value::Described(
+                Box::new(Value::Ulong(0x1D)),
+                Box::new(Value::List(vec![
                     Value::Symbol(e.condition.clone().into_bytes()),
                     Value::String(e.description.clone()),
-                ]),
-            ]
-        };
+                ])),
+            )
+        });
         Value::Described(
             Box::new(Value::Ulong(PerformativeCode::Close as u64)),
-            Box::new(Value::List(args)),
+            Box::new(Value::List(vec![val])),
         )
     }
 }
@@ -199,10 +195,25 @@ pub struct Begin {
     pub next_outgoing_id: u32,
     pub incoming_window: u32,
     pub outgoing_window: u32,
-    pub handle_max: u32,
-    pub offered_capabilities: Vec<String>,
-    pub desired_capabilities: Vec<String>,
-    pub properties: BTreeMap<String, Value>,
+    pub handle_max: Option<u32>,
+    pub offered_capabilities: Option<Vec<String>>,
+    pub desired_capabilities: Option<Vec<String>>,
+    pub properties: Option<BTreeMap<String, Value>>,
+}
+
+impl Begin {
+    fn new(next_outgoing_id: u32, incoming_window: u32, outgoing_window: u32) -> Begin {
+        Begin {
+            remote_channel: None,
+            next_outgoing_id: next_outgoing_id,
+            incoming_window: incoming_window,
+            outgoing_window: outgoing_window,
+            handle_max: None,
+            offered_capabilities: None,
+            desired_capabilities: None,
+            properties: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -422,66 +433,67 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
                     }
                     Value::Ulong(0x11) => {
                         if let Value::List(args) = *value {
-                            let mut begin = Begin {
-                                remote_channel: None,
-                                next_outgoing_id: 0,
-                                incoming_window: 0,
-                                outgoing_window: 0,
-                                handle_max: std::u32::MAX,
-                                offered_capabilities: Vec::new(),
-                                desired_capabilities: Vec::new(),
-                                properties: BTreeMap::new(),
-                            };
+                            let mut begin = Begin::new(0, 0, 0);
                             let mut it = args.iter();
                             if let Some(remote_channel) = it.next() {
                                 begin.remote_channel = remote_channel.try_to_u16();
                             }
 
-                            if let Some(next_outgoing_id) = it.next() {
-                                begin.next_outgoing_id = next_outgoing_id.to_u32();
-                            }
+                            begin.next_outgoing_id = it.next().and_then(|c| c.try_to_u32()).ok_or(
+                                AmqpError::decode_error(Some(
+                                    "Unable to decode mandatory field 'next-outgoing-id'",
+                                )),
+                            )?;
 
-                            if let Some(incoming_window) = it.next() {
-                                begin.incoming_window = incoming_window.to_u32();
-                            }
+                            begin.incoming_window = it.next().and_then(|c| c.try_to_u32()).ok_or(
+                                AmqpError::decode_error(Some(
+                                    "Unable to decode mandatory field 'incoming-window'",
+                                )),
+                            )?;
 
-                            if let Some(outgoing_window) = it.next() {
-                                begin.outgoing_window = outgoing_window.to_u32();
-                            }
+                            begin.outgoing_window = it.next().and_then(|c| c.try_to_u32()).ok_or(
+                                AmqpError::decode_error(Some(
+                                    "Unable to decode mandatory field 'outgoing-window'",
+                                )),
+                            )?;
 
                             if let Some(handle_max) = it.next() {
-                                begin.handle_max = handle_max.to_u32();
+                                begin.handle_max = handle_max.try_to_u32();
                             }
 
                             if let Some(offered_capabilities) = it.next() {
                                 if let Value::Array(vec) = offered_capabilities {
+                                    let mut cap = Vec::new();
                                     for val in vec.iter() {
-                                        begin.offered_capabilities.push(val.to_string())
+                                        cap.push(val.to_string())
                                     }
-                                } else {
-                                    offered_capabilities
-                                        .try_to_string()
-                                        .map(|s| begin.offered_capabilities.push(s));
+                                    begin.offered_capabilities = Some(cap);
+                                } else if let Value::Symbol(s) = offered_capabilities {
+                                    begin.offered_capabilities =
+                                        Some(vec![String::from_utf8(s.to_vec()).unwrap()]);
                                 }
                             }
 
                             if let Some(desired_capabilities) = it.next() {
                                 if let Value::Array(vec) = desired_capabilities {
+                                    let mut cap = Vec::new();
                                     for val in vec.iter() {
-                                        begin.desired_capabilities.push(val.to_string())
+                                        cap.push(val.to_string())
                                     }
-                                } else {
-                                    desired_capabilities
-                                        .try_to_string()
-                                        .map(|s| begin.desired_capabilities.push(s));
+                                    begin.desired_capabilities = Some(cap);
+                                } else if let Value::Symbol(s) = desired_capabilities {
+                                    begin.desired_capabilities =
+                                        Some(vec![String::from_utf8(s.to_vec()).unwrap()]);
                                 }
                             }
 
                             if let Some(properties) = it.next() {
                                 if let Value::Map(m) = properties {
+                                    let mut map = BTreeMap::new();
                                     for (key, value) in m.iter() {
-                                        begin.properties.insert(key.to_string(), value.clone());
+                                        map.insert(key.to_string(), value.clone());
                                     }
+                                    begin.properties = Some(map);
                                 }
                             }
 
