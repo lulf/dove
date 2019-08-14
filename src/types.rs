@@ -48,6 +48,14 @@ impl Value {
         self.try_to_string().expect("Unexpected type!")
     }
 
+    pub fn try_to_u32(self: &Self) -> Option<u32> {
+        match self {
+            Value::Ushort(v) => Some(*v as u32),
+            Value::Uint(v) => Some(*v as u32),
+            _ => None,
+        }
+    }
+
     pub fn to_u32(self: &Self) -> u32 {
         match self {
             Value::Ushort(v) => (*v as u32),

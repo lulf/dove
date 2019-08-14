@@ -20,30 +20,43 @@ use crate::types::*;
 #[derive(Debug, Clone)]
 pub struct Open {
     pub container_id: String,
-    pub hostname: String,
-    pub max_frame_size: u32,
-    pub channel_max: u16,
-    pub idle_timeout: u32,
-    pub outgoing_locales: Vec<String>,
-    pub incoming_locales: Vec<String>,
-    pub offered_capabilities: Vec<String>,
-    pub desired_capabilities: Vec<String>,
-    pub properties: BTreeMap<String, Value>,
+    pub hostname: Option<String>,
+    pub max_frame_size: Option<u32>,
+    pub channel_max: Option<u16>,
+    pub idle_timeout: Option<u32>,
+    pub outgoing_locales: Option<Vec<String>>,
+    pub incoming_locales: Option<Vec<String>>,
+    pub offered_capabilities: Option<Vec<String>>,
+    pub desired_capabilities: Option<Vec<String>>,
+    pub properties: Option<BTreeMap<String, Value>>,
 }
 
 impl Open {
     pub fn new(container_id: &str) -> Open {
         Open {
             container_id: container_id.to_string(),
-            hostname: String::new(),
-            max_frame_size: 4294967295,
-            channel_max: 65535,
-            idle_timeout: 0,
-            outgoing_locales: Vec::new(),
-            incoming_locales: Vec::new(),
-            offered_capabilities: Vec::new(),
-            desired_capabilities: Vec::new(),
-            properties: BTreeMap::new(),
+            hostname: None,
+            max_frame_size: None, //4294967295,
+            channel_max: None,
+            idle_timeout: None,
+            outgoing_locales: None,
+            incoming_locales: None,
+            offered_capabilities: None,
+            desired_capabilities: None,
+            properties: None,
+        }
+    }
+}
+
+trait OptionValue<T> {
+    fn to_value<F: Fn(&T) -> Value>(&self, f: F) -> Value;
+}
+
+impl<T> OptionValue<T> for Option<T> {
+    fn to_value<F: Fn(&T) -> Value>(&self, f: F) -> Value {
+        match self {
+            Some(ref val) => f(val),
+            None => Value::Null,
         }
     }
 }
@@ -52,39 +65,43 @@ impl ToValue for Open {
     fn to_value(&self) -> Value {
         let args = vec![
             Value::String(self.container_id.clone()),
-            Value::String(self.hostname.clone()),
-            Value::Uint(self.max_frame_size),
-            Value::Ushort(self.channel_max),
-            Value::Uint(self.idle_timeout),
-            Value::Array(
-                self.outgoing_locales
-                    .iter()
-                    .map(|l| Value::Symbol(l.clone().into_bytes()))
-                    .collect(),
-            ),
-            Value::Array(
-                self.incoming_locales
-                    .iter()
-                    .map(|l| Value::Symbol(l.clone().into_bytes()))
-                    .collect(),
-            ),
-            Value::Array(
-                self.offered_capabilities
-                    .iter()
-                    .map(|c| Value::Symbol(c.clone().into_bytes()))
-                    .collect(),
-            ),
-            Value::Array(
-                self.desired_capabilities
-                    .iter()
-                    .map(|c| Value::Symbol(c.clone().into_bytes()))
-                    .collect(),
-            ),
-            Value::Map(BTreeMap::from_iter(
-                self.properties
-                    .iter()
-                    .map(|(k, v)| (Value::String(k.clone()), v.clone())),
-            )),
+            self.hostname.to_value(|v| Value::String(v.to_string())),
+            self.max_frame_size.to_value(|v| Value::Uint(*v)),
+            self.channel_max.to_value(|v| Value::Ushort(*v)),
+            self.idle_timeout.to_value(|v| Value::Uint(*v)),
+            self.outgoing_locales.to_value(|v| {
+                Value::Array(
+                    v.iter()
+                        .map(|l| Value::Symbol(l.clone().into_bytes()))
+                        .collect(),
+                )
+            }),
+            self.incoming_locales.to_value(|v| {
+                Value::Array(
+                    v.iter()
+                        .map(|l| Value::Symbol(l.clone().into_bytes()))
+                        .collect(),
+                )
+            }),
+            self.offered_capabilities.to_value(|v| {
+                Value::Array(
+                    v.iter()
+                        .map(|c| Value::Symbol(c.clone().into_bytes()))
+                        .collect(),
+                )
+            }),
+            self.desired_capabilities.to_value(|v| {
+                Value::Array(
+                    v.iter()
+                        .map(|c| Value::Symbol(c.clone().into_bytes()))
+                        .collect(),
+                )
+            }),
+            self.properties.to_value(|v| {
+                Value::Map(BTreeMap::from_iter(
+                    v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
+                ))
+            }),
         ];
         Value::Described(
             Box::new(Value::Ulong(PerformativeCode::Open as u64)),
@@ -307,20 +324,19 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
 
                             let mut open = Open::new(container_id.as_str());
                             if let Some(hostname) = it.next() {
-                                open.hostname =
-                                    hostname.try_to_string().unwrap_or_else(|| String::new());
+                                open.hostname = hostname.try_to_string();
                             }
 
                             if let Some(max_frame_size) = it.next() {
-                                open.max_frame_size = max_frame_size.to_u32();
+                                open.max_frame_size = max_frame_size.try_to_u32();
                             }
 
                             if let Some(channel_max) = it.next() {
-                                open.channel_max = channel_max.to_u16();
+                                open.channel_max = channel_max.try_to_u16();
                             }
 
                             if let Some(idle_timeout) = it.next() {
-                                open.idle_timeout = idle_timeout.to_u32();
+                                open.idle_timeout = idle_timeout.try_to_u32();
                             }
 
                             if let Some(outgoing_locales) = it.next() {
@@ -335,33 +351,37 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
 
                             if let Some(offered_capabilities) = it.next() {
                                 if let Value::Array(vec) = offered_capabilities {
+                                    let mut cap = Vec::new();
                                     for val in vec.iter() {
-                                        open.offered_capabilities.push(val.to_string())
+                                        cap.push(val.to_string())
                                     }
-                                } else {
-                                    offered_capabilities
-                                        .try_to_string()
-                                        .map(|s| open.offered_capabilities.push(s));
+                                    open.offered_capabilities = Some(cap);
+                                } else if let Value::Symbol(s) = offered_capabilities {
+                                    open.offered_capabilities =
+                                        Some(vec![String::from_utf8(s.to_vec()).unwrap()]);
                                 }
                             }
 
                             if let Some(desired_capabilities) = it.next() {
                                 if let Value::Array(vec) = desired_capabilities {
+                                    let mut cap = Vec::new();
                                     for val in vec.iter() {
-                                        open.desired_capabilities.push(val.to_string())
+                                        cap.push(val.to_string())
                                     }
-                                } else {
-                                    desired_capabilities
-                                        .try_to_string()
-                                        .map(|s| open.desired_capabilities.push(s));
+                                    open.desired_capabilities = Some(cap);
+                                } else if let Value::Symbol(s) = desired_capabilities {
+                                    open.desired_capabilities =
+                                        Some(vec![String::from_utf8(s.to_vec()).unwrap()]);
                                 }
                             }
 
                             if let Some(properties) = it.next() {
                                 if let Value::Map(m) = properties {
+                                    let mut map = BTreeMap::new();
                                     for (key, value) in m.iter() {
-                                        open.properties.insert(key.to_string(), value.clone());
+                                        map.insert(key.to_string(), value.clone());
                                     }
+                                    open.properties = Some(map);
                                 }
                             }
 
@@ -536,9 +556,9 @@ mod tests {
     fn check_performatives() {
         let frm = Open::new("1234");
 
-        assert_eq!(String::from(""), frm.hostname);
+        assert_eq!(None, frm.hostname);
         assert_eq!(4, frm.container_id.len());
-        assert_eq!(4294967295, frm.max_frame_size);
-        assert_eq!(65535, frm.channel_max);
+        assert_eq!(None, frm.max_frame_size);
+        assert_eq!(None, frm.channel_max);
     }
 }

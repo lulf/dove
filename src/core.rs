@@ -382,8 +382,8 @@ impl Connection {
 
     fn update_connection_info(self: &mut Self, open: &Open) {
         self.remote_container_id = open.container_id.clone();
-        self.remote_idle_timeout = Duration::from_millis(open.idle_timeout as u64);
-        self.remote_channel_max = open.channel_max;
+        self.remote_idle_timeout = Duration::from_millis(open.idle_timeout.unwrap_or(0) as u64);
+        self.remote_channel_max = open.channel_max.unwrap_or(65535);
     }
 
     // Dispatch to work performed by sub-endpoints
@@ -493,9 +493,9 @@ impl Connection {
 
     fn local_open(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
         let mut args = Open::new(self.container_id.as_str());
-        args.hostname = self.hostname.clone();
-        args.channel_max = self.channel_max;
-        args.idle_timeout = self.idle_timeout.as_millis() as u32;
+        args.hostname = Some(self.hostname.clone());
+        args.channel_max = Some(self.channel_max);
+        args.idle_timeout = Some(self.idle_timeout.as_millis() as u32);
 
         let frame = Frame::AMQP {
             channel: 0,
