@@ -15,14 +15,14 @@ use knall::*;
 
 #[test]
 fn client() {
-    let mut cont = Container::new("ce8c4a3e-96b3-11e9-9bfd-c85b7644b4a4");
-
-    let mut connection = cont
-        .connect(ConnectionOptions {
-            host: "localhost",
-            port: 5672,
-        })
-        .expect("Error opening connection");
+    let mut connection = connect(
+        "localhost",
+        5672,
+        ConnectionOptions {
+            container_id: "ce8c4a3e-96b3-11e9-9bfd-c85b7644b4a4",
+        },
+    )
+    .expect("Error opening connection");
 
     let mut driver = ConnectionDriver::new();
 

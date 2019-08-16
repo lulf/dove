@@ -17,9 +17,8 @@ use crate::transport::*;
 use crate::types::*;
 
 #[derive(Debug)]
-pub struct ConnectionOptions {
-    pub host: &'static str,
-    pub port: u16,
+pub struct ConnectionOptions<'a> {
+    pub container_id: &'a str,
 }
 
 #[derive(Debug)]
@@ -99,28 +98,20 @@ pub struct Session {
     ended: bool,
 }
 
-impl Container {
-    pub fn new(id: &'static str) -> Container {
-        Container {
-            id: String::from(id),
-        }
-    }
+pub fn connect(host: &str, port: u16, opts: ConnectionOptions) -> Result<Connection> {
+    let stream = TcpStream::connect(format!("{}:{}", host, port))?;
+    // TODO: SASL support
+    let transport: Transport = Transport::new(stream, 1024)?;
 
-    pub fn connect(&self, opts: ConnectionOptions) -> Result<Connection> {
-        let stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
-        // TODO: SASL support
-        let transport: Transport = Transport::new(stream, 1024)?;
-
-        Ok(Connection::new(self.id.as_str(), opts.host, transport))
-    }
-
-    /*
-    pub fn listen(&self, opts: ListenOptions) -> Result<Connection> {
-        let stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
-        return Ok(());
-    }
-    */
+    Ok(Connection::new(opts.container_id, host, transport))
 }
+
+/*
+pub fn listen(&self, opts: ListenOptions) -> Result<Connection> {
+    let stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
+    return Ok(());
+}
+*/
 
 pub type EventBuffer = Vec<Event>;
 
@@ -154,6 +145,12 @@ impl ConnectionDriver {
         (current + 1) % self.connections.len()
     }
 
+    /// Register a new connection to be managed by this driver.
+    /// # Examples
+    /// use XXX::core::ConnectionDriver
+    /// let connection = connect("localhost:5672")?;
+    /// let driver = ConnectionDriver::new();
+    /// let handle = driver.register(connection);
     pub fn register(self: &mut Self, connection: Connection) -> Handle {
         let handle = self.id_counter;
         self.connections.insert(handle, connection);
