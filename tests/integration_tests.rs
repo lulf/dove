@@ -42,7 +42,7 @@ fn client() {
                         }
                         Event::RemoteOpen(_) => {
                             println!("Remote opened!");
-                            let session = conn.session();
+                            let session = conn.create_session();
                             session.begin();
                         }
                         Event::RemoteBegin(_, _) => {
@@ -53,6 +53,65 @@ fn client() {
                                 description: "Buhuu".to_string(),
                             }))
                             */
+                        }
+                        Event::RemoteClose(_) => {
+                            println!("Received close from peer, closing connection!");
+                            conn.close(None);
+                        }
+                        e => {
+                            println!("Unhandled event: {:#?}", e);
+                        }
+                    }
+                }
+            }
+            Ok(None) => {
+                thread::sleep(time::Duration::from_millis(100));
+                continue;
+            }
+            Err(e) => {
+                println!("Got error: {:?}", e);
+                assert!(false);
+            }
+        }
+    }
+}
+
+#[test]
+fn server() {
+    let mut listener = listen(
+        "localhost",
+        5672,
+        ListenOptions {
+            container_id: "ce8c4a3e-96b3-11e9-9bfd-c85b7644b4a4",
+        },
+    )
+    .expect("Error creating listener");
+
+    let mut driver = ConnectionDriver::new();
+
+    let connection = listener.accept().unwrap();
+
+    let handle = driver.register(connection);
+
+    let mut event_buffer = EventBuffer::new();
+    loop {
+        match driver.poll(&mut event_buffer) {
+            Ok(Some(handle)) => {
+                let conn = driver.connection(&handle).unwrap();
+                for event in event_buffer.drain(..) {
+                    match event {
+                        Event::ConnectionInit => {
+                            println!("Opening connection!");
+                        }
+                        Event::RemoteOpen(_) => {
+                            println!("Remote opened!");
+                            conn.open();
+                        }
+                        Event::RemoteBegin(chan, _) => {
+                            println!("Remote begin");
+
+                            let session = conn.get_session(chan).unwrap();
+                            session.begin();
                         }
                         Event::RemoteClose(_) => {
                             println!("Received close from peer, closing connection!");

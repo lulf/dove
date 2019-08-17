@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::convert::From;
+use std::net::TcpListener;
 use std::net::TcpStream;
 use std::time::Duration;
 use std::time::Instant;
@@ -18,6 +19,11 @@ use crate::types::*;
 
 #[derive(Debug)]
 pub struct ConnectionOptions<'a> {
+    pub container_id: &'a str,
+}
+
+#[derive(Debug)]
+pub struct ListenOptions<'a> {
     pub container_id: &'a str,
 }
 
@@ -106,12 +112,30 @@ pub fn connect(host: &str, port: u16, opts: ConnectionOptions) -> Result<Connect
     Ok(Connection::new(opts.container_id, host, transport))
 }
 
-/*
-pub fn listen(&self, opts: ListenOptions) -> Result<Connection> {
-    let stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
-    return Ok(());
+pub struct Listener {
+    pub listener: TcpListener,
+    pub container_id: String,
 }
-*/
+
+pub fn listen(host: &str, port: u16, opts: ListenOptions) -> Result<Listener> {
+    let listener = TcpListener::bind(format!("{}:{}", host, port))?;
+    Ok(Listener {
+        listener: listener,
+        container_id: opts.container_id.to_string(),
+    })
+}
+
+impl Listener {
+    pub fn accept(&self) -> Result<Connection> {
+        let (stream, addr) = self.listener.accept()?;
+        let transport: Transport = Transport::new(stream, 1024)?;
+        Ok(Connection::new(
+            self.container_id.as_str(),
+            addr.ip().to_string().as_str(),
+            transport,
+        ))
+    }
+}
 
 pub type EventBuffer = Vec<Event>;
 
@@ -238,8 +262,12 @@ impl Connection {
         None
     }
 
-    pub fn session(self: &mut Self) -> &mut Session {
+    pub fn create_session(self: &mut Self) -> &mut Session {
         self.session_internal(None)
+    }
+
+    pub fn get_session(self: &mut Self, channel_id: ChannelId) -> Option<&mut Session> {
+        self.sessions.get_mut(&channel_id)
     }
 
     fn session_internal(self: &mut Self, channel_id: Option<ChannelId>) -> &mut Session {
