@@ -55,8 +55,11 @@ fn client() {
                             }))
                             */
                         }
-                        Event::RemoteClose(_) => {
-                            println!("Received close from peer, closing connection!");
+                        Event::RemoteClose(close) => {
+                            println!(
+                                "Received close from peer ({:?}), closing connection!",
+                                close
+                            );
                             conn.close(None);
                         }
                         e => {

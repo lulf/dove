@@ -131,6 +131,7 @@ const DESC_CLOSE: Value = Value::Ulong(0x18);
 const DESC_SASL_MECHANISMS: Value = Value::Ulong(0x40);
 const DESC_SASL_INIT: Value = Value::Ulong(0x41);
 const DESC_SASL_OUTCOME: Value = Value::Ulong(0x44);
+const DESC_ERROR: Value = Value::Ulong(0x1D);
 
 impl Open {
     pub fn new(container_id: &str) -> Open {
@@ -319,29 +320,49 @@ impl Begin {
     }
 }
 
+fn decode_condition(value: Value) -> Result<ErrorCondition> {
+    if let Value::Described(descriptor, list) = value {
+        match *descriptor {
+            DESC_ERROR => {
+                if let Value::List(args) = *list {
+                    let mut it = args.iter();
+                    let mut error_condition = ErrorCondition {
+                        condition: String::new(),
+                        description: String::new(),
+                    };
+
+                    if let Some(condition) = it.next() {
+                        error_condition.condition = condition.to_string();
+                    }
+
+                    if let Some(description) = it.next() {
+                        error_condition.description = description.to_string();
+                    }
+                    Ok(error_condition)
+                } else {
+                    Err(AmqpError::decode_error(Some(
+                        "Expected list with condition and description",
+                    )))
+                }
+            }
+            _ => Err(AmqpError::decode_error(Some(
+                format!("Expected error descriptor but found {:?}", *descriptor).as_str(),
+            ))),
+        }
+    } else {
+        Err(AmqpError::decode_error(Some(
+            "Missing expected error descriptor",
+        )))
+    }
+}
+
 impl End {
     pub fn from_value(value: Value) -> Result<End> {
         let mut end = End { error: None };
         if let Value::List(mut args) = value {
             if args.len() > 0 {
-                if let Value::Described(DESC_ERROR, list) = args.remove(0) {
-                    if let Value::List(args) = *list {
-                        let mut it = args.iter();
-                        let mut error_condition = ErrorCondition {
-                            condition: String::new(),
-                            description: String::new(),
-                        };
-
-                        if let Some(condition) = it.next() {
-                            error_condition.condition = condition.to_string();
-                        }
-
-                        if let Some(description) = it.next() {
-                            error_condition.description = description.to_string();
-                        }
-                        end.error = Some(error_condition);
-                    }
-                }
+                let condition = decode_condition(args.remove(0))?;
+                end.error = Some(condition)
             }
             Ok(end)
         } else {
@@ -357,24 +378,8 @@ impl Close {
         let mut close = Close { error: None };
         if let Value::List(mut args) = value {
             if args.len() > 0 {
-                if let Value::Described(DESC_ERROR, list) = args.remove(0) {
-                    if let Value::List(args) = *list {
-                        let mut it = args.iter();
-                        let mut error_condition = ErrorCondition {
-                            condition: String::new(),
-                            description: String::new(),
-                        };
-
-                        if let Some(condition) = it.next() {
-                            error_condition.condition = condition.to_string();
-                        }
-
-                        if let Some(description) = it.next() {
-                            error_condition.description = description.to_string();
-                        }
-                        close.error = Some(error_condition);
-                    }
-                }
+                let condition = decode_condition(args.remove(0))?;
+                close.error = Some(condition)
             }
             Ok(close)
         } else {
