@@ -166,7 +166,7 @@ impl Transport {
             let mut buf = self.incoming.peek();
             // println!("Filled {} bytes", buf.len());
             if buf.len() >= 8 {
-                let header = decode_header(&mut buf)?;
+                let header = FrameHeader::decode(&mut buf)?;
                 let frame_size = header.size as usize;
                 /*
                 println!(
@@ -176,7 +176,7 @@ impl Transport {
                 );
                 */
                 if buf.len() >= frame_size - 8 {
-                    let frame = decode_frame(header, &mut buf)?;
+                    let frame = Frame::decode(header, &mut buf)?;
                     self.incoming.consume(frame_size)?;
                     self.last_received = Instant::now();
                     return Ok(frame);
@@ -188,7 +188,7 @@ impl Transport {
     }
 
     pub fn write_frame(self: &mut Self, frame: &Frame) -> Result<usize> {
-        let sz = encode_frame(frame, &mut self.outgoing)?;
+        let sz = frame.encode(&mut self.outgoing)?;
         self.last_sent = Instant::now();
         self.flush()?;
         Ok(sz)
