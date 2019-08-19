@@ -4,7 +4,7 @@ Dove is an open source Rust implementation of the AMQP 1.0 OASIS standard (http:
 
 Dove aims to be an AMQP 1.0 implementation with the following properties:
 
-* Low footprint - minimize memory allocation, pay only for what you use
+* Low footprint - minimize memory usage, pay only for what you use
 * Portable - minimize the number of dependencies and use portable APIs
 
 ## Example
