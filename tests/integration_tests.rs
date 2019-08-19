@@ -11,6 +11,7 @@ extern crate knall;
 
 use knall::core::*;
 use knall::error::*;
+use knall::sasl::*;
 use knall::*;
 
 #[test]
@@ -18,6 +19,7 @@ fn client() {
     let mut opts = ConnectionOptions::new("ce8c4a3e-96b3-11e9-9bfd-c85b7644b4a4");
     opts.username = Some("test".to_string());
     opts.password = Some("test".to_string());
+    opts.sasl_mechanism = Some(SaslMechanism::Plain);
     let mut connection = connect("localhost", 5672, opts).expect("Error opening connection");
 
     let mut driver = ConnectionDriver::new();

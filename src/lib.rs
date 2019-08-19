@@ -6,5 +6,6 @@
 pub mod core;
 pub mod error;
 pub mod framing;
+pub mod sasl;
 pub mod transport;
 pub mod types;

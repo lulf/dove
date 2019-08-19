@@ -14,20 +14,16 @@ use std::vec::Vec;
 
 use crate::error::*;
 use crate::framing::*;
+use crate::sasl::*;
 use crate::transport::*;
 use crate::types::*;
-
-#[derive(Debug)]
-pub enum Sasl {
-    Server(Vec<SaslMechanism>),
-    Client(SaslMechanism),
-}
 
 #[derive(Debug)]
 pub struct ConnectionOptions<'a> {
     pub container_id: &'a str,
     pub username: Option<String>,
     pub password: Option<String>,
+    pub sasl_mechanism: Option<SaslMechanism>,
 }
 
 impl<'a> ConnectionOptions<'a> {
@@ -36,6 +32,7 @@ impl<'a> ConnectionOptions<'a> {
             container_id: container_id,
             username: None,
             password: None,
+            sasl_mechanism: None,
         }
     }
 }
@@ -95,9 +92,6 @@ pub struct Connection {
     pub remote_container_id: String,
     pub remote_channel_max: u16,
     sasl: Option<Sasl>,
-    sasl_done: bool,
-    sasl_username: Option<String>,
-    sasl_password: Option<String>,
     state: ConnectionState,
     transport: Transport,
     opened: bool,
@@ -135,10 +129,15 @@ pub fn connect(host: &str, port: u16, opts: ConnectionOptions) -> Result<Connect
     let transport: Transport = Transport::new(stream, 1024)?;
 
     let mut connection = Connection::new(opts.container_id, host, transport);
-    connection.sasl_username = opts.username;
-    connection.sasl_password = opts.password;
-    if connection.sasl_username.is_some() || connection.sasl_password.is_some() {
-        connection.sasl = Some(Sasl::Client(SaslMechanism::Plain));
+    if opts.username.is_some() || opts.password.is_some() || opts.sasl_mechanism.is_some() {
+        connection.sasl = Some(Sasl {
+            role: SaslRole::Client(SaslClient {
+                mechanism: opts.sasl_mechanism.unwrap_or(SaslMechanism::Plain),
+                username: opts.username,
+                password: opts.password,
+            }),
+            state: SaslState::InProgress,
+        });
     }
 
     Ok(connection)
@@ -281,10 +280,7 @@ impl Connection {
             remote_channel_map: HashMap::new(),
             close_condition: None,
             transport: transport,
-            sasl_username: None,
-            sasl_password: None,
             sasl: None,
-            sasl_done: false,
         }
     }
 
@@ -336,6 +332,10 @@ impl Connection {
         Ok(before != event_buffer.len())
     }
 
+    fn skip_sasl(self: &Self) -> bool {
+        self.sasl.is_none() || self.sasl.as_ref().unwrap().is_done()
+    }
+
     fn do_work(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
         match self.state {
             ConnectionState::StartWait => {
@@ -346,7 +346,7 @@ impl Connection {
                             self.transport.write_protocol_header(&SASL_10_HEADER)?;
                             self.state = ConnectionState::Sasl;
                         }
-                        AMQP_10_HEADER if self.sasl.is_none() || self.sasl_done => {
+                        AMQP_10_HEADER if self.skip_sasl() => {
                             self.transport.write_protocol_header(&AMQP_10_HEADER)?;
                             self.state = ConnectionState::HdrExch;
                             event_buffer.push(Event::ConnectionInit);
@@ -360,7 +360,7 @@ impl Connection {
                 }
             }
             ConnectionState::Start => {
-                if self.sasl.is_none() || self.sasl_done {
+                if self.skip_sasl() {
                     self.transport.write_protocol_header(&AMQP_10_HEADER)?;
                 } else {
                     self.transport.write_protocol_header(&SASL_10_HEADER)?;
@@ -374,7 +374,7 @@ impl Connection {
                         SASL_10_HEADER if self.sasl.is_some() => {
                             self.state = ConnectionState::Sasl;
                         }
-                        AMQP_10_HEADER if self.sasl.is_none() || self.sasl_done => {
+                        AMQP_10_HEADER if self.skip_sasl() => {
                             self.state = ConnectionState::HdrExch;
                             event_buffer.push(Event::ConnectionInit);
                         }
@@ -388,62 +388,16 @@ impl Connection {
             }
             ConnectionState::Sasl => {
                 println!("Let the SASL exchange begin!");
-                match &self.sasl {
-                    Some(Sasl::Client(mechanism)) => {
-                        let frame = self.transport.read_frame()?;
-                        match frame {
-                            Frame::SASL(SaslFrame::SaslMechanisms(mechs)) => {
-                                println!("Got mechs {:?}, we want: {:?}!", mechs, mechanism);
-                                let mut found = false;
-                                for supported_mech in mechs.iter() {
-                                    if mechanism == supported_mech {
-                                        println!("Found supported mechanism, proceed!");
-                                        found = true;
-                                    }
-                                }
-                                if !found {
-                                    println!("Unable to find supported mechanism");
-                                    self.transport.close()?;
-                                    self.state = ConnectionState::End;
-                                } else {
-                                    let mut initial_response = None;
-                                    if *mechanism == SaslMechanism::Plain {
-                                        let mut data = Vec::new();
-                                        data.extend_from_slice(
-                                            self.sasl_username.clone().unwrap().as_bytes(),
-                                        );
-                                        data.push(0);
-                                        data.extend_from_slice(
-                                            self.sasl_username.clone().unwrap().as_bytes(),
-                                        );
-                                        data.push(0);
-                                        data.extend_from_slice(
-                                            self.sasl_password.clone().unwrap().as_bytes(),
-                                        );
-                                        initial_response = Some(data);
-                                    }
-                                    let init = Frame::SASL(SaslFrame::SaslInit(SaslInit {
-                                        mechanism: mechanism.to_string(),
-                                        initial_response: initial_response,
-                                        hostname: None,
-                                    }));
-                                    self.transport.write_frame(&init)?;
-                                }
-                            }
-                            Frame::SASL(SaslFrame::SaslOutcome(outcome)) => {
-                                println!("Got outcome: {:?}", outcome);
-                                if outcome.code == 0 {
-                                    self.sasl_done = true;
-                                    self.state = ConnectionState::Start;
-                                } else {
-                                    self.transport.close()?;
-                                    self.state = ConnectionState::End;
-                                }
-                            }
-                            _ => println!("Got frame {:?}", frame),
-                        }
+                let sasl = self.sasl.as_mut().unwrap();
+                sasl.perform_handshake(&mut self.transport)?;
+                match sasl.state {
+                    SaslState::Success => {
+                        self.state = ConnectionState::Start;
                     }
-                    Some(Sasl::Server(allowed_mechs)) => {}
+                    SaslState::Failed => {
+                        self.transport.close()?;
+                        self.state = ConnectionState::End;
+                    }
                     _ => {}
                 }
             }
