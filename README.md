@@ -11,7 +11,8 @@ Dove aims to be an AMQP 1.0 implementation with the following properties:
 
 ## TODO
 
-* SASL support
+* Support link layer
+* Finish SASL support
 * TLS/SSL support
 * Some AMQP 1.0 types are not yet implemented
 * A higher level API for messaging clients to improve ease of use
@@ -22,6 +23,7 @@ Dove aims to be an AMQP 1.0 implementation with the following properties:
 * error - AMQP error types and error handling data types
 * framing - API for frame types and encoding/decoding of frames
 * transport - API for the underlying transport/network
+* sasl - SASL handling
 * core - Low level API for writing AMQP clients
 
 At present, the only a low level API for sending and receiving messages is provided. This API allows you to create AMQP connections, and a driver for polling events in a non-blocking fashion. Higher level APIs (reactive, threaded etc.) can be built on top of this module.
