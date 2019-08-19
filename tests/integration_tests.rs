@@ -7,12 +7,12 @@ use std::io;
 use std::thread;
 use std::time;
 
-extern crate knall;
+extern crate dove;
 
-use knall::core::*;
-use knall::error::*;
-use knall::sasl::*;
-use knall::*;
+use dove::core::*;
+use dove::error::*;
+use dove::sasl::*;
+use dove::*;
 
 #[test]
 fn client() {
