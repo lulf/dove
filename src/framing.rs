@@ -178,12 +178,12 @@ impl Open {
 
             if let Some(outgoing_locales) = it.next() {
                 // TODO:
-                println!("OLOC {:?}", outgoing_locales);
+                // println!("OLOC {:?}", outgoing_locales);
             }
 
             if let Some(incoming_locales) = it.next() {
                 // TODO:
-                println!("ILOC {:?}", incoming_locales);
+                // println!("ILOC {:?}", incoming_locales);
             }
 
             if let Some(offered_capabilities) = it.next() {
