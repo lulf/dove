@@ -15,14 +15,10 @@ use knall::*;
 
 #[test]
 fn client() {
-    let mut connection = connect(
-        "localhost",
-        5672,
-        ConnectionOptions {
-            container_id: "ce8c4a3e-96b3-11e9-9bfd-c85b7644b4a4",
-        },
-    )
-    .expect("Error opening connection");
+    let mut opts = ConnectionOptions::new("ce8c4a3e-96b3-11e9-9bfd-c85b7644b4a4");
+    opts.username = Some("test".to_string());
+    opts.password = Some("test".to_string());
+    let mut connection = connect("localhost", 5672, opts).expect("Error opening connection");
 
     let mut driver = ConnectionDriver::new();
 
@@ -76,7 +72,7 @@ fn client() {
     }
 }
 
-#[test]
+//#[test]
 fn server() {
     let mut listener = listen(
         "localhost",
@@ -100,9 +96,7 @@ fn server() {
                 let conn = driver.connection(&handle).unwrap();
                 for event in event_buffer.drain(..) {
                     match event {
-                        Event::ConnectionInit => {
-                            println!("Opening connection!");
-                        }
+                        Event::ConnectionInit => {}
                         Event::RemoteOpen(_) => {
                             println!("Remote opened!");
                             conn.open();

@@ -5,6 +5,7 @@
 
 use std::io::Read;
 use std::io::Write;
+use std::net::Shutdown;
 use std::net::TcpStream;
 use std::time::Instant;
 use std::vec::Vec;
@@ -12,15 +13,78 @@ use std::vec::Vec;
 use crate::error::*;
 use crate::framing::*;
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct Version(pub u8, pub u8, pub u8);
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ProtocolHeader {
+    AMQP(Version),
+    SASL(Version),
+}
+
+const PROTOCOL_AMQP: [u8; 5] = [65, 77, 81, 80, 0];
+const PROTOCOL_SASL: [u8; 5] = [65, 77, 81, 80, 3];
+
+impl ProtocolHeader {
+    pub fn decode(reader: &mut Read) -> Result<ProtocolHeader> {
+        let mut protocol_type: [u8; 5] = [0; 5];
+        reader.read(&mut protocol_type)?;
+
+        let mut protocol_version: [u8; 3] = [0; 3];
+        reader.read(&mut protocol_version)?;
+
+        match protocol_type {
+            PROTOCOL_AMQP => Ok(ProtocolHeader::AMQP(Version(
+                protocol_version[0],
+                protocol_version[1],
+                protocol_version[2],
+            ))),
+            PROTOCOL_SASL => Ok(ProtocolHeader::SASL(Version(
+                protocol_version[0],
+                protocol_version[1],
+                protocol_version[2],
+            ))),
+            _ => Err(AmqpError::Generic(format!(
+                "Unknown protocol type {:?}",
+                protocol_type
+            ))),
+        }
+    }
+
+    pub fn encode(&self, writer: &mut Write) -> Result<()> {
+        let mut header: [u8; 8] = [0; 8];
+        match self {
+            ProtocolHeader::AMQP(Version(major, minor, micro)) => {
+                for i in 0..5 {
+                    header[i] = PROTOCOL_AMQP[i];
+                }
+                header[5] = *major;
+                header[6] = *minor;
+                header[7] = *micro;
+            }
+            ProtocolHeader::SASL(Version(major, minor, micro)) => {
+                for i in 0..5 {
+                    header[i] = PROTOCOL_SASL[i];
+                }
+                header[5] = *major;
+                header[6] = *minor;
+                header[7] = *micro;
+            }
+        }
+        writer.write_all(&header[..])?;
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
-pub struct ReadBuffer {
+struct ReadBuffer {
     buffer: Vec<u8>,
     capacity: usize,
     position: usize,
 }
 
 impl ReadBuffer {
-    pub fn new(capacity: usize) -> ReadBuffer {
+    fn new(capacity: usize) -> ReadBuffer {
         ReadBuffer {
             buffer: vec![0; capacity],
             capacity: capacity,
@@ -28,7 +92,11 @@ impl ReadBuffer {
         }
     }
 
-    pub fn fill(self: &mut Self, reader: &mut Read) -> Result<&[u8]> {
+    fn peek(self: &mut Self) -> &[u8] {
+        &self.buffer[0..self.position]
+    }
+
+    fn fill(self: &mut Self, reader: &mut Read) -> Result<&[u8]> {
         if self.position < self.capacity {
             let len = reader.read(&mut self.buffer[self.position..self.capacity])?;
             self.position += len;
@@ -38,7 +106,7 @@ impl ReadBuffer {
         Ok(&self.buffer[0..self.position])
     }
 
-    pub fn consume(self: &mut Self, nbytes: usize) -> Result<()> {
+    fn consume(self: &mut Self, nbytes: usize) -> Result<()> {
         self.buffer.drain(0..nbytes);
         self.buffer.resize(self.capacity, 0);
         self.position -= nbytes;
@@ -70,36 +138,49 @@ impl Transport {
         })
     }
 
-    pub fn read_protocol_version(self: &mut Self) -> Result<Option<[u8; 8]>> {
-        let mut buf = self.incoming.fill(&mut self.stream)?;
+    pub fn close(self: &mut Self) -> Result<()> {
+        self.stream.shutdown(Shutdown::Both)?;
+        Ok(())
+    }
+
+    pub fn read_protocol_header(self: &mut Self) -> Result<Option<ProtocolHeader>> {
+        let mut buf = self.incoming.peek();
         if buf.len() >= 8 {
-            let mut remote_version: [u8; 8] = [0; 8];
-            buf.read(&mut remote_version)?;
+            let header = ProtocolHeader::decode(&mut buf)?;
             self.incoming.consume(8)?;
-            Ok(Some(remote_version))
+            Ok(Some(header))
         } else {
+            self.incoming.fill(&mut self.stream)?;
             Ok(None)
         }
     }
 
+    pub fn write_protocol_header(self: &mut Self, header: &ProtocolHeader) -> Result<()> {
+        header.encode(&mut self.outgoing)
+    }
+
     pub fn read_frame(self: &mut Self) -> Result<Frame> {
         loop {
-            let mut buf = self.incoming.fill(&mut self.stream)?;
+            let mut buf = self.incoming.peek();
             // println!("Filled {} bytes", buf.len());
             if buf.len() >= 8 {
                 let header = decode_header(&mut buf)?;
                 let frame_size = header.size as usize;
-                /*println!(
+                /*
+                println!(
                     "Found enough bytes for header {:?}. Buffer is {} bytes!",
                     header,
                     buf.len()
-                );*/
+                );
+                */
                 if buf.len() >= frame_size - 8 {
                     let frame = decode_frame(header, &mut buf)?;
                     self.incoming.consume(frame_size)?;
                     self.last_received = Instant::now();
                     return Ok(frame);
                 }
+            } else {
+                self.incoming.fill(&mut self.stream)?;
             }
         }
     }

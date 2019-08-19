@@ -11,6 +11,7 @@ use std::convert::From;
 use std::io::Read;
 use std::io::Write;
 use std::iter::FromIterator;
+use std::str::FromStr;
 use std::vec::Vec;
 use uuid::Uuid;
 
@@ -27,11 +28,85 @@ pub struct FrameHeader {
 
 #[derive(Debug)]
 pub enum Frame {
-    AMQP {
-        channel: u16,
-        body: Option<Performative>,
-    },
-    SASL,
+    AMQP(AmqpFrame),
+    SASL(SaslFrame),
+}
+
+#[derive(Debug)]
+pub struct AmqpFrame {
+    pub channel: u16,
+    pub body: Option<Performative>,
+}
+
+#[derive(Debug)]
+pub enum SaslFrame {
+    SaslMechanisms(SaslMechanisms),
+    SaslInit(SaslInit),
+    SaslChallenge(SaslChallenge),
+    SaslResponse(SaslResponse),
+    SaslOutcome(SaslOutcome),
+}
+
+type SaslMechanisms = Vec<SaslMechanism>;
+
+#[derive(Debug, PartialEq)]
+pub enum SaslMechanism {
+    Anonymous,
+    Plain,
+}
+
+impl FromStr for SaslMechanism {
+    type Err = AmqpError;
+    fn from_str(s: &str) -> Result<SaslMechanism> {
+        if "anonymous".eq_ignore_ascii_case(s) {
+            Ok(SaslMechanism::Anonymous)
+        } else if "plain".eq_ignore_ascii_case(s) {
+            Ok(SaslMechanism::Plain)
+        } else {
+            Err(AmqpError::decode_error(Some(
+                format!("Unknown SASL mechanism {}", s).as_str(),
+            )))
+        }
+    }
+}
+
+impl ToString for SaslMechanism {
+    fn to_string(&self) -> String {
+        match self {
+            SaslMechanism::Anonymous => "ANONYMOUS".to_string(),
+            SaslMechanism::Plain => "PLAIN".to_string(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SaslInit {
+    pub mechanism: String,
+    pub initial_response: Option<Vec<u8>>,
+    pub hostname: Option<String>,
+}
+
+pub type SaslChallenge = Vec<u8>;
+pub type SaslResponse = Vec<u8>;
+
+#[derive(Debug)]
+pub struct SaslOutcome {
+    pub code: SaslCode,
+    additional_data: Option<Vec<u8>>,
+}
+
+pub type SaslCode = u8;
+
+impl ToValue for SaslInit {
+    fn to_value(&self) -> Value {
+        let val = vec![
+            Value::Symbol(self.mechanism.clone().into_bytes()),
+            self.initial_response
+                .to_value(|v| Value::Binary(v.to_vec())),
+            self.hostname.to_value(|v| Value::String(v.to_string())),
+        ];
+        Value::Described(Box::new(DESC_SASL_INIT), Box::new(Value::List(val)))
+    }
 }
 
 #[derive(Debug)]
@@ -82,6 +157,10 @@ const DESC_OPEN: Value = Value::Ulong(0x10);
 const DESC_BEGIN: Value = Value::Ulong(0x11);
 const DESC_END: Value = Value::Ulong(0x17);
 const DESC_CLOSE: Value = Value::Ulong(0x18);
+
+const DESC_SASL_MECHANISMS: Value = Value::Ulong(0x40);
+const DESC_SASL_INIT: Value = Value::Ulong(0x41);
+const DESC_SASL_OUTCOME: Value = Value::Ulong(0x44);
 
 impl Open {
     pub fn new(container_id: &str) -> Open {
@@ -233,12 +312,13 @@ pub fn encode_frame(frame: &Frame, writer: &mut Write) -> Result<usize> {
         frame_type: 0,
         ext: 0,
     };
+
+    let mut buf: Vec<u8> = Vec::new();
+
     match frame {
-        Frame::AMQP { channel, body } => {
+        Frame::AMQP(AmqpFrame { channel, body }) => {
             header.frame_type = 0;
             header.ext = *channel;
-
-            let mut buf: Vec<u8> = Vec::new();
 
             if let Some(body) = body {
                 match body {
@@ -256,15 +336,27 @@ pub fn encode_frame(frame: &Frame, writer: &mut Write) -> Result<usize> {
                     }
                 }
             }
-            header.size += buf.len() as u32;
-
-            encode_header(&header, writer)?;
-            writer.write_all(&buf[..]);
-
-            Ok(header.size as usize)
         }
-        Frame::SASL => Err(AmqpError::amqp_error(condition::NOT_IMPLEMENTED, None)),
+        Frame::SASL(sasl_frame) => {
+            header.frame_type = 1;
+            match sasl_frame {
+                SaslFrame::SaslMechanisms(_) => {}
+                SaslFrame::SaslInit(init) => {
+                    encode_value(&init.to_value(), &mut buf)?;
+                }
+                SaslFrame::SaslChallenge(_) => {}
+                SaslFrame::SaslResponse(_) => {}
+                SaslFrame::SaslOutcome(_) => {}
+            }
+        }
     }
+
+    header.size += buf.len() as u32;
+
+    encode_header(&header, writer)?;
+    writer.write_all(&buf[..])?;
+
+    Ok(header.size as usize)
 }
 
 pub fn decode_header(reader: &mut Read) -> Result<FrameHeader> {
@@ -285,13 +377,15 @@ pub fn encode_header(header: &FrameHeader, writer: &mut Write) -> Result<()> {
 }
 
 pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
+    // Read off extended header not in use
+    let mut doff = header.doff;
+    while doff > 2 {
+        stream.read_u32::<NetworkEndian>()?;
+        doff -= 1;
+    }
+
     if header.frame_type == 0 {
         let body = if header.size > 8 {
-            let mut doff = header.doff;
-            while doff > 2 {
-                stream.read_u32::<NetworkEndian>()?;
-                doff -= 1;
-            }
             if let Value::Described(descriptor, value) = decode_value(stream)? {
                 Some(match *descriptor {
                     DESC_OPEN => {
@@ -375,7 +469,7 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
                             ))
                         }
                     }
-                    Value::Ulong(0x18) => {
+                    DESC_CLOSE => {
                         let mut close = Close { error: None };
                         if let Value::List(args) = *value {
                             if args.len() > 0 {
@@ -402,7 +496,7 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
                         }
                         Ok(Performative::Close(close))
                     }
-                    Value::Ulong(0x11) => {
+                    DESC_BEGIN => {
                         if let Value::List(args) = *value {
                             let mut begin = Begin::new(0, 0, 0);
                             let mut it = args.iter();
@@ -476,7 +570,7 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
                             ))
                         }
                     }
-                    Value::Ulong(0x17) => {
+                    DESC_END => {
                         let mut end = End { error: None };
                         if let Value::List(args) = *value {
                             if args.len() > 0 {
@@ -514,12 +608,80 @@ pub fn decode_frame(header: FrameHeader, stream: &mut Read) -> Result<Frame> {
         } else {
             None
         };
-        Ok(Frame::AMQP {
+        Ok(Frame::AMQP(AmqpFrame {
             channel: header.ext,
             body: body,
-        })
-    //} else if frame_type == 1 {
-    // SASL
+        }))
+    } else if header.frame_type == 1 {
+        if header.size > 8 {
+            if let Value::Described(descriptor, value) = decode_value(stream)? {
+                let frame = match *descriptor {
+                    DESC_SASL_MECHANISMS => {
+                        if let Value::List(args) = *value {
+                            let mut it = args.iter();
+
+                            if let Some(sasl_server_mechanisms) = it.next() {
+                                if let Value::Array(vec) = sasl_server_mechanisms {
+                                    let mut mechs = Vec::new();
+                                    for val in vec.iter() {
+                                        mechs.push(val.to_string().parse::<SaslMechanism>()?)
+                                    }
+                                    Some(SaslFrame::SaslMechanisms(mechs))
+                                } else if let Value::Symbol(s) = sasl_server_mechanisms {
+                                    Some(SaslFrame::SaslMechanisms(vec![String::from_utf8(
+                                        s.to_vec(),
+                                    )
+                                    .unwrap()
+                                    .parse::<SaslMechanism>()?]))
+                                } else {
+                                    Some(SaslFrame::SaslMechanisms(vec![]))
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    DESC_SASL_OUTCOME => {
+                        if let Value::List(args) = *value {
+                            let mut it = args.iter();
+                            let mut outcome = SaslOutcome {
+                                code: 4,
+                                additional_data: None,
+                            };
+
+                            if let Some(Value::Ubyte(code)) = it.next() {
+                                outcome.code = *code;
+                            }
+
+                            if let Some(Value::Binary(additional_data)) = it.next() {
+                                outcome.additional_data = Some(additional_data.to_vec());
+                            }
+                            Some(SaslFrame::SaslOutcome(outcome))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                match frame {
+                    Some(frame) => Ok(Frame::SASL(frame)),
+                    None => Err(AmqpError::decode_error(Some("Error decoding sasl frame"))),
+                }
+            } else {
+                Err(AmqpError::amqp_error(
+                    condition::connection::FRAMING_ERROR,
+                    Some("Sasl frame not matched"),
+                ))
+            }
+        } else {
+            Err(AmqpError::amqp_error(
+                condition::connection::FRAMING_ERROR,
+                Some("Sasl frame not matched"),
+            ))
+        }
     } else {
         Err(AmqpError::amqp_error(
             condition::connection::FRAMING_ERROR,

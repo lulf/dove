@@ -43,6 +43,7 @@ pub enum Value {
     Int(i32),
     Long(i64),
     String(String),
+    Binary(Vec<u8>),
     Symbol(Vec<u8>),
     Array(Vec<Value>),
     List(Vec<Value>),
@@ -138,6 +139,19 @@ fn encode_value_internal(value: &Value, writer: &mut Write) -> Result<TypeCode> 
                 writer.write_u8(val.len() as u8)?;
                 writer.write(&val[..])?;
                 Ok(TypeCode::Sym8)
+            }
+        }
+        Value::Binary(val) => {
+            if val.len() > U8_MAX {
+                writer.write_u8(TypeCode::Bin32 as u8)?;
+                writer.write_u32::<NetworkEndian>(val.len() as u32)?;
+                writer.write(&val[..])?;
+                Ok(TypeCode::Bin32)
+            } else {
+                writer.write_u8(TypeCode::Bin8 as u8)?;
+                writer.write_u8(val.len() as u8)?;
+                writer.write(&val[..])?;
+                Ok(TypeCode::Bin8)
             }
         }
         Value::Ubyte(val) => {
@@ -395,6 +409,18 @@ fn decode_value_with_ctor(raw_code: u8, reader: &mut Read) -> Result<Value> {
             reader.read_exact(&mut buffer)?;
             Ok(Value::Symbol(buffer))
         }
+        TypeCode::Bin8 => {
+            let len = reader.read_u8()? as usize;
+            let mut buffer = vec![0u8; len];
+            reader.read_exact(&mut buffer)?;
+            Ok(Value::Binary(buffer))
+        }
+        TypeCode::Bin32 => {
+            let len = reader.read_u32::<NetworkEndian>()? as usize;
+            let mut buffer = vec![0u8; len];
+            reader.read_exact(&mut buffer)?;
+            Ok(Value::Binary(buffer))
+        }
         TypeCode::List0 => Ok(Value::List(Vec::new())),
         TypeCode::List8 => {
             let _sz = reader.read_u8()? as usize;
@@ -482,6 +508,8 @@ enum TypeCode {
     Intsmall = 0x54,
     Long = 0x81,
     Longsmall = 0x55,
+    Bin8 = 0xA0,
+    Bin32 = 0xB0,
     Str8 = 0xA1,
     Str32 = 0xB1,
     Sym8 = 0xA3,
@@ -513,8 +541,10 @@ fn decode_type(code: u8) -> Result<TypeCode> {
         0x54 => Ok(TypeCode::Intsmall),
         0x81 => Ok(TypeCode::Long),
         0x55 => Ok(TypeCode::Longsmall),
+        0xA0 => Ok(TypeCode::Bin8),
         0xA1 => Ok(TypeCode::Str8),
         0xA3 => Ok(TypeCode::Sym8),
+        0xB0 => Ok(TypeCode::Bin32),
         0xB1 => Ok(TypeCode::Str32),
         0xB3 => Ok(TypeCode::Sym32),
         0x45 => Ok(TypeCode::List0),

@@ -18,8 +18,26 @@ use crate::transport::*;
 use crate::types::*;
 
 #[derive(Debug)]
+pub enum Sasl {
+    Server(Vec<SaslMechanism>),
+    Client(SaslMechanism),
+}
+
+#[derive(Debug)]
 pub struct ConnectionOptions<'a> {
     pub container_id: &'a str,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+impl<'a> ConnectionOptions<'a> {
+    pub fn new(container_id: &'a str) -> ConnectionOptions {
+        ConnectionOptions {
+            container_id: container_id,
+            username: None,
+            password: None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -35,7 +53,9 @@ pub struct Container {
 #[derive(Debug)]
 enum ConnectionState {
     Start,
+    StartWait,
     HdrSent,
+    Sasl,
     HdrExch,
     OpenRcvd,
     OpenSent,
@@ -52,7 +72,8 @@ pub struct Sender {}
 
 pub struct Receiver {}
 
-const AMQP_10_VERSION: [u8; 8] = [65, 77, 81, 80, 0, 1, 0, 0];
+const AMQP_10_HEADER: ProtocolHeader = ProtocolHeader::AMQP(Version(1, 0, 0));
+const SASL_10_HEADER: ProtocolHeader = ProtocolHeader::SASL(Version(1, 0, 0));
 
 type Handle = usize;
 
@@ -73,6 +94,9 @@ pub struct Connection {
     pub remote_idle_timeout: Duration,
     pub remote_container_id: String,
     pub remote_channel_max: u16,
+    sasl: Option<Sasl>,
+    sasl_username: Option<String>,
+    sasl_password: Option<String>,
     state: ConnectionState,
     transport: Transport,
     opened: bool,
@@ -109,12 +133,20 @@ pub fn connect(host: &str, port: u16, opts: ConnectionOptions) -> Result<Connect
     // TODO: SASL support
     let transport: Transport = Transport::new(stream, 1024)?;
 
-    Ok(Connection::new(opts.container_id, host, transport))
+    let mut connection = Connection::new(opts.container_id, host, transport);
+    connection.sasl_username = opts.username;
+    connection.sasl_password = opts.password;
+    if connection.sasl_username.is_some() || connection.sasl_password.is_some() {
+        connection.sasl = Some(Sasl::Client(SaslMechanism::Plain));
+    }
+
+    Ok(connection)
 }
 
 pub struct Listener {
     pub listener: TcpListener,
     pub container_id: String,
+    pub sasl_mechanisms: Option<Vec<SaslMechanism>>,
 }
 
 pub fn listen(host: &str, port: u16, opts: ListenOptions) -> Result<Listener> {
@@ -122,6 +154,7 @@ pub fn listen(host: &str, port: u16, opts: ListenOptions) -> Result<Listener> {
     Ok(Listener {
         listener: listener,
         container_id: opts.container_id.to_string(),
+        sasl_mechanisms: None,
     })
 }
 
@@ -129,11 +162,13 @@ impl Listener {
     pub fn accept(&self) -> Result<Connection> {
         let (stream, addr) = self.listener.accept()?;
         let transport: Transport = Transport::new(stream, 1024)?;
-        Ok(Connection::new(
+        let mut connection = Connection::new(
             self.container_id.as_str(),
             addr.ip().to_string().as_str(),
             transport,
-        ))
+        );
+        connection.state = ConnectionState::StartWait;
+        Ok(connection)
     }
 }
 
@@ -218,10 +253,10 @@ impl ConnectionDriver {
 
 fn unwrap_frame(frame: Frame) -> Result<(ChannelId, Option<Performative>)> {
     match frame {
-        Frame::AMQP {
+        Frame::AMQP(AmqpFrame {
             channel: channel,
             body: body,
-        } => {
+        }) => {
             return Ok((channel as ChannelId, body));
         }
         _ => return Err(AmqpError::framing_error()),
@@ -245,6 +280,9 @@ impl Connection {
             remote_channel_map: HashMap::new(),
             close_condition: None,
             transport: transport,
+            sasl_username: None,
+            sasl_password: None,
+            sasl: None,
         }
     }
 
@@ -296,17 +334,131 @@ impl Connection {
         Ok(before != event_buffer.len())
     }
 
+    fn check_header(self: &mut Self, header: ProtocolHeader, respond: bool) -> Result<()> {
+        if self.sasl.is_none() {
+            match header {
+                AMQP_10_HEADER => {
+                    if respond {
+                        self.transport.write_protocol_header(&AMQP_10_HEADER)?;
+                        self.transport.flush()?;
+                    }
+                    self.state = ConnectionState::HdrExch;
+                }
+                _ => {
+                    self.transport.write_protocol_header(&AMQP_10_HEADER)?;
+                    self.transport.flush()?;
+                    self.transport.close()?;
+                    self.state = ConnectionState::End;
+                }
+            }
+            Ok(())
+        } else {
+            match header {
+                SASL_10_HEADER => {
+                    if respond {
+                        self.transport.write_protocol_header(&SASL_10_HEADER)?;
+                        self.transport.flush()?;
+                    }
+                    self.state = ConnectionState::Sasl;
+                }
+                _ => {
+                    self.transport.write_protocol_header(&SASL_10_HEADER)?;
+                    self.transport.flush()?;
+                    self.transport.close()?;
+                    self.state = ConnectionState::End;
+                }
+            }
+            Ok(())
+        }
+    }
+
     fn do_work(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
         match self.state {
+            ConnectionState::StartWait => {
+                let header = self.transport.read_protocol_header()?;
+                if header.is_some() {
+                    let header = header.unwrap();
+                    self.check_header(header, true)?;
+                    event_buffer.push(Event::ConnectionInit);
+                }
+            }
             ConnectionState::Start => {
-                self.transport.write(&AMQP_10_VERSION)?;
+                if self.sasl.is_none() {
+                    self.transport.write_protocol_header(&AMQP_10_HEADER)?;
+                } else {
+                    self.transport.write_protocol_header(&SASL_10_HEADER)?;
+                }
                 self.transport.flush()?;
                 self.state = ConnectionState::HdrSent;
             }
             ConnectionState::HdrSent => {
-                let mut _remote_version = self.transport.read_protocol_version()?;
-                self.state = ConnectionState::HdrExch;
-                event_buffer.push(Event::ConnectionInit);
+                let header = self.transport.read_protocol_header()?;
+                if header.is_some() {
+                    let header = header.unwrap();
+                    self.check_header(header, false)?;
+                    event_buffer.push(Event::ConnectionInit);
+                }
+            }
+            ConnectionState::Sasl => {
+                println!("Let the SASL exchange begin!");
+                match &self.sasl {
+                    Some(Sasl::Client(mechanism)) => {
+                        let frame = self.transport.read_frame()?;
+                        match frame {
+                            Frame::SASL(SaslFrame::SaslMechanisms(mechs)) => {
+                                println!("Got mechs {:?}, we want: {:?}!", mechs, mechanism);
+                                let mut found = false;
+                                for supported_mech in mechs.iter() {
+                                    if mechanism == supported_mech {
+                                        println!("Found supported mechanism, proceed!");
+                                        found = true;
+                                    }
+                                }
+                                if !found {
+                                    println!("Unable to find supported mechanism");
+                                    self.transport.close()?;
+                                    self.state = ConnectionState::End;
+                                } else {
+                                    let mut initial_response = None;
+                                    if *mechanism == SaslMechanism::Plain {
+                                        let mut data = Vec::new();
+                                        data.extend_from_slice(
+                                            self.sasl_username.clone().unwrap().as_bytes(),
+                                        );
+                                        data.push(0);
+                                        data.extend_from_slice(
+                                            self.sasl_username.clone().unwrap().as_bytes(),
+                                        );
+                                        data.push(0);
+                                        data.extend_from_slice(
+                                            self.sasl_password.clone().unwrap().as_bytes(),
+                                        );
+                                        initial_response = Some(data);
+                                    }
+                                    let init = Frame::SASL(SaslFrame::SaslInit(SaslInit {
+                                        mechanism: mechanism.to_string(),
+                                        initial_response: initial_response,
+                                        hostname: None,
+                                    }));
+                                    self.transport.write_frame(&init)?;
+                                    self.transport.flush()?;
+                                }
+                            }
+                            Frame::SASL(SaslFrame::SaslOutcome(outcome)) => {
+                                println!("Got outcome: {:?}", outcome);
+                                if outcome.code == 0 {
+                                    self.state = ConnectionState::HdrExch;
+                                } else {
+                                    self.transport.close()?;
+                                    self.state = ConnectionState::End;
+                                }
+                            }
+                            _ => println!("Got frame {:?}", frame),
+                        }
+                    }
+                    Some(Sasl::Server(allowed_mechs)) => {}
+                    _ => {}
+                }
             }
             ConnectionState::HdrExch => {
                 if self.opened {
@@ -441,10 +593,10 @@ impl Connection {
         let now = Instant::now();
         if self.remote_idle_timeout.as_millis() > 0 {
             if now - self.transport.last_sent() >= self.remote_idle_timeout {
-                let frame = Frame::AMQP {
+                let frame = Frame::AMQP(AmqpFrame {
                     channel: 0,
                     body: None,
-                };
+                });
                 self.transport.write_frame(&frame)?;
                 self.transport.flush()?;
             }
@@ -522,18 +674,18 @@ impl Connection {
         args.channel_max = Some(self.channel_max);
         args.idle_timeout = Some(self.idle_timeout.as_millis() as u32);
 
-        let frame = Frame::AMQP {
+        let frame = Frame::AMQP(AmqpFrame {
             channel: 0,
             body: Some(Performative::Open(args)),
-        };
+        });
 
         self.transport.write_frame(&frame)?;
         self.transport.flush()?;
 
-        if let Frame::AMQP {
+        if let Frame::AMQP(AmqpFrame {
             channel: _,
             body: body,
-        } = frame
+        }) = frame
         {
             if let Some(Performative::Open(data)) = body {
                 event_buffer.push(Event::LocalOpen(data));
@@ -543,12 +695,12 @@ impl Connection {
     }
 
     fn local_close(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
-        let frame = Frame::AMQP {
+        let frame = Frame::AMQP(AmqpFrame {
             channel: 0,
             body: Some(Performative::Close(Close {
                 error: self.close_condition.clone(),
             })),
-        };
+        });
 
         self.transport.write_frame(&frame)?;
         self.transport.flush()?;
@@ -596,7 +748,7 @@ impl Session {
         transport: &mut Transport,
         event_buffer: &mut EventBuffer,
     ) -> Result<()> {
-        let frame = Frame::AMQP {
+        let frame = Frame::AMQP(AmqpFrame {
             channel: self.local_channel as u16,
             body: Some(Performative::Begin(Begin {
                 remote_channel: self.remote_channel,
@@ -608,12 +760,12 @@ impl Session {
                 desired_capabilities: None,
                 properties: None,
             })),
-        };
+        });
 
         transport.write_frame(&frame)?;
         transport.flush()?;
 
-        if let Frame::AMQP { channel: _, body } = frame {
+        if let Frame::AMQP(AmqpFrame { channel: _, body }) = frame {
             if let Some(Performative::Begin(data)) = body {
                 event_buffer.push(Event::LocalBegin(self.local_channel, data));
             }
