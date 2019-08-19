@@ -53,6 +53,9 @@ type SaslMechanisms = Vec<SaslMechanism>;
 pub enum SaslMechanism {
     Anonymous,
     Plain,
+    CramMd5,
+    ScramSha1,
+    ScramSha256,
 }
 
 impl FromStr for SaslMechanism {
@@ -62,6 +65,12 @@ impl FromStr for SaslMechanism {
             Ok(SaslMechanism::Anonymous)
         } else if "plain".eq_ignore_ascii_case(s) {
             Ok(SaslMechanism::Plain)
+        } else if "cram-md5".eq_ignore_ascii_case(s) {
+            Ok(SaslMechanism::CramMd5)
+        } else if "scram-sha-1".eq_ignore_ascii_case(s) {
+            Ok(SaslMechanism::ScramSha1)
+        } else if "scram-sha-256".eq_ignore_ascii_case(s) {
+            Ok(SaslMechanism::ScramSha256)
         } else {
             Err(AmqpError::decode_error(Some(
                 format!("Unknown SASL mechanism {}", s).as_str(),
@@ -75,6 +84,7 @@ impl ToString for SaslMechanism {
         match self {
             SaslMechanism::Anonymous => "ANONYMOUS".to_string(),
             SaslMechanism::Plain => "PLAIN".to_string(),
+            _ => panic!("Unsupported mechanism!"),
         }
     }
 }

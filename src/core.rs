@@ -95,6 +95,7 @@ pub struct Connection {
     pub remote_container_id: String,
     pub remote_channel_max: u16,
     sasl: Option<Sasl>,
+    sasl_done: bool,
     sasl_username: Option<String>,
     sasl_password: Option<String>,
     state: ConnectionState,
@@ -283,6 +284,7 @@ impl Connection {
             sasl_username: None,
             sasl_password: None,
             sasl: None,
+            sasl_done: false,
         }
     }
 
@@ -334,69 +336,54 @@ impl Connection {
         Ok(before != event_buffer.len())
     }
 
-    fn check_header(self: &mut Self, header: ProtocolHeader, respond: bool) -> Result<()> {
-        if self.sasl.is_none() {
-            match header {
-                AMQP_10_HEADER => {
-                    if respond {
-                        self.transport.write_protocol_header(&AMQP_10_HEADER)?;
-                        self.transport.flush()?;
-                    }
-                    self.state = ConnectionState::HdrExch;
-                }
-                _ => {
-                    self.transport.write_protocol_header(&AMQP_10_HEADER)?;
-                    self.transport.flush()?;
-                    self.transport.close()?;
-                    self.state = ConnectionState::End;
-                }
-            }
-            Ok(())
-        } else {
-            match header {
-                SASL_10_HEADER => {
-                    if respond {
-                        self.transport.write_protocol_header(&SASL_10_HEADER)?;
-                        self.transport.flush()?;
-                    }
-                    self.state = ConnectionState::Sasl;
-                }
-                _ => {
-                    self.transport.write_protocol_header(&SASL_10_HEADER)?;
-                    self.transport.flush()?;
-                    self.transport.close()?;
-                    self.state = ConnectionState::End;
-                }
-            }
-            Ok(())
-        }
-    }
-
     fn do_work(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
         match self.state {
             ConnectionState::StartWait => {
                 let header = self.transport.read_protocol_header()?;
-                if header.is_some() {
-                    let header = header.unwrap();
-                    self.check_header(header, true)?;
-                    event_buffer.push(Event::ConnectionInit);
+                if let Some(header) = header {
+                    match header {
+                        SASL_10_HEADER if self.sasl.is_some() => {
+                            self.transport.write_protocol_header(&SASL_10_HEADER)?;
+                            self.state = ConnectionState::Sasl;
+                        }
+                        AMQP_10_HEADER if self.sasl.is_none() || self.sasl_done => {
+                            self.transport.write_protocol_header(&AMQP_10_HEADER)?;
+                            self.state = ConnectionState::HdrExch;
+                            event_buffer.push(Event::ConnectionInit);
+                        }
+                        _ => {
+                            self.transport.write_protocol_header(&AMQP_10_HEADER)?;
+                            self.transport.close()?;
+                            self.state = ConnectionState::End;
+                        }
+                    }
                 }
             }
             ConnectionState::Start => {
-                if self.sasl.is_none() {
+                if self.sasl.is_none() || self.sasl_done {
                     self.transport.write_protocol_header(&AMQP_10_HEADER)?;
                 } else {
                     self.transport.write_protocol_header(&SASL_10_HEADER)?;
                 }
-                self.transport.flush()?;
                 self.state = ConnectionState::HdrSent;
             }
             ConnectionState::HdrSent => {
                 let header = self.transport.read_protocol_header()?;
-                if header.is_some() {
-                    let header = header.unwrap();
-                    self.check_header(header, false)?;
-                    event_buffer.push(Event::ConnectionInit);
+                if let Some(header) = header {
+                    match header {
+                        SASL_10_HEADER if self.sasl.is_some() => {
+                            self.state = ConnectionState::Sasl;
+                        }
+                        AMQP_10_HEADER if self.sasl.is_none() || self.sasl_done => {
+                            self.state = ConnectionState::HdrExch;
+                            event_buffer.push(Event::ConnectionInit);
+                        }
+                        _ => {
+                            // self.transport.write_protocol_header(&AMQP_10_HEADER)?;
+                            self.transport.close()?;
+                            self.state = ConnectionState::End;
+                        }
+                    }
                 }
             }
             ConnectionState::Sasl => {
@@ -441,13 +428,13 @@ impl Connection {
                                         hostname: None,
                                     }));
                                     self.transport.write_frame(&init)?;
-                                    self.transport.flush()?;
                                 }
                             }
                             Frame::SASL(SaslFrame::SaslOutcome(outcome)) => {
                                 println!("Got outcome: {:?}", outcome);
                                 if outcome.code == 0 {
-                                    self.state = ConnectionState::HdrExch;
+                                    self.sasl_done = true;
+                                    self.state = ConnectionState::Start;
                                 } else {
                                     self.transport.close()?;
                                     self.state = ConnectionState::End;
@@ -598,7 +585,6 @@ impl Connection {
                     body: None,
                 });
                 self.transport.write_frame(&frame)?;
-                self.transport.flush()?;
             }
         }
 
@@ -680,7 +666,6 @@ impl Connection {
         });
 
         self.transport.write_frame(&frame)?;
-        self.transport.flush()?;
 
         if let Frame::AMQP(AmqpFrame {
             channel: _,
@@ -703,7 +688,6 @@ impl Connection {
         });
 
         self.transport.write_frame(&frame)?;
-        self.transport.flush()?;
 
         let condition = self.close_condition.clone();
         event_buffer.push(Event::LocalClose(condition));
@@ -763,7 +747,6 @@ impl Session {
         });
 
         transport.write_frame(&frame)?;
-        transport.flush()?;
 
         if let Frame::AMQP(AmqpFrame { channel: _, body }) = frame {
             if let Some(Performative::Begin(data)) = body {

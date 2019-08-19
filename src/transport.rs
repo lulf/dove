@@ -156,7 +156,9 @@ impl Transport {
     }
 
     pub fn write_protocol_header(self: &mut Self, header: &ProtocolHeader) -> Result<()> {
-        header.encode(&mut self.outgoing)
+        header.encode(&mut self.outgoing)?;
+        self.flush()?;
+        Ok(())
     }
 
     pub fn read_frame(self: &mut Self) -> Result<Frame> {
@@ -188,11 +190,13 @@ impl Transport {
     pub fn write_frame(self: &mut Self, frame: &Frame) -> Result<usize> {
         let sz = encode_frame(frame, &mut self.outgoing)?;
         self.last_sent = Instant::now();
+        self.flush()?;
         Ok(sz)
     }
 
     pub fn write(self: &mut Self, data: &[u8]) -> Result<usize> {
         self.outgoing.write_all(data)?;
+        self.flush()?;
         Ok(data.len())
     }
 
