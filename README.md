@@ -1,8 +1,8 @@
-# rust-amqp
+# Dove - Rust AMQP 1.0 Library
 
-XXX is an open source Rust implementation of the AMQP 1.0 OASIS standard (http://www.amqp.org/). The Advanced Message Queuing Protocol (AMQP) is an open standard for passing business messages between applications or organizations.  It connects systems, feeds business processes with the information they need and reliably transmits onward the instructions that achieve their goals. 
+Dove is an open source Rust implementation of the AMQP 1.0 OASIS standard (http://www.amqp.org/). The Advanced Message Queuing Protocol (AMQP) is an open standard for passing business messages between applications or organizations.  It connects systems, feeds business processes with the information they need and reliably transmits onward the instructions that achieve their goals. 
 
-XXX aims to be an AMQP 1.0 implementation with the following properties:
+Dove aims to be an AMQP 1.0 implementation with the following properties:
 
 * Low footprint - minimize memory allocation, pay only for what you use
 * Portable - minimize the number of dependencies and use portable APIs

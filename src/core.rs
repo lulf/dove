@@ -210,7 +210,7 @@ impl ConnectionDriver {
 
     /// Register a new connection to be managed by this driver.
     /// # Examples
-    /// use XXX::core::ConnectionDriver
+    /// use dove::core::ConnectionDriver
     /// let connection = connect("localhost:5672")?;
     /// let driver = ConnectionDriver::new();
     /// let handle = driver.register(connection);
