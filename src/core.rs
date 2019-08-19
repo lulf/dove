@@ -63,12 +63,6 @@ enum ConnectionState {
     End,
 }
 
-pub struct Link {}
-
-pub struct Sender {}
-
-pub struct Receiver {}
-
 const AMQP_10_HEADER: ProtocolHeader = ProtocolHeader::AMQP(Version(1, 0, 0));
 const SASL_10_HEADER: ProtocolHeader = ProtocolHeader::SASL(Version(1, 0, 0));
 
@@ -119,9 +113,19 @@ pub struct Session {
     pub local_channel: ChannelId,
     remote_channel: Option<ChannelId>,
     state: SessionState,
-    begun: bool,
-    ended: bool,
+    opened: bool,
+    closed: bool,
+    senders: Vec<Sender>,
 }
+
+#[derive(Debug)]
+pub struct Link {}
+
+#[derive(Debug)]
+pub struct Sender {}
+
+#[derive(Debug)]
+pub struct Receiver {}
 
 pub fn connect(host: &str, port: u16, opts: ConnectionOptions) -> Result<Connection> {
     let stream = TcpStream::connect(format!("{}:{}", host, port))?;
@@ -311,9 +315,10 @@ impl Connection {
         let s = Session {
             remote_channel: channel_id,
             local_channel: chan,
-            begun: false,
-            ended: false,
+            opened: false,
+            closed: false,
             state: SessionState::Unmapped,
+            senders: Vec::new(),
         };
         self.sessions.insert(chan, s);
         channel_id.map(|c| self.remote_channel_map.insert(c, chan));
@@ -509,13 +514,13 @@ impl Connection {
         for (channel_id, session) in self.sessions.iter_mut() {
             match session.state {
                 SessionState::Unmapped => {
-                    if session.begun {
+                    if session.opened {
                         let frame = session.local_begin(&mut self.transport, event_buffer)?;
                         session.state = SessionState::BeginSent;
                     }
                 }
                 SessionState::BeginRcvd => {
-                    if session.begun {
+                    if session.opened {
                         let frame = session.local_begin(&mut self.transport, event_buffer)?;
                         session.state = SessionState::Mapped;
                     }
@@ -650,8 +655,8 @@ impl Connection {
 }
 
 impl Session {
-    pub fn begin(self: &mut Self) {
-        self.begun = true;
+    pub fn open(self: &mut Self) {
+        self.opened = true;
     }
 
     fn process_frame(
@@ -717,4 +722,13 @@ impl Session {
     ) -> Result<()> {
         Ok(())
     }
+
+    pub fn create_sender<'a>(self: &mut Self, address: Option<&'a str>) -> &mut Sender {
+        self.senders.push(Sender {});
+        self.senders.get_mut(0).unwrap()
+    }
+}
+
+impl Sender {
+    pub fn open(self: &mut Self) {}
 }

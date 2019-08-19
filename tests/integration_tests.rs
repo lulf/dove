@@ -41,10 +41,13 @@ fn client() {
                         Event::RemoteOpen(_) => {
                             println!("Remote opened!");
                             let session = conn.create_session();
-                            session.begin();
+                            session.open();
                         }
-                        Event::RemoteBegin(_, _) => {
+                        Event::RemoteBegin(chan, _) => {
                             println!("Remote begin");
+                            let session = conn.get_session(chan).unwrap();
+                            let sender = session.create_sender(Some("a"));
+                            sender.open();
                             /*
                             conn.close(Some(ErrorCondition {
                                 condition: condition::RESOURCE_LIMIT_EXCEEDED.to_string(),
@@ -107,7 +110,7 @@ fn server() {
                             println!("Remote begin");
 
                             let session = conn.get_session(chan).unwrap();
-                            session.begin();
+                            session.open();
                         }
                         Event::RemoteClose(_) => {
                             println!("Received close from peer, closing connection!");
