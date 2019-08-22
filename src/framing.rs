@@ -84,6 +84,7 @@ pub enum Performative {
     Open(Open),
     Close(Close),
     Begin(Begin),
+    Attach(Attach),
     End(End),
 }
 
@@ -111,6 +112,92 @@ pub struct Begin {
     pub offered_capabilities: Option<Vec<String>>,
     pub desired_capabilities: Option<Vec<String>>,
     pub properties: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Attach {
+    pub name: String,
+    pub handle: u32,
+    pub role: LinkRole,
+    pub sender_settle_mode: Option<SenderSettleMode>,
+    pub receiver_settle_mode: Option<ReceiverSettleMode>,
+    pub source: Option<Source>,
+    pub target: Option<Target>,
+    pub unsettled: Option<BTreeMap<Value, Value>>,
+    pub incomplete_unsettled: Option<bool>,
+    pub initial_delivery_count: Option<u32>,
+    pub max_message_size: Option<u64>,
+    pub offered_capabilities: Option<Vec<String>>,
+    pub desired_capabilities: Option<Vec<String>>,
+    pub properties: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum LinkRole {
+    Sender,
+    Receiver,
+}
+
+#[derive(Debug, Clone)]
+pub enum SenderSettleMode {
+    Unsettled,
+    Settled,
+    Mixed,
+}
+
+#[derive(Debug, Clone)]
+pub enum ReceiverSettleMode {
+    First,
+    Second,
+}
+
+#[derive(Debug, Clone)]
+pub struct Source {
+    pub address: Option<String>,
+    pub durable: Option<TerminusDurability>,
+    pub expiry_policy: Option<TerminusExpiryPolicy>,
+    pub timeout: Option<u32>,
+    pub dynamic: Option<bool>,
+    pub dynamic_node_properties: Option<BTreeMap<String, Value>>,
+    pub distribution_mode: Option<String>,
+    pub filter: Option<BTreeMap<String, Value>>,
+    pub default_outcome: Option<Outcome>,
+    pub outcomes: Option<Vec<Outcome>>,
+    pub capabilities: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum TerminusDurability {
+    None,
+    Configuration,
+    UnsettledState,
+}
+
+#[derive(Debug, Clone)]
+pub enum TerminusExpiryPolicy {
+    LinkDetach,
+    SessionEnd,
+    ConnectionClose,
+    Never,
+}
+
+#[derive(Debug, Clone)]
+pub enum Outcome {
+    Accepted,
+    Rejected,
+    Released,
+    Modified,
+}
+
+#[derive(Debug, Clone)]
+pub struct Target {
+    pub address: Option<String>,
+    pub durable: Option<TerminusDurability>,
+    pub expiry_policy: Option<TerminusExpiryPolicy>,
+    pub timeout: Option<u32>,
+    pub dynamic: Option<bool>,
+    pub dynamic_node_properties: Option<BTreeMap<String, Value>>,
+    pub capabilities: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -550,6 +637,7 @@ impl Frame {
                         Performative::Close(close) => {
                             encode_value(&close.to_value(), &mut buf)?;
                         }
+                        _ => return Err(AmqpError::not_implemented()),
                     }
                 }
             }
