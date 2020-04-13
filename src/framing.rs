@@ -84,6 +84,8 @@ pub enum Performative {
     Close(Close),
     Begin(Begin),
     Attach(Attach),
+    Flow(Flow),
+    Transfer(Transfer),
     End(End),
 }
 
@@ -215,6 +217,36 @@ pub struct Target {
     pub dynamic: Option<bool>,
     pub dynamic_node_properties: Option<BTreeMap<String, Value>>,
     pub capabilities: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Flow{
+    pub next_incoming_id: u32,
+    pub incoming_window: u32,
+    pub next_outgoing_id: u32,
+    pub outgoing_window: u32,
+    pub handle: u32,
+    pub delivery_count: u32,
+    pub link_credit: u32,
+    pub available: u32,
+    pub drain: bool,
+    pub echo: bool,
+    pub properties: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Transfer{
+    pub handle: u32,
+    pub delivery_id: Option<u32>,
+    pub delivery_tag: Vec<u8>, 
+    pub message_format: Option<u32>, 
+    pub settled: bool,
+    pub more: bool,
+    pub receiver_settle_mode: Option<ReceiverSettleMode>,
+    pub state: DeliveryState,
+    pub resume: bool,
+    pub aborted: bool,
+    pub batchable: bool
 }
 
 #[derive(Debug, Clone)]
