@@ -119,8 +119,8 @@ pub struct Attach {
     pub name: String,
     pub handle: u32,
     pub role: LinkRole,
-    pub sender_settle_mode: Option<SenderSettleMode>,
-    pub receiver_settle_mode: Option<ReceiverSettleMode>,
+    pub snd_settle_mode: Option<SenderSettleMode>,
+    pub rcv_settle_mode: Option<ReceiverSettleMode>,
     pub source: Option<Source>,
     pub target: Option<Target>,
     pub unsettled: Option<BTreeMap<Value, Value>>,
@@ -212,6 +212,10 @@ pub struct Close {
 
 const DESC_OPEN: Value = Value::Ulong(0x10);
 const DESC_BEGIN: Value = Value::Ulong(0x11);
+const DESC_ATTACH: Value = Value::Ulong(0x12);
+const DESC_SOURCE: Value = Value::Ulong(0x28);
+const DESC_TARGET: Value = Value::Ulong(0x29);
+
 const DESC_END: Value = Value::Ulong(0x17);
 const DESC_CLOSE: Value = Value::Ulong(0x18);
 
@@ -407,6 +411,27 @@ impl Begin {
     }
 }
 
+impl Attach {
+    pub fn new(name: &str, handle: u32, role: LinkRole) -> Attach {
+        Attach {
+            name: name.to_string(),
+            handle: handle,
+            role: role,
+            snd_settle_mode: None,
+            rcv_settle_mode: None,
+            source: None,
+            target: None,
+            unsettled: None,
+            incomplete_unsettled: None,
+            initial_delivery_count: None,
+            max_message_size: None,
+            offered_capabilities: None,
+            desired_capabilities: None,
+            properties: None,
+        }
+    }
+}
+
 fn decode_condition(value: Value) -> Result<ErrorCondition> {
     if let Value::Described(descriptor, list) = value {
         match *descriptor {
@@ -555,6 +580,124 @@ impl ToValue for Begin {
             }),
         ];
         Value::Described(Box::new(DESC_BEGIN), Box::new(Value::List(args)))
+    }
+}
+
+impl ToValue for Source {
+    fn to_value(&self) -> Value {
+        let args = vec![
+            self.address.to_value(|v| Value::String(v.to_string())),
+            Value::Uint(self.durable.unwrap_or(TerminusDurability::None) as u32),
+            Value::Symbol(
+                self.expiry_policy
+                    .unwrap_or(TerminusExpiryPolicy::SessionEnd)
+                    .to_string(),
+            ),
+            Value::Uint(self.timeout.unwrap_or(0)),
+            Value::Bool(self.dynamic.unwrap_or(false)),
+            self.dynamic_node_properties.to_value(|v| {
+                Value::Map(BTreeMap::from_iter(
+                    v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
+                ))
+            }),
+            self.distribution_mode.to_value(|v| Value::Symbol(v)),
+            self.filter.to_value(|v| {
+                Value::Map(BTreeMap::from_iter(
+                    v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
+                ))
+            }),
+            self.default_outcome.to_value(|v| v.to_string()),
+            self.outcomes.to_value(|v| {
+                Value::Array(
+                    v.iter()
+                        .map(|c| Value::Symbol(c.clone().into_bytes()))
+                        .collect(),
+                )
+            }),
+            self.capabilities.to_value(|v| {
+                Value::Array(
+                    v.iter()
+                        .map(|c| Value::Symbol(c.clone().into_bytes()))
+                        .collect(),
+                )
+            }),
+        ];
+        Value::Described(Box::new(DESC_SOURCE), Box::new(Value::List(args)))
+    }
+}
+
+impl ToValue for Target {
+    fn to_value(&self) -> Value {
+        let args = vec![
+            self.address.to_value(|v| Value::String(v)),
+            Value::Uint(self.durable.unwrap_or(TerminusDurability::None) as u32),
+            Value::Symbol(
+                self.expiry_policy
+                    .unwrap_or(TerminusExpiryPolicy::SessionEnd)
+                    .to_string(),
+            ),
+            Value::Uint(self.timeout.unwrap_or(0)),
+            Value::Bool(self.dynamic.unwrap_or(false)),
+            self.dynamic_node_properties.to_value(|v| {
+                Value::Map(BTreeMap::from_iter(
+                    v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
+                ))
+            }),
+            self.capabilities.to_value(|v| {
+                Value::Array(
+                    v.iter()
+                        .map(|c| Value::Symbol(c.clone().into_bytes()))
+                        .collect(),
+                )
+            }),
+        ];
+        Value::Described(Box::new(DESC_TARGET), Box::new(Value::List(args)))
+    }
+}
+
+impl ToValue for Attach {
+    fn to_value(&self) -> Value {
+        let args = vec![
+            Value::String(self.name),
+            Value::Uint(self.handle),
+            Value::Bool(if self.role == LinkRole::Sender {
+                false
+            } else {
+                true
+            }),
+            Value::Ubyte(self.snd_settle_mode.unwrap_or(SenderSettleMode::Mixed) as u8),
+            Value::Ubyte(self.rcv_settle_mode.unwrap_or(ReceiverSettleMode::First) as u8),
+            self.source.to_value(),
+            self.target.to_value(),
+            self.unsettled.to_value(|v| {
+                Value::Map(BTreeMap::from_iter(
+                    v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
+                ))
+            }),
+            Value::Bool(self.incomplete_unsettled.unwrap_or(false)),
+            self.initial_delivery_count.to_value(|v| Value::Uint(v)),
+            self.max_message_size.to_value(|v| Value::Ulong(v)),
+            self.offered_capabilities.to_value(|v| {
+                Value::Array(
+                    v.iter()
+                        .map(|c| Value::Symbol(c.clone().into_bytes()))
+                        .collect(),
+                )
+            }),
+            self.desired_capabilities.to_value(|v| {
+                Value::Array(
+                    v.iter()
+                        .map(|c| Value::Symbol(c.clone().into_bytes()))
+                        .collect(),
+                )
+            }),
+            self.properties.to_value(|v| {
+                Value::Map(BTreeMap::from_iter(
+                    v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
+                ))
+            }),
+        ];
+        Value::Described(Box::new(DESC_ATTACH), Box::new(Value::List(args)))
     }
 }
 
