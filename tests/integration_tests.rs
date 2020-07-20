@@ -20,31 +20,35 @@ fn client() {
     opts.username = Some("test".to_string());
     opts.password = Some("test".to_string());
     opts.sasl_mechanism = Some(SaslMechanism::Plain);
-    let mut connection = connect("localhost", 5672, opts).expect("Error opening connection");
+
+    println!("REGISTERING");
+    let mut connection = connect(2, "localhost", 5672, opts).expect("Error opening connection");
 
     let mut driver = ConnectionDriver::new();
 
-    let client = driver.register(connection);
+    driver.register(connection);
 
     let mut event_buffer = EventBuffer::new();
 
     loop {
         match driver.poll(&mut event_buffer) {
-            Ok(Some(handle)) => {
-                let conn = driver.connection(&handle).unwrap();
+            Ok(_) => {
                 for event in event_buffer.drain(..) {
                     match event {
-                        Event::ConnectionInit => {
+                        Event::ConnectionInit(cid) => {
                             println!("Opening connection!");
+                            let conn = driver.connection(cid).unwrap();
                             conn.open();
                         }
-                        Event::RemoteOpen(_) => {
+                        Event::RemoteOpen(cid, _) => {
                             println!("Remote opened!");
+                            let conn = driver.connection(cid).unwrap();
                             let session = conn.create_session();
                             session.open();
                         }
-                        Event::RemoteBegin(chan, _) => {
+                        Event::RemoteBegin(cid, chan, _) => {
                             println!("Remote begin");
+                            let conn = driver.connection(cid).unwrap();
                             let session = conn.get_session(chan).unwrap();
                             let sender = session.create_sender(Some("a"));
                             sender.open();
@@ -55,7 +59,8 @@ fn client() {
                             }))
                             */
                         }
-                        Event::RemoteClose(close) => {
+                        Event::RemoteClose(cid, close) => {
+                            let conn = driver.connection(cid).unwrap();
                             println!(
                                 "Received close from peer ({:?}), closing connection!",
                                 close
@@ -67,10 +72,6 @@ fn client() {
                         }
                     }
                 }
-            }
-            Ok(None) => {
-                thread::sleep(time::Duration::from_millis(100));
-                continue;
             }
             Err(e) => {
                 println!("Got error: {:?}", e);
@@ -95,28 +96,30 @@ fn server() {
 
     let connection = listener.accept().unwrap();
 
-    let handle = driver.register(connection);
+    driver.register(connection);
 
     let mut event_buffer = EventBuffer::new();
     loop {
         match driver.poll(&mut event_buffer) {
-            Ok(Some(handle)) => {
-                let conn = driver.connection(&handle).unwrap();
+            Ok(_) => {
                 for event in event_buffer.drain(..) {
                     match event {
-                        Event::ConnectionInit => {}
-                        Event::RemoteOpen(_) => {
+                        Event::ConnectionInit(_) => {}
+                        Event::RemoteOpen(cid, _) => {
                             println!("Remote opened!");
+                            let conn = driver.connection(cid).unwrap();
                             conn.open();
                         }
-                        Event::RemoteBegin(chan, _) => {
+                        Event::RemoteBegin(cid, chan, _) => {
                             println!("Remote begin");
+                            let conn = driver.connection(cid).unwrap();
 
                             let session = conn.get_session(chan).unwrap();
                             session.open();
                         }
-                        Event::RemoteClose(_) => {
+                        Event::RemoteClose(cid, _) => {
                             println!("Received close from peer, closing connection!");
+                            let conn = driver.connection(cid).unwrap();
                             conn.close(None);
                         }
                         e => {
@@ -124,10 +127,6 @@ fn server() {
                         }
                     }
                 }
-            }
-            Ok(None) => {
-                thread::sleep(time::Duration::from_millis(100));
-                continue;
             }
             Err(e) => {
                 println!("Got error: {:?}", e);

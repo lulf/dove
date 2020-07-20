@@ -7,12 +7,11 @@ use byteorder::NetworkEndian;
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
 use std::collections::BTreeMap;
-use std::convert::From;
+use std::fmt;
 use std::io::Read;
 use std::io::Write;
 use std::iter::FromIterator;
 use std::vec::Vec;
-use uuid::Uuid;
 
 use crate::error::*;
 use crate::sasl::*;
@@ -179,6 +178,12 @@ pub enum TerminusExpiryPolicy {
     SessionEnd,
     ConnectionClose,
     Never,
+}
+
+impl fmt::Display for TerminusExpiryPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -583,6 +588,7 @@ impl ToValue for Begin {
     }
 }
 
+/*
 impl ToValue for Source {
     fn to_value(&self) -> Value {
         let args = vec![
@@ -591,10 +597,11 @@ impl ToValue for Source {
             Value::Symbol(
                 self.expiry_policy
                     .unwrap_or(TerminusExpiryPolicy::SessionEnd)
-                    .to_string(),
+                    .to_string()
+                    .into_bytes(),
             ),
             Value::Uint(self.timeout.unwrap_or(0)),
-            Value::Bool(self.dynamic.unwrap_or(false)),
+            Value::UBool(self.dynamic.unwrap_or(false)),
             self.dynamic_node_properties.to_value(|v| {
                 Value::Map(BTreeMap::from_iter(
                     v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
@@ -700,6 +707,7 @@ impl ToValue for Attach {
         Value::Described(Box::new(DESC_ATTACH), Box::new(Value::List(args)))
     }
 }
+*/
 
 impl ToValue for End {
     fn to_value(&self) -> Value {
@@ -732,7 +740,7 @@ impl ToValue for Close {
 }
 
 impl FrameHeader {
-    pub fn decode(reader: &mut Read) -> Result<FrameHeader> {
+    pub fn decode(reader: &mut dyn Read) -> Result<FrameHeader> {
         Ok(FrameHeader {
             size: reader.read_u32::<NetworkEndian>()?,
             doff: reader.read_u8()?,
@@ -741,7 +749,7 @@ impl FrameHeader {
         })
     }
 
-    pub fn encode(self: &Self, writer: &mut Write) -> Result<()> {
+    pub fn encode(self: &Self, writer: &mut dyn Write) -> Result<()> {
         writer.write_u32::<NetworkEndian>(self.size)?;
         writer.write_u8(self.doff)?;
         writer.write_u8(self.frame_type)?;
@@ -751,7 +759,7 @@ impl FrameHeader {
 }
 
 impl Frame {
-    pub fn encode(self: &Self, writer: &mut Write) -> Result<usize> {
+    pub fn encode(self: &Self, writer: &mut dyn Write) -> Result<usize> {
         let mut header: FrameHeader = FrameHeader {
             size: 8,
             doff: 2,
@@ -806,7 +814,7 @@ impl Frame {
         Ok(header.size as usize)
     }
 
-    pub fn decode(header: FrameHeader, reader: &mut Read) -> Result<Frame> {
+    pub fn decode(header: FrameHeader, reader: &mut dyn Read) -> Result<Frame> {
         // Read off extended header not in use
         let mut doff = header.doff;
         while doff > 2 {

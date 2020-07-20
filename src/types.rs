@@ -98,12 +98,12 @@ const I8_MAX: usize = std::i8::MAX as usize;
 const LIST8_MAX: usize = (std::u8::MAX as usize) - 1;
 const LIST32_MAX: usize = (std::u32::MAX as usize) - 4;
 
-pub fn encode_value(value: &Value, writer: &mut Write) -> Result<()> {
+pub fn encode_value(value: &Value, writer: &mut dyn Write) -> Result<()> {
     encode_value_internal(value, writer)?;
     Ok(())
 }
 
-fn encode_value_internal(value: &Value, writer: &mut Write) -> Result<TypeCode> {
+fn encode_value_internal(value: &Value, writer: &mut dyn Write) -> Result<TypeCode> {
     match value {
         Value::Described(descriptor, value) => {
             writer.write_u8(0)?;
@@ -319,12 +319,12 @@ fn encode_value_internal(value: &Value, writer: &mut Write) -> Result<TypeCode> 
     }
 }
 
-pub fn decode_value(reader: &mut Read) -> Result<Value> {
+pub fn decode_value(reader: &mut dyn Read) -> Result<Value> {
     let raw_code: u8 = reader.read_u8()?;
     decode_value_with_ctor(raw_code, reader)
 }
 
-fn decode_value_with_ctor(raw_code: u8, reader: &mut Read) -> Result<Value> {
+fn decode_value_with_ctor(raw_code: u8, reader: &mut dyn Read) -> Result<Value> {
     let code = decode_type(raw_code)?;
     match code {
         TypeCode::Described => {

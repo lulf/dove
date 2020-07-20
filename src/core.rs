@@ -3,9 +3,7 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
-use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::convert::From;
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::time::Duration;
@@ -16,7 +14,6 @@ use crate::error::*;
 use crate::framing::*;
 use crate::sasl::*;
 use crate::transport::*;
-use crate::types::*;
 
 #[derive(Debug)]
 pub struct ConnectionOptions<'a> {
@@ -47,6 +44,8 @@ pub struct Container {
     id: String,
 }
 
+type ConnectionId = usize;
+
 #[derive(Debug)]
 enum ConnectionState {
     Start,
@@ -66,18 +65,14 @@ enum ConnectionState {
 const AMQP_10_HEADER: ProtocolHeader = ProtocolHeader::AMQP(Version(1, 0, 0));
 const SASL_10_HEADER: ProtocolHeader = ProtocolHeader::SASL(Version(1, 0, 0));
 
-type Handle = usize;
-
 #[derive(Debug)]
 pub struct ConnectionDriver {
-    connections: HashMap<Handle, Connection>,
-    handles: Vec<Handle>,
-    id_counter: usize,
-    last_checked: Handle,
+    connections: HashMap<ConnectionId, Connection>,
 }
 
 #[derive(Debug)]
 pub struct Connection {
+    pub id: ConnectionId,
     pub container_id: String,
     pub hostname: String,
     pub channel_max: u16,
@@ -115,24 +110,25 @@ pub struct Session {
     state: SessionState,
     opened: bool,
     closed: bool,
-    senders: Vec<Sender>,
+    links: Vec<Link>,
 }
 
 #[derive(Debug)]
-pub struct Link {}
+pub struct Link {
+    opened: bool,
+}
 
-#[derive(Debug)]
-pub struct Sender {}
-
-#[derive(Debug)]
-pub struct Receiver {}
-
-pub fn connect(host: &str, port: u16, opts: ConnectionOptions) -> Result<Connection> {
+pub fn connect(
+    id: ConnectionId,
+    host: &str,
+    port: u16,
+    opts: ConnectionOptions,
+) -> Result<Connection> {
     let stream = TcpStream::connect(format!("{}:{}", host, port))?;
     // TODO: SASL support
     let transport: Transport = Transport::new(stream, 1024)?;
 
-    let mut connection = Connection::new(opts.container_id, host, transport);
+    let mut connection = Connection::new(id, opts.container_id, host, transport);
     if opts.username.is_some() || opts.password.is_some() || opts.sasl_mechanism.is_some() {
         connection.sasl = Some(Sasl {
             role: SaslRole::Client(SaslClient {
@@ -151,6 +147,7 @@ pub struct Listener {
     pub listener: TcpListener,
     pub container_id: String,
     pub sasl_mechanisms: Option<Vec<SaslMechanism>>,
+    id_counter: usize,
 }
 
 pub fn listen(host: &str, port: u16, opts: ListenOptions) -> Result<Listener> {
@@ -159,14 +156,20 @@ pub fn listen(host: &str, port: u16, opts: ListenOptions) -> Result<Listener> {
         listener: listener,
         container_id: opts.container_id.to_string(),
         sasl_mechanisms: None,
+        id_counter: 0,
     })
 }
 
 impl Listener {
-    pub fn accept(&self) -> Result<Connection> {
+    pub fn accept(&mut self) -> Result<Connection> {
         let (stream, addr) = self.listener.accept()?;
         let transport: Transport = Transport::new(stream, 1024)?;
+
+        let id = self.id_counter;
+        self.id_counter += 1;
+
         let mut connection = Connection::new(
+            id,
             self.container_id.as_str(),
             addr.ip().to_string().as_str(),
             transport,
@@ -180,14 +183,14 @@ pub type EventBuffer = Vec<Event>;
 
 #[derive(Debug)]
 pub enum Event {
-    ConnectionInit,
-    RemoteOpen(Open),
-    LocalOpen(Open),
-    RemoteClose(Close),
-    LocalClose(Option<ErrorCondition>),
-    SessionInit(ChannelId),
-    LocalBegin(ChannelId, Begin),
-    RemoteBegin(ChannelId, Begin),
+    ConnectionInit(ConnectionId),
+    RemoteOpen(ConnectionId, Open),
+    LocalOpen(ConnectionId, Open),
+    RemoteClose(ConnectionId, Close),
+    LocalClose(ConnectionId, Option<ErrorCondition>),
+    SessionInit(ConnectionId, ChannelId),
+    LocalBegin(ConnectionId, ChannelId, Begin),
+    RemoteBegin(ConnectionId, ChannelId, Begin),
     /*
     LocalEnd(ChannelId, End),
     RemoteEnd(ChannelId, End),
@@ -198,14 +201,7 @@ impl ConnectionDriver {
     pub fn new() -> ConnectionDriver {
         ConnectionDriver {
             connections: HashMap::new(),
-            handles: Vec::new(),
-            id_counter: 0,
-            last_checked: 0,
         }
-    }
-
-    fn next_handle(self: &mut Self, current: Handle) -> Handle {
-        (current + 1) % self.connections.len()
     }
 
     /// Register a new connection to be managed by this driver.
@@ -214,44 +210,25 @@ impl ConnectionDriver {
     /// let connection = connect("localhost:5672")?;
     /// let driver = ConnectionDriver::new();
     /// let handle = driver.register(connection);
-    pub fn register(self: &mut Self, connection: Connection) -> Handle {
-        let handle = self.id_counter;
-        self.connections.insert(handle, connection);
-        self.handles.push(handle);
-        self.id_counter += 1;
-        handle
+    pub fn register(self: &mut Self, connection: Connection) {
+        self.connections.insert(connection.id, connection);
     }
 
-    pub fn connection(self: &mut Self, handle: &Handle) -> Option<&mut Connection> {
-        self.connections.get_mut(handle)
+    pub fn connection(self: &mut Self, handle: ConnectionId) -> Option<&mut Connection> {
+        self.connections.get_mut(&handle)
     }
 
     // Poll for events on one of the handles registered with this driver and push the events to the provided buffer.
-    pub fn poll(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<Option<Handle>> {
-        if self.handles.len() > 0 {
-            let last: Handle = self.last_checked;
-            loop {
-                let next = self.next_handle(self.last_checked);
-
-                let conn = self
-                    .connections
-                    .get_mut(&next)
-                    .expect(format!("Handle {:?} missing!", next).as_str());
-                let found = conn.poll(event_buffer);
-                self.last_checked = next;
-                match found {
-                    Err(AmqpError::IoError(ref e))
-                        if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                    Err(e) => return Err(e),
-                    Ok(true) => return Ok(Some(next)),
-                    _ => {}
-                }
-                if next == last {
-                    return Ok(None);
-                }
+    pub fn poll(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
+        for (id, conn) in self.connections.iter_mut() {
+            let found = conn.poll(event_buffer);
+            match found {
+                Err(AmqpError::IoError(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+                _ => {}
             }
         }
-        Ok(None)
+        Ok(())
     }
 }
 
@@ -268,8 +245,14 @@ fn unwrap_frame(frame: Frame) -> Result<(ChannelId, Option<Performative>)> {
 }
 
 impl Connection {
-    pub fn new(container_id: &str, hostname: &str, transport: Transport) -> Connection {
+    pub fn new(
+        id: ConnectionId,
+        container_id: &str,
+        hostname: &str,
+        transport: Transport,
+    ) -> Connection {
         Connection {
+            id: id,
             container_id: container_id.to_string(),
             hostname: hostname.to_string(),
             idle_timeout: Duration::from_millis(5000),
@@ -318,7 +301,7 @@ impl Connection {
             opened: false,
             closed: false,
             state: SessionState::Unmapped,
-            senders: Vec::new(),
+            links: Vec::new(),
         };
         self.sessions.insert(chan, s);
         channel_id.map(|c| self.remote_channel_map.insert(c, chan));
@@ -354,7 +337,7 @@ impl Connection {
                         AMQP_10_HEADER if self.skip_sasl() => {
                             self.transport.write_protocol_header(&AMQP_10_HEADER)?;
                             self.state = ConnectionState::HdrExch;
-                            event_buffer.push(Event::ConnectionInit);
+                            event_buffer.push(Event::ConnectionInit(self.id));
                         }
                         _ => {
                             self.transport.write_protocol_header(&AMQP_10_HEADER)?;
@@ -381,7 +364,7 @@ impl Connection {
                         }
                         AMQP_10_HEADER if self.skip_sasl() => {
                             self.state = ConnectionState::HdrExch;
-                            event_buffer.push(Event::ConnectionInit);
+                            event_buffer.push(Event::ConnectionInit(self.id));
                         }
                         _ => {
                             // self.transport.write_protocol_header(&AMQP_10_HEADER)?;
@@ -417,7 +400,7 @@ impl Connection {
                         match body {
                             Performative::Open(open) => {
                                 self.update_connection_info(&open);
-                                event_buffer.push(Event::RemoteOpen(open));
+                                event_buffer.push(Event::RemoteOpen(self.id, open));
                                 self.state = ConnectionState::OpenRcvd;
                             }
                             _ => return Err(AmqpError::framing_error()),
@@ -442,11 +425,11 @@ impl Connection {
                         match body {
                             Performative::Open(open) => {
                                 self.update_connection_info(&open);
-                                event_buffer.push(Event::RemoteOpen(open));
+                                event_buffer.push(Event::RemoteOpen(self.id, open));
                                 self.state = ConnectionState::Opened;
                             }
                             Performative::Close(close) => {
-                                event_buffer.push(Event::RemoteClose(close));
+                                event_buffer.push(Event::RemoteClose(self.id, close));
                                 self.state = ConnectionState::ClosePipe;
                             }
                             _ => return Err(AmqpError::framing_error()),
@@ -471,7 +454,7 @@ impl Connection {
                 if let Some(body) = body {
                     match body {
                         Performative::Open(open) => {
-                            event_buffer.push(Event::RemoteOpen(open));
+                            event_buffer.push(Event::RemoteOpen(self.id, open));
                             self.state = ConnectionState::CloseSent;
                         }
                         _ => return Err(AmqpError::framing_error()),
@@ -491,7 +474,7 @@ impl Connection {
                 if let Some(body) = body {
                     match body {
                         Performative::Close(close) => {
-                            event_buffer.push(Event::RemoteClose(close));
+                            event_buffer.push(Event::RemoteClose(self.id, close));
                             self.state = ConnectionState::End;
                         }
                         _ => return Err(AmqpError::framing_error()),
@@ -515,13 +498,15 @@ impl Connection {
             match session.state {
                 SessionState::Unmapped => {
                     if session.opened {
-                        let frame = session.local_begin(&mut self.transport, event_buffer)?;
+                        let frame =
+                            session.local_begin(self.id, &mut self.transport, event_buffer)?;
                         session.state = SessionState::BeginSent;
                     }
                 }
                 SessionState::BeginRcvd => {
                     if session.opened {
-                        let frame = session.local_begin(&mut self.transport, event_buffer)?;
+                        let frame =
+                            session.local_begin(self.id, &mut self.transport, event_buffer)?;
                         session.state = SessionState::Mapped;
                     }
                 }
@@ -573,7 +558,7 @@ impl Connection {
         let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
         if let Some(local_channel) = local_channel_opt {
             let session = self.sessions.get_mut(&local_channel).unwrap();
-            consumed |= session.process_frame(body, event_buffer)?;
+            consumed |= session.process_frame(self.id, body, event_buffer)?;
         }
         if !consumed {
             Err(AmqpError::framing_error())
@@ -592,17 +577,19 @@ impl Connection {
         Ok(match body {
             // TODO: Handle sessions, links etc...
             Performative::Begin(begin) => {
+                let id = self.id;
                 let session = self.session_internal(Some(channel_id));
                 session.state = SessionState::BeginRcvd;
                 session.remote_channel = Some(channel_id);
                 let local_channel = session.local_channel;
                 //self.remote_channel_map .insert(channel_id, session.local_channel);
-                event_buffer.push(Event::RemoteBegin(session.local_channel, begin.clone()));
+                event_buffer.push(Event::RemoteBegin(id, session.local_channel, begin.clone()));
                 true
             }
             Performative::Close(close) => {
                 if channel_id == 0 {
-                    event_buffer.push(Event::RemoteClose(close.clone()));
+                    let id = self.id;
+                    event_buffer.push(Event::RemoteClose(id, close.clone()));
                     self.state = ConnectionState::CloseRcvd;
                     true
                 } else {
@@ -632,7 +619,7 @@ impl Connection {
         }) = frame
         {
             if let Some(Performative::Open(data)) = body {
-                event_buffer.push(Event::LocalOpen(data));
+                event_buffer.push(Event::LocalOpen(self.id, data));
             }
         }
         Ok(())
@@ -649,7 +636,7 @@ impl Connection {
         self.transport.write_frame(&frame)?;
 
         let condition = self.close_condition.clone();
-        event_buffer.push(Event::LocalClose(condition));
+        event_buffer.push(Event::LocalClose(self.id, condition));
         Ok(())
     }
 }
@@ -661,6 +648,7 @@ impl Session {
 
     fn process_frame(
         self: &mut Self,
+        connectionId: ConnectionId,
         performative: Performative,
         event_buffer: &mut EventBuffer,
     ) -> Result<bool> {
@@ -668,7 +656,7 @@ impl Session {
             SessionState::Unmapped => match performative {
                 Performative::Begin(begin) => {
                     self.remote_channel = begin.remote_channel;
-                    event_buffer.push(Event::RemoteBegin(self.local_channel, begin));
+                    event_buffer.push(Event::RemoteBegin(connectionId, self.local_channel, begin));
                     self.state = SessionState::BeginRcvd;
                     true
                 }
@@ -676,7 +664,7 @@ impl Session {
             },
             SessionState::BeginSent => match performative {
                 Performative::Begin(begin) => {
-                    event_buffer.push(Event::RemoteBegin(self.local_channel, begin));
+                    event_buffer.push(Event::RemoteBegin(connectionId, self.local_channel, begin));
                     self.state = SessionState::Mapped;
                     true
                 }
@@ -688,6 +676,7 @@ impl Session {
 
     fn local_begin(
         self: &mut Self,
+        connectionId: ConnectionId,
         transport: &mut Transport,
         event_buffer: &mut EventBuffer,
     ) -> Result<()> {
@@ -709,7 +698,7 @@ impl Session {
 
         if let Frame::AMQP(AmqpFrame { channel: _, body }) = frame {
             if let Some(Performative::Begin(data)) = body {
-                event_buffer.push(Event::LocalBegin(self.local_channel, data));
+                event_buffer.push(Event::LocalBegin(connectionId, self.local_channel, data));
             }
         }
         Ok(())
@@ -723,12 +712,14 @@ impl Session {
         Ok(())
     }
 
-    pub fn create_sender<'a>(self: &mut Self, address: Option<&'a str>) -> &mut Sender {
-        self.senders.push(Sender {});
-        self.senders.get_mut(0).unwrap()
+    pub fn create_sender<'a>(self: &mut Self, address: Option<&'a str>) -> &mut Link {
+        self.links.push(Link { opened: false });
+        self.links.get_mut(0).unwrap()
     }
 }
 
-impl Sender {
-    pub fn open(self: &mut Self) {}
+impl Link {
+    pub fn open(self: &mut Self) {
+        self.opened = true;
+    }
 }

@@ -26,7 +26,7 @@ const PROTOCOL_AMQP: [u8; 5] = [65, 77, 81, 80, 0];
 const PROTOCOL_SASL: [u8; 5] = [65, 77, 81, 80, 3];
 
 impl ProtocolHeader {
-    pub fn decode(reader: &mut Read) -> Result<ProtocolHeader> {
+    pub fn decode(reader: &mut dyn Read) -> Result<ProtocolHeader> {
         let mut protocol_type: [u8; 5] = [0; 5];
         reader.read(&mut protocol_type)?;
 
@@ -51,7 +51,7 @@ impl ProtocolHeader {
         }
     }
 
-    pub fn encode(&self, writer: &mut Write) -> Result<()> {
+    pub fn encode(&self, writer: &mut dyn Write) -> Result<()> {
         let mut header: [u8; 8] = [0; 8];
         match self {
             ProtocolHeader::AMQP(Version(major, minor, micro)) => {
@@ -96,7 +96,7 @@ impl ReadBuffer {
         &self.buffer[0..self.position]
     }
 
-    fn fill(self: &mut Self, reader: &mut Read) -> Result<&[u8]> {
+    fn fill(self: &mut Self, reader: &mut dyn Read) -> Result<&[u8]> {
         if self.position < self.capacity {
             let len = reader.read(&mut self.buffer[self.position..self.capacity])?;
             self.position += len;
