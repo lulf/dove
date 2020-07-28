@@ -179,6 +179,7 @@ impl Transport {
                     let frame = Frame::decode(header, &mut buf)?;
                     self.incoming.consume(frame_size)?;
                     self.last_received = Instant::now();
+                    println!("RX {:?}", frame);
                     return Ok(frame);
                 }
             } else {
