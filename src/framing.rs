@@ -788,7 +788,10 @@ impl Frame {
                         Performative::Close(close) => {
                             encode_value(&close.to_value(), &mut buf)?;
                         }
-                        _ => return Err(AmqpError::not_implemented()),
+                        _ => {
+                            println!("Unable to encode frame {:?}", self);
+                            return Err(AmqpError::not_implemented());
+                        }
                     }
                 }
             }

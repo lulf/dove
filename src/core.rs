@@ -205,10 +205,10 @@ pub enum Event {
     SessionInit(ConnectionId, ChannelId),
     LocalBegin(ConnectionId, ChannelId, Begin),
     RemoteBegin(ConnectionId, ChannelId, Begin),
-    /*
-    LocalEnd(ChannelId, End),
-    RemoteEnd(ChannelId, End),
-    */
+    LocalAttach(ConnectionId, ChannelId, Attach), /*
+                                                  LocalEnd(ChannelId, End),
+                                                  RemoteEnd(ChannelId, End),
+                                                  */
 }
 
 impl ConnectionDriver {
@@ -541,11 +541,18 @@ impl Connection {
                         match link.state {
                             LinkState::Unmapped => {
                                 if link.opened {
-                                    println!("OPENING LINKE LOCAL");
+                                    Self::local_attach(
+                                        link,
+                                        session.local_channel,
+                                        session.remote_channel.unwrap(),
+                                        self.id,
+                                        &mut self.tx_frames,
+                                        event_buffer,
+                                    );
+                                    link.state = LinkState::AttachSent;
                                 }
-                                link.state = LinkState::Mapped;
                             }
-                            LinkState::Mapped => {}
+                            LinkState::AttachSent | LinkState::Mapped => {}
                             _ => return Err(AmqpError::not_implemented()),
                         }
                     }
@@ -629,6 +636,7 @@ impl Connection {
                 }
             }
             Performative::Attach(attach) => {
+                println!("Remote ATTACH");
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
                 // Lookup session
                 if let Some(local_channel) = local_channel_opt {
@@ -710,6 +718,39 @@ impl Connection {
             session.local_channel,
             data,
         ));
+    }
+
+    fn local_attach(
+        link: &Link,
+        local_channel: ChannelId,
+        remote_channel: ChannelId,
+        connection_id: ConnectionId,
+        tx_frames: &mut Vec<Frame>,
+        event_buffer: &mut EventBuffer,
+    ) {
+        let data = Attach {
+            name: link.name.clone(),
+            handle: 0,
+            role: LinkRole::Sender,
+            snd_settle_mode: None,
+            rcv_settle_mode: None,
+            source: None,
+            target: None,
+            unsettled: None,
+            incomplete_unsettled: None,
+            initial_delivery_count: None,
+            max_message_size: None,
+            offered_capabilities: None,
+            desired_capabilities: None,
+            properties: None,
+        };
+        let frame = Frame::AMQP(AmqpFrame {
+            channel: remote_channel,
+            body: Some(Performative::Attach(data.clone())),
+        });
+
+        tx_frames.push(frame);
+        event_buffer.push(Event::LocalAttach(connection_id, local_channel, data));
     }
 }
 
