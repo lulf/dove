@@ -14,7 +14,7 @@ use std::vec::Vec;
 use crate::error::*;
 
 pub trait Encoder {
-    fn encode(&self, writer: &mut dyn Write) -> Result<()>;
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode>;
 }
 
 pub trait Decoder: Sized {
@@ -107,233 +107,233 @@ const I8_MAX: usize = std::i8::MAX as usize;
 const LIST8_MAX: usize = (std::u8::MAX as usize) - 1;
 const LIST32_MAX: usize = (std::u32::MAX as usize) - 4;
 
-impl Encoder for Value {
-    fn encode(&self, writer: &mut dyn Write) -> Result<()> {
-        encode_value_internal(&self, writer)?;
-        Ok(())
+impl Encoder for String {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        if self.len() > U8_MAX {
+            writer.write_u8(TypeCode::Str32 as u8)?;
+            writer.write_u32::<NetworkEndian>(self.len() as u32)?;
+            writer.write(self.as_bytes())?;
+            Ok(TypeCode::Str32)
+        } else {
+            writer.write_u8(TypeCode::Str8 as u8)?;
+            writer.write_u8(self.len() as u8)?;
+            writer.write(self.as_bytes())?;
+            Ok(TypeCode::Str8)
+        }
     }
 }
 
-fn encode_value_internal(value: &Value, writer: &mut dyn Write) -> Result<TypeCode> {
-    match value {
-        Value::Described(descriptor, value) => {
-            writer.write_u8(0)?;
-            descriptor.encode(writer)?;
-            value.encode(writer)?;
-            Ok(TypeCode::Described)
-        }
-        Value::Null => {
-            writer.write_u8(TypeCode::Null as u8)?;
-            Ok(TypeCode::Null)
-        }
-        Value::Bool(value) => {
-            let code = if *value {
-                TypeCode::Booleantrue
-            } else {
-                TypeCode::Booleanfalse
-            };
-            writer.write_u8(code as u8)?;
-            Ok(code)
-        }
-        Value::String(val) => {
-            if val.len() > U8_MAX {
-                writer.write_u8(TypeCode::Str32 as u8)?;
-                writer.write_u32::<NetworkEndian>(val.len() as u32)?;
-                writer.write(val.as_bytes())?;
-                Ok(TypeCode::Str32)
-            } else {
-                writer.write_u8(TypeCode::Str8 as u8)?;
-                writer.write_u8(val.len() as u8)?;
-                writer.write(val.as_bytes())?;
-                Ok(TypeCode::Str8)
+impl Encoder for Value {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let value = self;
+        match value {
+            Value::Described(descriptor, value) => {
+                writer.write_u8(0)?;
+                descriptor.encode(writer)?;
+                value.encode(writer)?;
+                Ok(TypeCode::Described)
             }
-        }
-        Value::Symbol(val) => {
-            if val.len() > U8_MAX {
-                writer.write_u8(TypeCode::Sym32 as u8)?;
-                writer.write_u32::<NetworkEndian>(val.len() as u32)?;
-                writer.write(&val[..])?;
-                Ok(TypeCode::Sym32)
-            } else {
-                writer.write_u8(TypeCode::Sym8 as u8)?;
-                writer.write_u8(val.len() as u8)?;
-                writer.write(&val[..])?;
-                Ok(TypeCode::Sym8)
-            }
-        }
-        Value::Binary(val) => {
-            if val.len() > U8_MAX {
-                writer.write_u8(TypeCode::Bin32 as u8)?;
-                writer.write_u32::<NetworkEndian>(val.len() as u32)?;
-                writer.write(&val[..])?;
-                Ok(TypeCode::Bin32)
-            } else {
-                writer.write_u8(TypeCode::Bin8 as u8)?;
-                writer.write_u8(val.len() as u8)?;
-                writer.write(&val[..])?;
-                Ok(TypeCode::Bin8)
-            }
-        }
-        Value::Ubyte(val) => {
-            writer.write_u8(TypeCode::Ubyte as u8)?;
-            writer.write_u8(*val)?;
-            Ok(TypeCode::Ubyte)
-        }
-        Value::Ushort(val) => {
-            writer.write_u8(TypeCode::Ushort as u8)?;
-            writer.write_u16::<NetworkEndian>(*val)?;
-            Ok(TypeCode::Ushort)
-        }
-        Value::Uint(val) => {
-            if *val > U8_MAX as u32 {
-                writer.write_u8(TypeCode::Uint as u8)?;
-                writer.write_u32::<NetworkEndian>(*val)?;
-                Ok(TypeCode::Uint)
-            } else if *val > 0 {
-                writer.write_u8(TypeCode::Uintsmall as u8)?;
-                writer.write_u8(*val as u8)?;
-                Ok(TypeCode::Uintsmall)
-            } else {
-                writer.write_u8(TypeCode::Uint0 as u8)?;
-                Ok(TypeCode::Uint0)
-            }
-        }
-        Value::Ulong(val) => {
-            if *val > U8_MAX as u64 {
-                writer.write_u8(TypeCode::Ulong as u8)?;
-                writer.write_u64::<NetworkEndian>(*val)?;
-                Ok(TypeCode::Ulong)
-            } else if *val > 0 {
-                writer.write_u8(TypeCode::Ulongsmall as u8)?;
-                writer.write_u8(*val as u8)?;
-                Ok(TypeCode::Ulongsmall)
-            } else {
-                writer.write_u8(TypeCode::Ulong0 as u8)?;
-                Ok(TypeCode::Ulong0)
-            }
-        }
-        Value::Byte(val) => {
-            writer.write_u8(TypeCode::Byte as u8)?;
-            writer.write_i8(*val)?;
-            Ok(TypeCode::Byte)
-        }
-        Value::Short(val) => {
-            writer.write_u8(TypeCode::Short as u8)?;
-            writer.write_i16::<NetworkEndian>(*val)?;
-            Ok(TypeCode::Short)
-        }
-        Value::Int(val) => {
-            if *val > I8_MAX as i32 {
-                writer.write_u8(TypeCode::Int as u8)?;
-                writer.write_i32::<NetworkEndian>(*val)?;
-                Ok(TypeCode::Int)
-            } else {
-                writer.write_u8(TypeCode::Intsmall as u8)?;
-                writer.write_i8(*val as i8)?;
-                Ok(TypeCode::Intsmall)
-            }
-        }
-        Value::Long(val) => {
-            if *val > I8_MAX as i64 {
-                writer.write_u8(TypeCode::Long as u8)?;
-                writer.write_i64::<NetworkEndian>(*val)?;
-                Ok(TypeCode::Long)
-            } else {
-                writer.write_u8(TypeCode::Longsmall as u8)?;
-                writer.write_i8(*val as i8)?;
-                Ok(TypeCode::Longsmall)
-            }
-        }
-        Value::Array(vec) => {
-            let mut arraybuf = Vec::new();
-            let mut code = 0;
-            for v in vec.iter() {
-                let mut valuebuf = Vec::new();
-                v.encode(&mut valuebuf)?;
-                if code == 0 {
-                    code = valuebuf[0];
-                }
-                arraybuf.extend_from_slice(&valuebuf[1..]);
-            }
-
-            if arraybuf.len() > LIST32_MAX {
-                Err(AmqpError::amqp_error(
-                    condition::DECODE_ERROR,
-                    Some("Encoded array size cannot be longer than 4294967291 bytes"),
-                ))
-            } else if arraybuf.len() > LIST8_MAX {
-                writer.write_u8(TypeCode::Array32 as u8)?;
-                writer.write_u32::<NetworkEndian>((5 + arraybuf.len()) as u32)?;
-                writer.write_u32::<NetworkEndian>(vec.len() as u32)?;
-                writer.write_u8(code)?;
-                writer.write(&arraybuf[..]);
-                Ok(TypeCode::Array32)
-            } else if arraybuf.len() > 0 {
-                writer.write_u8(TypeCode::Array8 as u8)?;
-                writer.write_u8((2 + arraybuf.len()) as u8)?;
-                writer.write_u8(vec.len() as u8)?;
-                writer.write_u8(code)?;
-                writer.write(&arraybuf[..]);
-                Ok(TypeCode::Array8)
-            } else {
+            Value::Null => {
                 writer.write_u8(TypeCode::Null as u8)?;
                 Ok(TypeCode::Null)
             }
-        }
-        Value::List(vec) => {
-            let mut listbuf = Vec::new();
-            for v in vec.iter() {
-                v.encode(&mut listbuf)?;
+            Value::Bool(value) => {
+                let code = if *value {
+                    TypeCode::Booleantrue
+                } else {
+                    TypeCode::Booleanfalse
+                };
+                writer.write_u8(code as u8)?;
+                Ok(code)
             }
-
-            if listbuf.len() > LIST32_MAX {
-                Err(AmqpError::amqp_error(
-                    condition::DECODE_ERROR,
-                    Some("Encoded list size cannot be longer than 4294967291 bytes"),
-                ))
-            } else if listbuf.len() > LIST8_MAX {
-                writer.write_u8(TypeCode::List32 as u8)?;
-                writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
-                writer.write_u32::<NetworkEndian>(vec.len() as u32)?;
-                writer.write(&listbuf[..]);
-                Ok(TypeCode::List32)
-            } else if listbuf.len() > 0 {
-                writer.write_u8(TypeCode::List8 as u8)?;
-                writer.write_u8((1 + listbuf.len()) as u8)?;
-                writer.write_u8(vec.len() as u8)?;
-                writer.write(&listbuf[..]);
-                Ok(TypeCode::List8)
-            } else {
-                writer.write_u8(TypeCode::List0 as u8)?;
-                Ok(TypeCode::List0)
+            Value::String(val) => val.encode(writer),
+            Value::Symbol(val) => {
+                if val.len() > U8_MAX {
+                    writer.write_u8(TypeCode::Sym32 as u8)?;
+                    writer.write_u32::<NetworkEndian>(val.len() as u32)?;
+                    writer.write(&val[..])?;
+                    Ok(TypeCode::Sym32)
+                } else {
+                    writer.write_u8(TypeCode::Sym8 as u8)?;
+                    writer.write_u8(val.len() as u8)?;
+                    writer.write(&val[..])?;
+                    Ok(TypeCode::Sym8)
+                }
             }
-        }
-        Value::Map(m) => {
-            let mut listbuf = Vec::new();
-            for (key, value) in m {
-                key.encode(&mut listbuf)?;
-                value.encode(&mut listbuf)?;
+            Value::Binary(val) => {
+                if val.len() > U8_MAX {
+                    writer.write_u8(TypeCode::Bin32 as u8)?;
+                    writer.write_u32::<NetworkEndian>(val.len() as u32)?;
+                    writer.write(&val[..])?;
+                    Ok(TypeCode::Bin32)
+                } else {
+                    writer.write_u8(TypeCode::Bin8 as u8)?;
+                    writer.write_u8(val.len() as u8)?;
+                    writer.write(&val[..])?;
+                    Ok(TypeCode::Bin8)
+                }
             }
+            Value::Ubyte(val) => {
+                writer.write_u8(TypeCode::Ubyte as u8)?;
+                writer.write_u8(*val)?;
+                Ok(TypeCode::Ubyte)
+            }
+            Value::Ushort(val) => {
+                writer.write_u8(TypeCode::Ushort as u8)?;
+                writer.write_u16::<NetworkEndian>(*val)?;
+                Ok(TypeCode::Ushort)
+            }
+            Value::Uint(val) => {
+                if *val > U8_MAX as u32 {
+                    writer.write_u8(TypeCode::Uint as u8)?;
+                    writer.write_u32::<NetworkEndian>(*val)?;
+                    Ok(TypeCode::Uint)
+                } else if *val > 0 {
+                    writer.write_u8(TypeCode::Uintsmall as u8)?;
+                    writer.write_u8(*val as u8)?;
+                    Ok(TypeCode::Uintsmall)
+                } else {
+                    writer.write_u8(TypeCode::Uint0 as u8)?;
+                    Ok(TypeCode::Uint0)
+                }
+            }
+            Value::Ulong(val) => {
+                if *val > U8_MAX as u64 {
+                    writer.write_u8(TypeCode::Ulong as u8)?;
+                    writer.write_u64::<NetworkEndian>(*val)?;
+                    Ok(TypeCode::Ulong)
+                } else if *val > 0 {
+                    writer.write_u8(TypeCode::Ulongsmall as u8)?;
+                    writer.write_u8(*val as u8)?;
+                    Ok(TypeCode::Ulongsmall)
+                } else {
+                    writer.write_u8(TypeCode::Ulong0 as u8)?;
+                    Ok(TypeCode::Ulong0)
+                }
+            }
+            Value::Byte(val) => {
+                writer.write_u8(TypeCode::Byte as u8)?;
+                writer.write_i8(*val)?;
+                Ok(TypeCode::Byte)
+            }
+            Value::Short(val) => {
+                writer.write_u8(TypeCode::Short as u8)?;
+                writer.write_i16::<NetworkEndian>(*val)?;
+                Ok(TypeCode::Short)
+            }
+            Value::Int(val) => {
+                if *val > I8_MAX as i32 {
+                    writer.write_u8(TypeCode::Int as u8)?;
+                    writer.write_i32::<NetworkEndian>(*val)?;
+                    Ok(TypeCode::Int)
+                } else {
+                    writer.write_u8(TypeCode::Intsmall as u8)?;
+                    writer.write_i8(*val as i8)?;
+                    Ok(TypeCode::Intsmall)
+                }
+            }
+            Value::Long(val) => {
+                if *val > I8_MAX as i64 {
+                    writer.write_u8(TypeCode::Long as u8)?;
+                    writer.write_i64::<NetworkEndian>(*val)?;
+                    Ok(TypeCode::Long)
+                } else {
+                    writer.write_u8(TypeCode::Longsmall as u8)?;
+                    writer.write_i8(*val as i8)?;
+                    Ok(TypeCode::Longsmall)
+                }
+            }
+            Value::Array(vec) => {
+                let mut arraybuf = Vec::new();
+                let mut code = 0;
+                for v in vec.iter() {
+                    let mut valuebuf = Vec::new();
+                    v.encode(&mut valuebuf)?;
+                    if code == 0 {
+                        code = valuebuf[0];
+                    }
+                    arraybuf.extend_from_slice(&valuebuf[1..]);
+                }
 
-            let n_items = m.len() * 2;
+                if arraybuf.len() > LIST32_MAX {
+                    Err(AmqpError::amqp_error(
+                        condition::DECODE_ERROR,
+                        Some("Encoded array size cannot be longer than 4294967291 bytes"),
+                    ))
+                } else if arraybuf.len() > LIST8_MAX {
+                    writer.write_u8(TypeCode::Array32 as u8)?;
+                    writer.write_u32::<NetworkEndian>((5 + arraybuf.len()) as u32)?;
+                    writer.write_u32::<NetworkEndian>(vec.len() as u32)?;
+                    writer.write_u8(code)?;
+                    writer.write(&arraybuf[..]);
+                    Ok(TypeCode::Array32)
+                } else if arraybuf.len() > 0 {
+                    writer.write_u8(TypeCode::Array8 as u8)?;
+                    writer.write_u8((2 + arraybuf.len()) as u8)?;
+                    writer.write_u8(vec.len() as u8)?;
+                    writer.write_u8(code)?;
+                    writer.write(&arraybuf[..]);
+                    Ok(TypeCode::Array8)
+                } else {
+                    writer.write_u8(TypeCode::Null as u8)?;
+                    Ok(TypeCode::Null)
+                }
+            }
+            Value::List(vec) => {
+                let mut listbuf = Vec::new();
+                for v in vec.iter() {
+                    v.encode(&mut listbuf)?;
+                }
 
-            if listbuf.len() > LIST32_MAX {
-                Err(AmqpError::amqp_error(
-                    condition::DECODE_ERROR,
-                    Some("Encoded map size cannot be longer than 4294967291 bytes"),
-                ))
-            } else if listbuf.len() > LIST8_MAX || n_items > U8_MAX {
-                writer.write_u8(TypeCode::Map32 as u8)?;
-                writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
-                writer.write_u32::<NetworkEndian>(n_items as u32)?;
-                writer.write(&listbuf[..]);
-                Ok(TypeCode::Map32)
-            } else {
-                writer.write_u8(TypeCode::Map8 as u8)?;
-                writer.write_u8((1 + listbuf.len()) as u8)?;
-                writer.write_u8(n_items as u8)?;
-                writer.write(&listbuf[..]);
-                Ok(TypeCode::Map8)
+                if listbuf.len() > LIST32_MAX {
+                    Err(AmqpError::amqp_error(
+                        condition::DECODE_ERROR,
+                        Some("Encoded list size cannot be longer than 4294967291 bytes"),
+                    ))
+                } else if listbuf.len() > LIST8_MAX {
+                    writer.write_u8(TypeCode::List32 as u8)?;
+                    writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
+                    writer.write_u32::<NetworkEndian>(vec.len() as u32)?;
+                    writer.write(&listbuf[..]);
+                    Ok(TypeCode::List32)
+                } else if listbuf.len() > 0 {
+                    writer.write_u8(TypeCode::List8 as u8)?;
+                    writer.write_u8((1 + listbuf.len()) as u8)?;
+                    writer.write_u8(vec.len() as u8)?;
+                    writer.write(&listbuf[..]);
+                    Ok(TypeCode::List8)
+                } else {
+                    writer.write_u8(TypeCode::List0 as u8)?;
+                    Ok(TypeCode::List0)
+                }
+            }
+            Value::Map(m) => {
+                let mut listbuf = Vec::new();
+                for (key, value) in m {
+                    key.encode(&mut listbuf)?;
+                    value.encode(&mut listbuf)?;
+                }
+
+                let n_items = m.len() * 2;
+
+                if listbuf.len() > LIST32_MAX {
+                    Err(AmqpError::amqp_error(
+                        condition::DECODE_ERROR,
+                        Some("Encoded map size cannot be longer than 4294967291 bytes"),
+                    ))
+                } else if listbuf.len() > LIST8_MAX || n_items > U8_MAX {
+                    writer.write_u8(TypeCode::Map32 as u8)?;
+                    writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
+                    writer.write_u32::<NetworkEndian>(n_items as u32)?;
+                    writer.write(&listbuf[..]);
+                    Ok(TypeCode::Map32)
+                } else {
+                    writer.write_u8(TypeCode::Map8 as u8)?;
+                    writer.write_u8((1 + listbuf.len()) as u8)?;
+                    writer.write_u8(n_items as u8)?;
+                    writer.write(&listbuf[..]);
+                    Ok(TypeCode::Map8)
+                }
             }
         }
     }
@@ -517,7 +517,7 @@ fn decode_value_with_ctor(raw_code: u8, reader: &mut dyn Read) -> Result<Value> 
 
 #[repr(u8)]
 #[derive(Clone, PartialEq, Debug, PartialOrd, Copy)]
-enum TypeCode {
+pub enum TypeCode {
     Described = 0x00,
     Null = 0x40,
     Boolean = 0x56,

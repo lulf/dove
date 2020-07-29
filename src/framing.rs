@@ -67,14 +67,15 @@ pub struct SaslOutcome {
 pub type SaslCode = u8;
 
 impl Encoder for SaslInit {
-    fn encode(&self, writer: &mut dyn Write) -> Result<()> {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let val = vec![
             Value::Symbol(self.mechanism.clone().into_bytes()),
             self.initial_response
                 .to_value(|v| Value::Binary(v.to_vec())),
             self.hostname.to_value(|v| Value::String(v.to_string())),
         ];
-        Value::Described(Box::new(DESC_SASL_INIT), Box::new(Value::List(val))).encode(writer)
+        Value::Described(Box::new(DESC_SASL_INIT), Box::new(Value::List(val))).encode(writer)?;
+        Ok(TypeCode::Described)
     }
 }
 
@@ -520,7 +521,7 @@ impl Close {
 }
 
 impl Encoder for Open {
-    fn encode(&self, writer: &mut dyn Write) -> Result<()> {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let args = vec![
             Value::String(self.container_id.clone()),
             self.hostname.to_value(|v| Value::String(v.to_string())),
@@ -561,12 +562,13 @@ impl Encoder for Open {
                 ))
             }),
         ];
-        Value::Described(Box::new(DESC_OPEN), Box::new(Value::List(args))).encode(writer)
+        Value::Described(Box::new(DESC_OPEN), Box::new(Value::List(args))).encode(writer)?;
+        Ok(TypeCode::Described)
     }
 }
 
 impl Encoder for Begin {
-    fn encode(&self, writer: &mut dyn Write) -> Result<()> {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let remote_channel = self
             .remote_channel
             .map_or_else(|| Value::Null, |c| Value::Ushort(c));
@@ -596,7 +598,8 @@ impl Encoder for Begin {
                 ))
             }),
         ];
-        Value::Described(Box::new(DESC_BEGIN), Box::new(Value::List(args))).encode(writer)
+        Value::Described(Box::new(DESC_BEGIN), Box::new(Value::List(args))).encode(writer)?;
+        Ok(TypeCode::Described)
     }
 }
 
@@ -677,7 +680,7 @@ impl Target {
 }
 
 impl Encoder for Attach {
-    fn encode(&self, writer: &mut dyn Write) -> Result<()> {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let args = vec![
             Value::String(self.name.clone()),
             Value::Uint(self.handle),
@@ -714,12 +717,13 @@ impl Encoder for Attach {
                 ))
             }),
         ];
-        Value::Described(Box::new(DESC_ATTACH), Box::new(Value::List(args))).encode(writer)
+        Value::Described(Box::new(DESC_ATTACH), Box::new(Value::List(args))).encode(writer)?;
+        Ok(TypeCode::Described)
     }
 }
 
 impl Encoder for End {
-    fn encode(&self, writer: &mut dyn Write) -> Result<()> {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let val = self.error.to_value(|e| {
             Value::Described(
                 Box::new(Value::Ulong(0x1D)),
@@ -729,12 +733,13 @@ impl Encoder for End {
                 ])),
             )
         });
-        Value::Described(Box::new(DESC_CLOSE), Box::new(Value::List(vec![val]))).encode(writer)
+        Value::Described(Box::new(DESC_CLOSE), Box::new(Value::List(vec![val]))).encode(writer)?;
+        Ok(TypeCode::Described)
     }
 }
 
 impl Encoder for Close {
-    fn encode(&self, writer: &mut dyn Write) -> Result<()> {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let val = self.error.to_value(|e| {
             Value::Described(
                 Box::new(Value::Ulong(0x1D)),
@@ -744,7 +749,8 @@ impl Encoder for Close {
                 ])),
             )
         });
-        Value::Described(Box::new(DESC_CLOSE), Box::new(Value::List(vec![val]))).encode(writer)
+        Value::Described(Box::new(DESC_CLOSE), Box::new(Value::List(vec![val]))).encode(writer)?;
+        Ok(TypeCode::Described)
     }
 }
 
