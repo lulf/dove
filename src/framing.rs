@@ -681,7 +681,7 @@ impl ToValue for Attach {
         let args = vec![
             Value::String(self.name.clone()),
             Value::Uint(self.handle),
-            Value::Bool(self.role == LinkRole::Sender),
+            Value::Bool(self.role == LinkRole::Receiver),
             Value::Ubyte(self.snd_settle_mode.unwrap_or(SenderSettleMode::Mixed) as u8),
             Value::Ubyte(self.rcv_settle_mode.unwrap_or(ReceiverSettleMode::First) as u8),
             self.source.to_value(|v| v.to_value()),
@@ -790,6 +790,9 @@ impl Frame {
                         }
                         Performative::Begin(begin) => {
                             encode_value(&begin.to_value(), &mut buf)?;
+                        }
+                        Performative::Attach(attach) => {
+                            encode_value(&attach.to_value(), &mut buf)?;
                         }
                         Performative::End(end) => {
                             encode_value(&end.to_value(), &mut buf)?;

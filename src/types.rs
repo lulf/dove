@@ -117,11 +117,13 @@ fn encode_value_internal(value: &Value, writer: &mut dyn Write) -> Result<TypeCo
             Ok(TypeCode::Null)
         }
         Value::Bool(value) => {
-            if *value {
-                Ok(TypeCode::Booleantrue)
+            let code = if *value {
+                TypeCode::Booleantrue
             } else {
-                Ok(TypeCode::Booleanfalse)
-            }
+                TypeCode::Booleanfalse
+            };
+            writer.write_u8(code as u8)?;
+            Ok(code)
         }
         Value::String(val) => {
             if val.len() > U8_MAX {
@@ -504,7 +506,7 @@ fn decode_value_with_ctor(raw_code: u8, reader: &mut dyn Read) -> Result<Value> 
 }
 
 #[repr(u8)]
-#[derive(Clone, PartialEq, Debug, PartialOrd)]
+#[derive(Clone, PartialEq, Debug, PartialOrd, Copy)]
 enum TypeCode {
     Described = 0x00,
     Null = 0x40,
