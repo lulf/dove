@@ -13,6 +13,14 @@ use std::vec::Vec;
 
 use crate::error::*;
 
+pub trait Encoder {
+    fn encode(&self, writer: &mut dyn Write) -> Result<()>;
+}
+
+pub trait Decoder: Sized {
+    fn decode(reader: &mut dyn Read) -> Result<Self>;
+}
+
 pub trait ToValue {
     fn to_value(&self) -> Value;
 }
@@ -99,17 +107,19 @@ const I8_MAX: usize = std::i8::MAX as usize;
 const LIST8_MAX: usize = (std::u8::MAX as usize) - 1;
 const LIST32_MAX: usize = (std::u32::MAX as usize) - 4;
 
-pub fn encode_value(value: &Value, writer: &mut dyn Write) -> Result<()> {
-    encode_value_internal(value, writer)?;
-    Ok(())
+impl Encoder for Value {
+    fn encode(&self, writer: &mut dyn Write) -> Result<()> {
+        encode_value_internal(&self, writer)?;
+        Ok(())
+    }
 }
 
 fn encode_value_internal(value: &Value, writer: &mut dyn Write) -> Result<TypeCode> {
     match value {
         Value::Described(descriptor, value) => {
             writer.write_u8(0)?;
-            encode_value(&descriptor, writer)?;
-            encode_value(&value, writer)?;
+            descriptor.encode(writer)?;
+            value.encode(writer)?;
             Ok(TypeCode::Described)
         }
         Value::Null => {
@@ -239,7 +249,7 @@ fn encode_value_internal(value: &Value, writer: &mut dyn Write) -> Result<TypeCo
             let mut code = 0;
             for v in vec.iter() {
                 let mut valuebuf = Vec::new();
-                encode_value(v, &mut valuebuf)?;
+                v.encode(&mut valuebuf)?;
                 if code == 0 {
                     code = valuebuf[0];
                 }
@@ -273,7 +283,7 @@ fn encode_value_internal(value: &Value, writer: &mut dyn Write) -> Result<TypeCo
         Value::List(vec) => {
             let mut listbuf = Vec::new();
             for v in vec.iter() {
-                encode_value(v, &mut listbuf)?;
+                v.encode(&mut listbuf)?;
             }
 
             if listbuf.len() > LIST32_MAX {
@@ -301,8 +311,8 @@ fn encode_value_internal(value: &Value, writer: &mut dyn Write) -> Result<TypeCo
         Value::Map(m) => {
             let mut listbuf = Vec::new();
             for (key, value) in m {
-                encode_value(key, &mut listbuf)?;
-                encode_value(value, &mut listbuf)?;
+                key.encode(&mut listbuf)?;
+                value.encode(&mut listbuf)?;
             }
 
             let n_items = m.len() * 2;

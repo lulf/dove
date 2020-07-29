@@ -66,15 +66,15 @@ pub struct SaslOutcome {
 
 pub type SaslCode = u8;
 
-impl ToValue for SaslInit {
-    fn to_value(&self) -> Value {
+impl Encoder for SaslInit {
+    fn encode(&self, writer: &mut dyn Write) -> Result<()> {
         let val = vec![
             Value::Symbol(self.mechanism.clone().into_bytes()),
             self.initial_response
                 .to_value(|v| Value::Binary(v.to_vec())),
             self.hostname.to_value(|v| Value::String(v.to_string())),
         ];
-        Value::Described(Box::new(DESC_SASL_INIT), Box::new(Value::List(val)))
+        Value::Described(Box::new(DESC_SASL_INIT), Box::new(Value::List(val))).encode(writer)
     }
 }
 
@@ -519,8 +519,8 @@ impl Close {
     }
 }
 
-impl ToValue for Open {
-    fn to_value(&self) -> Value {
+impl Encoder for Open {
+    fn encode(&self, writer: &mut dyn Write) -> Result<()> {
         let args = vec![
             Value::String(self.container_id.clone()),
             self.hostname.to_value(|v| Value::String(v.to_string())),
@@ -561,12 +561,12 @@ impl ToValue for Open {
                 ))
             }),
         ];
-        Value::Described(Box::new(DESC_OPEN), Box::new(Value::List(args)))
+        Value::Described(Box::new(DESC_OPEN), Box::new(Value::List(args))).encode(writer)
     }
 }
 
-impl ToValue for Begin {
-    fn to_value(&self) -> Value {
+impl Encoder for Begin {
+    fn encode(&self, writer: &mut dyn Write) -> Result<()> {
         let remote_channel = self
             .remote_channel
             .map_or_else(|| Value::Null, |c| Value::Ushort(c));
@@ -596,11 +596,11 @@ impl ToValue for Begin {
                 ))
             }),
         ];
-        Value::Described(Box::new(DESC_BEGIN), Box::new(Value::List(args)))
+        Value::Described(Box::new(DESC_BEGIN), Box::new(Value::List(args))).encode(writer)
     }
 }
 
-impl ToValue for Source {
+impl Source {
     fn to_value(&self) -> Value {
         let args = vec![
             self.address.to_value(|v| Value::String(v.to_string())),
@@ -646,7 +646,7 @@ impl ToValue for Source {
     }
 }
 
-impl ToValue for Target {
+impl Target {
     fn to_value(&self) -> Value {
         let args = vec![
             self.address.to_value(|v| Value::String(v.clone())),
@@ -676,8 +676,8 @@ impl ToValue for Target {
     }
 }
 
-impl ToValue for Attach {
-    fn to_value(&self) -> Value {
+impl Encoder for Attach {
+    fn encode(&self, writer: &mut dyn Write) -> Result<()> {
         let args = vec![
             Value::String(self.name.clone()),
             Value::Uint(self.handle),
@@ -714,12 +714,12 @@ impl ToValue for Attach {
                 ))
             }),
         ];
-        Value::Described(Box::new(DESC_ATTACH), Box::new(Value::List(args)))
+        Value::Described(Box::new(DESC_ATTACH), Box::new(Value::List(args))).encode(writer)
     }
 }
 
-impl ToValue for End {
-    fn to_value(&self) -> Value {
+impl Encoder for End {
+    fn encode(&self, writer: &mut dyn Write) -> Result<()> {
         let val = self.error.to_value(|e| {
             Value::Described(
                 Box::new(Value::Ulong(0x1D)),
@@ -729,12 +729,12 @@ impl ToValue for End {
                 ])),
             )
         });
-        Value::Described(Box::new(DESC_CLOSE), Box::new(Value::List(vec![val])))
+        Value::Described(Box::new(DESC_CLOSE), Box::new(Value::List(vec![val]))).encode(writer)
     }
 }
 
-impl ToValue for Close {
-    fn to_value(&self) -> Value {
+impl Encoder for Close {
+    fn encode(&self, writer: &mut dyn Write) -> Result<()> {
         let val = self.error.to_value(|e| {
             Value::Described(
                 Box::new(Value::Ulong(0x1D)),
@@ -744,7 +744,7 @@ impl ToValue for Close {
                 ])),
             )
         });
-        Value::Described(Box::new(DESC_CLOSE), Box::new(Value::List(vec![val])))
+        Value::Described(Box::new(DESC_CLOSE), Box::new(Value::List(vec![val]))).encode(writer)
     }
 }
 
@@ -786,19 +786,19 @@ impl Frame {
                 if let Some(body) = body {
                     match body {
                         Performative::Open(open) => {
-                            encode_value(&open.to_value(), &mut buf)?;
+                            open.encode(&mut buf)?;
                         }
                         Performative::Begin(begin) => {
-                            encode_value(&begin.to_value(), &mut buf)?;
+                            begin.encode(&mut buf)?;
                         }
                         Performative::Attach(attach) => {
-                            encode_value(&attach.to_value(), &mut buf)?;
+                            attach.encode(&mut buf)?;
                         }
                         Performative::End(end) => {
-                            encode_value(&end.to_value(), &mut buf)?;
+                            end.encode(&mut buf)?;
                         }
                         Performative::Close(close) => {
-                            encode_value(&close.to_value(), &mut buf)?;
+                            close.encode(&mut buf)?;
                         }
                         _ => {
                             println!("Unable to encode frame {:?}", self);
@@ -812,7 +812,7 @@ impl Frame {
                 match sasl_frame {
                     SaslFrame::SaslMechanisms(_) => {}
                     SaslFrame::SaslInit(init) => {
-                        encode_value(&init.to_value(), &mut buf)?;
+                        init.encode(&mut buf)?;
                     }
                     SaslFrame::SaslChallenge(_) => {}
                     SaslFrame::SaslResponse(_) => {}
