@@ -34,6 +34,7 @@ impl<T> OptionValue<T> for Option<T> {
 pub enum Value {
     Described(Box<Value>, Box<Value>),
     Null,
+    Bool(bool),
     Ubyte(u8),
     Ushort(u16),
     Uint(u32),
@@ -114,6 +115,13 @@ fn encode_value_internal(value: &Value, writer: &mut dyn Write) -> Result<TypeCo
         Value::Null => {
             writer.write_u8(TypeCode::Null as u8)?;
             Ok(TypeCode::Null)
+        }
+        Value::Bool(value) => {
+            if *value {
+                Ok(TypeCode::Booleantrue)
+            } else {
+                Ok(TypeCode::Booleanfalse)
+            }
         }
         Value::String(val) => {
             if val.len() > U8_MAX {
@@ -333,6 +341,12 @@ fn decode_value_with_ctor(raw_code: u8, reader: &mut dyn Read) -> Result<Value> 
             Ok(Value::Described(Box::new(descriptor), Box::new(value)))
         }
         TypeCode::Null => Ok(Value::Null),
+        TypeCode::Boolean => {
+            let val = reader.read_u8()?;
+            Ok(Value::Bool(val == 1))
+        }
+        TypeCode::Booleantrue => Ok(Value::Bool(true)),
+        TypeCode::Booleanfalse => Ok(Value::Bool(false)),
         TypeCode::Ubyte => {
             let val = reader.read_u8()?;
             Ok(Value::Ubyte(val))
@@ -494,6 +508,9 @@ fn decode_value_with_ctor(raw_code: u8, reader: &mut dyn Read) -> Result<Value> 
 enum TypeCode {
     Described = 0x00,
     Null = 0x40,
+    Boolean = 0x56,
+    Booleantrue = 0x41,
+    Booleanfalse = 0x42,
     Ubyte = 0x50,
     Ushort = 0x60,
     Uint = 0x70,
@@ -527,6 +544,9 @@ fn decode_type(code: u8) -> Result<TypeCode> {
     match code {
         0x00 => Ok(TypeCode::Described),
         0x40 => Ok(TypeCode::Null),
+        0x56 => Ok(TypeCode::Boolean),
+        0x41 => Ok(TypeCode::Booleantrue),
+        0x42 => Ok(TypeCode::Booleanfalse),
         0x50 => Ok(TypeCode::Ubyte),
         0x60 => Ok(TypeCode::Ushort),
         0x70 => Ok(TypeCode::Uint),

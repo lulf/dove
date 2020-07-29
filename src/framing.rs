@@ -131,20 +131,20 @@ pub struct Attach {
     pub properties: Option<BTreeMap<String, Value>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum LinkRole {
     Sender,
     Receiver,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum SenderSettleMode {
     Unsettled,
     Settled,
     Mixed,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum ReceiverSettleMode {
     First,
     Second,
@@ -165,14 +165,14 @@ pub struct Source {
     pub capabilities: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum TerminusDurability {
     None,
     Configuration,
     UnsettledState,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum TerminusExpiryPolicy {
     LinkDetach,
     SessionEnd,
@@ -186,7 +186,19 @@ impl fmt::Display for TerminusExpiryPolicy {
     }
 }
 
-#[derive(Debug, Clone)]
+impl fmt::Display for TerminusDurability {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl fmt::Display for Outcome {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum Outcome {
     Accepted,
     Rejected,
@@ -588,7 +600,6 @@ impl ToValue for Begin {
     }
 }
 
-/*
 impl ToValue for Source {
     fn to_value(&self) -> Value {
         let args = vec![
@@ -601,23 +612,25 @@ impl ToValue for Source {
                     .into_bytes(),
             ),
             Value::Uint(self.timeout.unwrap_or(0)),
-            Value::UBool(self.dynamic.unwrap_or(false)),
+            Value::Bool(self.dynamic.unwrap_or(false)),
             self.dynamic_node_properties.to_value(|v| {
                 Value::Map(BTreeMap::from_iter(
                     v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
                 ))
             }),
-            self.distribution_mode.to_value(|v| Value::Symbol(v)),
+            self.distribution_mode
+                .to_value(|v| Value::Symbol(v.clone().into_bytes())),
             self.filter.to_value(|v| {
                 Value::Map(BTreeMap::from_iter(
                     v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
                 ))
             }),
-            self.default_outcome.to_value(|v| v.to_string()),
+            self.default_outcome
+                .to_value(|v| Value::Symbol(v.to_string().into_bytes())),
             self.outcomes.to_value(|v| {
                 Value::Array(
                     v.iter()
-                        .map(|c| Value::Symbol(c.clone().into_bytes()))
+                        .map(|c| Value::Symbol(c.to_string().into_bytes()))
                         .collect(),
                 )
             }),
@@ -636,12 +649,13 @@ impl ToValue for Source {
 impl ToValue for Target {
     fn to_value(&self) -> Value {
         let args = vec![
-            self.address.to_value(|v| Value::String(v)),
+            self.address.to_value(|v| Value::String(v.clone())),
             Value::Uint(self.durable.unwrap_or(TerminusDurability::None) as u32),
             Value::Symbol(
                 self.expiry_policy
                     .unwrap_or(TerminusExpiryPolicy::SessionEnd)
-                    .to_string(),
+                    .to_string()
+                    .into_bytes(),
             ),
             Value::Uint(self.timeout.unwrap_or(0)),
             Value::Bool(self.dynamic.unwrap_or(false)),
@@ -665,25 +679,21 @@ impl ToValue for Target {
 impl ToValue for Attach {
     fn to_value(&self) -> Value {
         let args = vec![
-            Value::String(self.name),
+            Value::String(self.name.clone()),
             Value::Uint(self.handle),
-            Value::Bool(if self.role == LinkRole::Sender {
-                false
-            } else {
-                true
-            }),
+            Value::Bool(self.role == LinkRole::Sender),
             Value::Ubyte(self.snd_settle_mode.unwrap_or(SenderSettleMode::Mixed) as u8),
             Value::Ubyte(self.rcv_settle_mode.unwrap_or(ReceiverSettleMode::First) as u8),
-            self.source.to_value(),
-            self.target.to_value(),
+            self.source.to_value(|v| v.to_value()),
+            self.target.to_value(|v| v.to_value()),
             self.unsettled.to_value(|v| {
                 Value::Map(BTreeMap::from_iter(
-                    v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
+                    v.iter().map(|(k, v)| (k.clone(), v.clone())),
                 ))
             }),
             Value::Bool(self.incomplete_unsettled.unwrap_or(false)),
-            self.initial_delivery_count.to_value(|v| Value::Uint(v)),
-            self.max_message_size.to_value(|v| Value::Ulong(v)),
+            self.initial_delivery_count.to_value(|v| Value::Uint(*v)),
+            self.max_message_size.to_value(|v| Value::Ulong(*v)),
             self.offered_capabilities.to_value(|v| {
                 Value::Array(
                     v.iter()
@@ -707,7 +717,6 @@ impl ToValue for Attach {
         Value::Described(Box::new(DESC_ATTACH), Box::new(Value::List(args)))
     }
 }
-*/
 
 impl ToValue for End {
     fn to_value(&self) -> Value {
