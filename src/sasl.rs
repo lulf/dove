@@ -40,7 +40,7 @@ pub enum SaslState {
     Failed,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum SaslMechanism {
     Anonymous,
     Plain,
@@ -123,7 +123,7 @@ impl Sasl {
                                 initial_response = Some(data);
                             }
                             let init = Frame::SASL(SaslFrame::SaslInit(SaslInit {
-                                mechanism: sasl_client.mechanism.to_string(),
+                                mechanism: sasl_client.mechanism,
                                 initial_response: initial_response,
                                 hostname: None,
                             }));

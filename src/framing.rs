@@ -50,7 +50,7 @@ type SaslMechanisms = Vec<SaslMechanism>;
 
 #[derive(Debug)]
 pub struct SaslInit {
-    pub mechanism: String,
+    pub mechanism: SaslMechanism,
     pub initial_response: Option<Vec<u8>>,
     pub hostname: Option<String>,
 }
@@ -66,10 +66,23 @@ pub struct SaslOutcome {
 
 pub type SaslCode = u8;
 
+impl Encoder for SaslMechanism {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let value = match self {
+            SaslMechanism::Anonymous => Symbol::new(b"ANONYMOUS"),
+            SaslMechanism::Plain => Symbol::new(b"PLAIN"),
+            SaslMechanism::CramMd5 => Symbol::new(b"CRAM-MD5"),
+            SaslMechanism::ScramSha1 => Symbol::new(b"SCRAM-SHA-1"),
+            SaslMechanism::ScramSha256 => Symbol::new(b"SCRAM-SHA-256"),
+        };
+        value.encode(writer)
+    }
+}
+
 impl Encoder for SaslInit {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let val = vec![
-            Value::Symbol(self.mechanism.clone().into_bytes()),
+            Value::Symbol(self.mechanism.to_string().into_bytes()),
             self.initial_response
                 .to_value(|v| Value::Binary(v.to_vec())),
             self.hostname.to_value(|v| Value::String(v.to_string())),

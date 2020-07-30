@@ -38,6 +38,14 @@ impl<T> OptionValue<T> for Option<T> {
     }
 }
 
+pub struct Symbol(&'static [u8]);
+
+impl Symbol {
+    pub fn new(data: &'static [u8]) -> Symbol {
+        return Symbol(data);
+    }
+}
+
 #[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq)]
 pub enum Value {
     Described(Box<Value>, Box<Value>),
@@ -107,6 +115,22 @@ const I8_MAX: usize = std::i8::MAX as usize;
 const LIST8_MAX: usize = (std::u8::MAX as usize) - 1;
 const LIST32_MAX: usize = (std::u32::MAX as usize) - 4;
 
+impl Encoder for Symbol {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        if self.0.len() > U8_MAX {
+            writer.write_u8(TypeCode::Sym32 as u8)?;
+            writer.write_u32::<NetworkEndian>(self.0.len() as u32)?;
+            writer.write(self.0)?;
+            Ok(TypeCode::Sym32)
+        } else {
+            writer.write_u8(TypeCode::Sym8 as u8)?;
+            writer.write_u8(self.0.len() as u8)?;
+            writer.write(self.0)?;
+            Ok(TypeCode::Sym8)
+        }
+    }
+}
+
 impl Encoder for String {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         if self.len() > U8_MAX {
@@ -119,6 +143,36 @@ impl Encoder for String {
             writer.write_u8(self.len() as u8)?;
             writer.write(self.as_bytes())?;
             Ok(TypeCode::Str8)
+        }
+    }
+}
+
+impl Encoder for bool {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let code = if *self {
+            TypeCode::Booleantrue
+        } else {
+            TypeCode::Booleanfalse
+        };
+        writer.write_u8(code as u8)?;
+        Ok(code)
+    }
+}
+
+impl Encoder for u64 {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let val = self;
+        if *val > U8_MAX as u64 {
+            writer.write_u8(TypeCode::Ulong as u8)?;
+            writer.write_u64::<NetworkEndian>(*val)?;
+            Ok(TypeCode::Ulong)
+        } else if *val > 0 {
+            writer.write_u8(TypeCode::Ulongsmall as u8)?;
+            writer.write_u8(*val as u8)?;
+            Ok(TypeCode::Ulongsmall)
+        } else {
+            writer.write_u8(TypeCode::Ulong0 as u8)?;
+            Ok(TypeCode::Ulong0)
         }
     }
 }
@@ -137,15 +191,7 @@ impl Encoder for Value {
                 writer.write_u8(TypeCode::Null as u8)?;
                 Ok(TypeCode::Null)
             }
-            Value::Bool(value) => {
-                let code = if *value {
-                    TypeCode::Booleantrue
-                } else {
-                    TypeCode::Booleanfalse
-                };
-                writer.write_u8(code as u8)?;
-                Ok(code)
-            }
+            Value::Bool(value) => value.encode(writer),
             Value::String(val) => val.encode(writer),
             Value::Symbol(val) => {
                 if val.len() > U8_MAX {
@@ -197,20 +243,7 @@ impl Encoder for Value {
                     Ok(TypeCode::Uint0)
                 }
             }
-            Value::Ulong(val) => {
-                if *val > U8_MAX as u64 {
-                    writer.write_u8(TypeCode::Ulong as u8)?;
-                    writer.write_u64::<NetworkEndian>(*val)?;
-                    Ok(TypeCode::Ulong)
-                } else if *val > 0 {
-                    writer.write_u8(TypeCode::Ulongsmall as u8)?;
-                    writer.write_u8(*val as u8)?;
-                    Ok(TypeCode::Ulongsmall)
-                } else {
-                    writer.write_u8(TypeCode::Ulong0 as u8)?;
-                    Ok(TypeCode::Ulong0)
-                }
-            }
+            Value::Ulong(val) => val.encode(writer),
             Value::Byte(val) => {
                 writer.write_u8(TypeCode::Byte as u8)?;
                 writer.write_i8(*val)?;
