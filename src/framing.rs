@@ -81,14 +81,11 @@ impl Encoder for SaslMechanism {
 
 impl Encoder for SaslInit {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let val = vec![
-            Value::Symbol(self.mechanism.to_string().into_bytes()),
-            self.initial_response
-                .to_value(|v| Value::Binary(v.to_vec())),
-            self.hostname.to_value(|v| Value::String(v.to_string())),
-        ];
-        Value::Described(Box::new(DESC_SASL_INIT), Box::new(Value::List(val))).encode(writer)?;
-        Ok(TypeCode::Described)
+        let mut encoder = FrameEncoder::new(DESC_SASL_INIT);
+        encoder.encode_arg(&self.mechanism)?;
+        encoder.encode_arg(&self.initial_response)?;
+        encoder.encode_arg(&self.hostname)?;
+        encoder.encode(self.writer)
     }
 }
 
@@ -536,13 +533,13 @@ impl Close {
 impl Encoder for Open {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let args = vec![
-            Value::String(self.container_id.clone()),
-            self.hostname.to_value(|v| Value::String(v.to_string())),
-            self.max_frame_size.to_value(|v| Value::Uint(*v)),
-            self.channel_max.to_value(|v| Value::Ushort(*v)),
-            self.idle_timeout.to_value(|v| Value::Uint(*v)),
+            ValueRef::String(self.container_id),
+            self.hostname.to_value(|v| ValueRef::String(v)),
+            self.max_frame_size.to_value(|v| ValueRef::Uint(v)),
+            self.channel_max.to_value(|v| ValueRef::Ushort(v)),
+            self.idle_timeout.to_value(|v| ValueRef::Uint(v)),
             self.outgoing_locales.to_value(|v| {
-                Value::Array(
+                ValueRef::Array(
                     v.iter()
                         .map(|l| Value::Symbol(l.clone().into_bytes()))
                         .collect(),
