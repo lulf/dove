@@ -119,8 +119,8 @@ pub struct Begin {
     pub incoming_window: u32,
     pub outgoing_window: u32,
     pub handle_max: Option<u32>,
-    pub offered_capabilities: Option<Vec<String>>,
-    pub desired_capabilities: Option<Vec<String>>,
+    pub offered_capabilities: Option<Vec<Symbol>>,
+    pub desired_capabilities: Option<Vec<Symbol>>,
     pub properties: Option<BTreeMap<String, Value>>,
 }
 
@@ -137,8 +137,8 @@ pub struct Attach {
     pub incomplete_unsettled: Option<bool>,
     pub initial_delivery_count: Option<u32>,
     pub max_message_size: Option<u64>,
-    pub offered_capabilities: Option<Vec<String>>,
-    pub desired_capabilities: Option<Vec<String>>,
+    pub offered_capabilities: Option<Vec<Symbol>>,
+    pub desired_capabilities: Option<Vec<Symbol>>,
     pub properties: Option<BTreeMap<String, Value>>,
 }
 
@@ -169,11 +169,11 @@ pub struct Source {
     pub timeout: Option<u32>,
     pub dynamic: Option<bool>,
     pub dynamic_node_properties: Option<BTreeMap<String, Value>>,
-    pub distribution_mode: Option<String>,
+    pub distribution_mode: Option<Symbol>,
     pub filter: Option<BTreeMap<String, Value>>,
     pub default_outcome: Option<Outcome>,
     pub outcomes: Option<Vec<Outcome>>,
-    pub capabilities: Option<Vec<String>>,
+    pub capabilities: Option<Vec<Symbol>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -308,21 +308,29 @@ impl Open {
 
             if let Some(offered_capabilities) = it.next() {
                 if let Value::Array(vec) = offered_capabilities {
-                    open.offered_capabilities = Some(Symbol::from_vec(vec));
+                    let symbols = Vec::new();
+                    for v in vec.iter() {
+                        if let Value::Symbol(sym) = v {
+                            symbols.push(*sym);
+                        }
+                    }
+                    open.offered_capabilities = Some(symbols);
                 } else if let Value::Symbol(s) = offered_capabilities {
-                    open.offered_capabilities = Some(Symbol::from_string(s));
+                    open.offered_capabilities = Some(vec![*s]);
                 }
             }
 
             if let Some(desired_capabilities) = it.next() {
                 if let Value::Array(vec) = desired_capabilities {
-                    let mut cap = Vec::new();
-                    for val in vec.iter() {
-                        cap.push(val.to_string())
+                    let symbols = Vec::new();
+                    for v in vec.iter() {
+                        if let Value::Symbol(sym) = v {
+                            symbols.push(*sym);
+                        }
                     }
-                    open.desired_capabilities = Some(cap);
+                    open.desired_capabilities = Some(symbols);
                 } else if let Value::Symbol(s) = desired_capabilities {
-                    open.desired_capabilities = Some(vec![String::from_utf8(s.to_vec()).unwrap()]);
+                    open.desired_capabilities = Some(vec![*s]);
                 }
             }
 
@@ -394,25 +402,29 @@ impl Begin {
 
             if let Some(offered_capabilities) = it.next() {
                 if let Value::Array(vec) = offered_capabilities {
-                    let mut cap = Vec::new();
-                    for val in vec.iter() {
-                        cap.push(val.to_string())
+                    let symbols = Vec::new();
+                    for v in vec.iter() {
+                        if let Value::Symbol(sym) = v {
+                            symbols.push(*sym);
+                        }
                     }
-                    begin.offered_capabilities = Some(cap);
+                    begin.offered_capabilities = Some(symbols);
                 } else if let Value::Symbol(s) = offered_capabilities {
-                    begin.offered_capabilities = Some(vec![String::from_utf8(s.to_vec()).unwrap()]);
+                    begin.offered_capabilities = Some(vec![*s]);
                 }
             }
 
             if let Some(desired_capabilities) = it.next() {
                 if let Value::Array(vec) = desired_capabilities {
-                    let mut cap = Vec::new();
-                    for val in vec.iter() {
-                        cap.push(val.to_string())
+                    let symbols = Vec::new();
+                    for v in vec.iter() {
+                        if let Value::Symbol(sym) = v {
+                            symbols.push(*sym);
+                        }
                     }
-                    begin.desired_capabilities = Some(cap);
+                    begin.desired_capabilities = Some(symbols);
                 } else if let Value::Symbol(s) = desired_capabilities {
-                    begin.desired_capabilities = Some(vec![String::from_utf8(s.to_vec()).unwrap()]);
+                    begin.desired_capabilities = Some(vec![*s]);
                 }
             }
 
@@ -534,212 +546,98 @@ impl Encoder for Open {
         encoder.encode_arg(&self.max_frame_size)?;
         encoder.encode_arg(&self.channel_max)?;
         encoder.encode_arg(&self.idle_timeout)?;
-        encoder.encode_arg(&self.outgoing_locales, ValueKind::Symbol)?;
+        encoder.encode_arg(&self.outgoing_locales)?;
+        encoder.encode_arg(&self.incoming_locales)?;
+        encoder.encode_arg(&self.offered_capabilities)?;
+        encoder.encode_arg(&self.desired_capabilities)?;
+        encoder.encode_arg(&self.properties)?;
         encoder.encode(writer)
-        /*
-        let args = vec![
-            ValueRef::String(&self.container_id),
-            self.hostname.to_value(|v| ValueRef::String(v)),
-            self.max_frame_size.to_value(|v| ValueRef::Uint(v)),
-            self.channel_max.to_value(|v| ValueRef::Ushort(v)),
-            self.idle_timeout.to_value(|v| ValueRef::Uint(v)),
-            self.outgoing_locales.to_value(|v| {
-                ValueRef::Array(
-                    v.iter()
-                        .map(|l| Value::Symbol(l.clone().into_bytes()))
-                        .collect(),
-                )
-            }),
-            self.incoming_locales.to_value(|v| {
-                Value::Array(
-                    v.iter()
-                        .map(|l| Value::Symbol(l.clone().into_bytes()))
-                        .collect(),
-                )
-            }),
-            self.offered_capabilities.to_value(|v| {
-                Value::Array(
-                    v.iter()
-                        .map(|c| Value::Symbol(c.clone().into_bytes()))
-                        .collect(),
-                )
-            }),
-            self.desired_capabilities.to_value(|v| {
-                Value::Array(
-                    v.iter()
-                        .map(|c| Value::Symbol(c.clone().into_bytes()))
-                        .collect(),
-                )
-            }),
-            self.properties.to_value(|v| {
-                Value::Map(BTreeMap::from_iter(
-                    v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
-                ))
-            }),
-        ];
-        Value::Described(Box::new(DESC_OPEN), Box::new(Value::List(args))).encode(writer)?;
-        Ok(TypeCode::Described)
-            */
     }
 }
 
 impl Encoder for Begin {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let remote_channel = self
-            .remote_channel
-            .map_or_else(|| Value::Null, |c| Value::Ushort(c));
-        let args = vec![
-            remote_channel,
-            Value::Uint(self.next_outgoing_id),
-            Value::Uint(self.incoming_window),
-            Value::Uint(self.outgoing_window),
-            self.handle_max.to_value(|v| Value::Uint(*v)),
-            self.offered_capabilities.to_value(|v| {
-                Value::Array(
-                    v.iter()
-                        .map(|c| Value::Symbol(c.clone().into_bytes()))
-                        .collect(),
-                )
-            }),
-            self.desired_capabilities.to_value(|v| {
-                Value::Array(
-                    v.iter()
-                        .map(|c| Value::Symbol(c.clone().into_bytes()))
-                        .collect(),
-                )
-            }),
-            self.properties.to_value(|v| {
-                Value::Map(BTreeMap::from_iter(
-                    v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
-                ))
-            }),
-        ];
-        Value::Described(Box::new(DESC_BEGIN), Box::new(Value::List(args))).encode(writer)?;
-        Ok(TypeCode::Described)
+        let mut encoder = FrameEncoder::new(DESC_BEGIN);
+        encoder.encode_arg(&self.remote_channel)?;
+        encoder.encode_arg(&self.next_outgoing_id)?;
+        encoder.encode_arg(&self.incoming_window)?;
+        encoder.encode_arg(&self.outgoing_window)?;
+        encoder.encode_arg(&self.handle_max)?;
+        encoder.encode_arg(&self.offered_capabilities)?;
+        encoder.encode_arg(&self.desired_capabilities)?;
+        encoder.encode_arg(&self.properties)?;
+        encoder.encode(writer)
     }
 }
 
-impl Source {
-    fn to_value(&self) -> Value {
-        let args = vec![
-            self.address.to_value(|v| Value::String(v.to_string())),
-            Value::Uint(self.durable.unwrap_or(TerminusDurability::None) as u32),
-            Value::Symbol(
-                self.expiry_policy
-                    .unwrap_or(TerminusExpiryPolicy::SessionEnd)
-                    .to_string()
-                    .into_bytes(),
-            ),
-            Value::Uint(self.timeout.unwrap_or(0)),
-            Value::Bool(self.dynamic.unwrap_or(false)),
-            self.dynamic_node_properties.to_value(|v| {
-                Value::Map(BTreeMap::from_iter(
-                    v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
-                ))
-            }),
-            self.distribution_mode
-                .to_value(|v| Value::Symbol(v.clone().into_bytes())),
-            self.filter.to_value(|v| {
-                Value::Map(BTreeMap::from_iter(
-                    v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
-                ))
-            }),
-            self.default_outcome
-                .to_value(|v| Value::Symbol(v.to_string().into_bytes())),
-            self.outcomes.to_value(|v| {
-                Value::Array(
-                    v.iter()
-                        .map(|c| Value::Symbol(c.to_string().into_bytes()))
-                        .collect(),
-                )
-            }),
-            self.capabilities.to_value(|v| {
-                Value::Array(
-                    v.iter()
-                        .map(|c| Value::Symbol(c.clone().into_bytes()))
-                        .collect(),
-                )
-            }),
-        ];
-        Value::Described(Box::new(DESC_SOURCE), Box::new(Value::List(args)))
+impl Encoder for Source {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_SOURCE);
+        encoder.encode_arg(&self.address)?;
+        encoder.encode_arg(&self.durable.unwrap_or(TerminusDurability::None))?;
+        encoder.encode_arg(
+            &self
+                .expiry_policy
+                .unwrap_or(TerminusExpiryPolicy::SessionEnd),
+        )?;
+        encoder.encode_arg(&self.timeout.unwrap_or(0))?;
+        encoder.encode_arg(&self.dynamic.unwrap_or(false))?;
+        encoder.encode_arg(&self.dynamic_node_properties)?;
+        encoder.encode_arg(&self.distribution_mode)?;
+        encoder.encode_arg(&self.filter)?;
+        encoder.encode_arg(&self.default_outcome)?;
+        encoder.encode_arg(&self.outcomes)?;
+        encoder.encode_arg(&self.capabilities)?;
+        encoder.encode(writer)
     }
 }
 
-impl Target {
-    fn to_value(&self) -> Value {
-        let args = vec![
-            self.address.to_value(|v| Value::String(v.clone())),
-            Value::Uint(self.durable.unwrap_or(TerminusDurability::None) as u32),
-            Value::Symbol(
-                self.expiry_policy
-                    .unwrap_or(TerminusExpiryPolicy::SessionEnd)
-                    .to_string()
-                    .into_bytes(),
-            ),
-            Value::Uint(self.timeout.unwrap_or(0)),
-            Value::Bool(self.dynamic.unwrap_or(false)),
-            self.dynamic_node_properties.to_value(|v| {
-                Value::Map(BTreeMap::from_iter(
-                    v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
-                ))
-            }),
-            self.capabilities.to_value(|v| {
-                Value::Array(
-                    v.iter()
-                        .map(|c| Value::Symbol(c.clone().into_bytes()))
-                        .collect(),
-                )
-            }),
-        ];
-        Value::Described(Box::new(DESC_TARGET), Box::new(Value::List(args)))
+impl Encoder for Target {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_TARGET);
+        encoder.encode_arg(&self.address)?;
+        encoder.encode_arg(&self.durable.unwrap_or(TerminusDurability::None))?;
+        encoder.encode_arg(
+            &self
+                .expiry_policy
+                .unwrap_or(TerminusExpiryPolicy::SessionEnd),
+        )?;
+        encoder.encode_arg(&self.timeout.unwrap_or(0))?;
+        encoder.encode_arg(&self.dynamic.unwrap_or(false))?;
+        encoder.encode_arg(&self.dynamic_node_properties)?;
+        encoder.encode_arg(&self.capabilities)?;
+        encoder.encode(writer)
     }
 }
 
 impl Encoder for Attach {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let args = vec![
-            Value::String(self.name.clone()),
-            Value::Uint(self.handle),
-            Value::Bool(self.role == LinkRole::Receiver),
-            Value::Ubyte(self.snd_settle_mode.unwrap_or(SenderSettleMode::Mixed) as u8),
-            Value::Ubyte(self.rcv_settle_mode.unwrap_or(ReceiverSettleMode::First) as u8),
-            self.source.to_value(|v| v.to_value()),
-            self.target.to_value(|v| v.to_value()),
-            self.unsettled.to_value(|v| {
-                Value::Map(BTreeMap::from_iter(
-                    v.iter().map(|(k, v)| (k.clone(), v.clone())),
-                ))
-            }),
-            Value::Bool(self.incomplete_unsettled.unwrap_or(false)),
-            self.initial_delivery_count.to_value(|v| Value::Uint(*v)),
-            self.max_message_size.to_value(|v| Value::Ulong(*v)),
-            self.offered_capabilities.to_value(|v| {
-                Value::Array(
-                    v.iter()
-                        .map(|c| Value::Symbol(c.clone().into_bytes()))
-                        .collect(),
-                )
-            }),
-            self.desired_capabilities.to_value(|v| {
-                Value::Array(
-                    v.iter()
-                        .map(|c| Value::Symbol(c.clone().into_bytes()))
-                        .collect(),
-                )
-            }),
-            self.properties.to_value(|v| {
-                Value::Map(BTreeMap::from_iter(
-                    v.iter().map(|(k, v)| (Value::String(k.clone()), v.clone())),
-                ))
-            }),
-        ];
-        Value::Described(Box::new(DESC_ATTACH), Box::new(Value::List(args))).encode(writer)?;
-        Ok(TypeCode::Described)
+        let mut encoder = FrameEncoder::new(DESC_ATTACH);
+        encoder.encode_arg(&self.name)?;
+        encoder.encode_arg(&self.handle)?;
+        encoder.encode_arg(&self.role)?;
+        encoder.encode_arg(&self.snd_settle_mode.unwrap_or(SenderSettleMode::Mixed))?;
+        encoder.encode_arg(&self.rcv_settle_mode.unwrap_or(ReceiverSettleMode::First))?;
+        encoder.encode_arg(&self.source)?;
+        encoder.encode_arg(&self.target)?;
+        encoder.encode_arg(&self.unsettled)?;
+        encoder.encode_arg(&self.incomplete_unsettled.unwrap_or(false))?;
+        encoder.encode_arg(&self.initial_delivery_count)?;
+        encoder.encode_arg(&self.max_message_size)?;
+        encoder.encode_arg(&self.max_message_size)?;
+        encoder.encode_arg(&self.offered_capabilities)?;
+        encoder.encode_arg(&self.desired_capabilities)?;
+        encoder.encode_arg(&self.properties)?;
+        encoder.encode(writer)
     }
 }
 
 impl Encoder for End {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_END);
+        encoder.encode_arg(&self.error)?;
+        encoder.encode(writer)
+        /*
         let val = self.error.to_value(|e| {
             Value::Described(
                 Box::new(Value::Ulong(0x1D)),
@@ -749,24 +647,51 @@ impl Encoder for End {
                 ])),
             )
         });
-        Value::Described(Box::new(DESC_CLOSE), Box::new(Value::List(vec![val]))).encode(writer)?;
-        Ok(TypeCode::Described)
+            */
     }
 }
 
 impl Encoder for Close {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let val = self.error.to_value(|e| {
-            Value::Described(
-                Box::new(Value::Ulong(0x1D)),
-                Box::new(Value::List(vec![
-                    Value::Symbol(e.condition.clone().into_bytes()),
-                    Value::String(e.description.clone()),
-                ])),
-            )
-        });
-        Value::Described(Box::new(DESC_CLOSE), Box::new(Value::List(vec![val]))).encode(writer)?;
-        Ok(TypeCode::Described)
+        let mut encoder = FrameEncoder::new(DESC_CLOSE);
+        encoder.encode_arg(&self.error)?;
+        encoder.encode(writer)
+    }
+}
+
+impl Encoder for ErrorCondition {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_ERROR);
+        encoder.encode_arg(&self.condition)?;
+        encoder.encode_arg(&self.description)?;
+        encoder.encode(writer)
+    }
+}
+
+impl Encoder for SenderSettleMode {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        ValueRef::Ubyte(&(*self as u8)).encode(writer)
+    }
+}
+
+impl Encoder for ReceiverSettleMode {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        Value::Ubyte(*self as u8).encode(writer)
+    }
+}
+
+impl Encoder for LinkRole {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        Value::Bool(*self == LinkRole::Receiver).encode(writer)
+    }
+}
+
+impl Encoder for TerminusExpiryPolicy {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        writer.write_u8(TypeCode::Sym8 as u8)?;
+        writer.write_u8(val.data.len() as u8)?;
+        writer.write(&val.data[..])?;
+        Ok(TypeCode::Sym8)
     }
 }
 
@@ -852,6 +777,11 @@ impl Frame {
     }
 
     pub fn decode(header: FrameHeader, reader: &mut dyn Read) -> Result<Frame> {
+        Err(AmqpError::amqp_error(
+            condition::DECODE_ERROR,
+            Some("Blah!"),
+        ))
+        /*
         // Read off extended header not in use
         let mut doff = header.doff;
         while doff > 2 {
@@ -970,6 +900,7 @@ impl Frame {
                 Some(format!("Unknown frame type {}", header.frame_type).as_str()),
             ))
         }
+        */
     }
 }
 

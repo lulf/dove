@@ -9,6 +9,7 @@ use byteorder::WriteBytesExt;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
+use std::iter::FromIterator;
 use std::vec::Vec;
 
 use crate::error::*;
@@ -21,23 +22,6 @@ pub trait Decoder: Sized {
     fn decode(reader: &mut dyn Read) -> Result<Self>;
 }
 
-pub trait ToValue {
-    fn to_value(&self) -> Value;
-}
-
-pub trait OptionValue<T> {
-    fn to_value<F: Fn(&T) -> Value>(&self, f: F) -> Value;
-}
-
-impl<T> OptionValue<T> for Option<T> {
-    fn to_value<F: Fn(&T) -> Value>(&self, f: F) -> Value {
-        match self {
-            Some(ref val) => f(val),
-            None => Value::Null,
-        }
-    }
-}
-
 #[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq)]
 pub struct Symbol {
     data: Vec<u8>,
@@ -45,21 +29,19 @@ pub struct Symbol {
 
 impl Symbol {
     pub fn from_slice(data: &[u8]) -> Symbol {
-        return Symbol {
-            data: Vec::new(data),
-        };
+        let mut vec = Vec::new();
+        vec.extend_from_slice(data);
+        return Symbol { data: vec };
     }
 
-    pub fn from_vec(data: &Vec<u8>) -> Symbol {
-        return Symbol {
-            data: Vec::new(data),
-        };
+    pub fn from_vec(data: Vec<u8>) -> Symbol {
+        return Symbol { data };
     }
 
     pub fn from_string(data: &str) -> Symbol {
-        return Symbol {
-            data: Vec::new(data.to_vec()),
-        };
+        let mut vec = Vec::new();
+        vec.extend_from_slice(data.as_bytes());
+        return Symbol { data: vec };
     }
 }
 
@@ -77,8 +59,8 @@ pub enum ValueRef<'a> {
     Int(&'a i32),
     Long(&'a i64),
     String(&'a str),
-    Binary(&'a Vec<u8>),
-    Symbol(&'a Vec<u8>),
+    Binary(&'a [u8]),
+    Symbol(&'a Symbol),
     Array(&'a Vec<ValueRef<'a>>),
     List(&'a Vec<ValueRef<'a>>),
     Map(&'a BTreeMap<ValueRef<'a>, ValueRef<'a>>),
@@ -99,7 +81,7 @@ pub enum Value {
     Long(i64),
     String(String),
     Binary(Vec<u8>),
-    Symbol(Vec<u8>),
+    Symbol(Symbol),
     Array(Vec<Value>),
     List(Vec<Value>),
     Map(BTreeMap<Value, Value>),
@@ -126,42 +108,12 @@ impl Value {
     pub fn try_to_string(self: &Self) -> Option<String> {
         match self {
             Value::String(v) => Some(v.clone()),
-            Value::Symbol(v) => Some(String::from_utf8(v.to_vec()).expect("Error decoding symbol")),
+            Value::Symbol(v) => Some(String::from_utf8(v.data).expect("Error decoding symbol")),
             _ => None,
         }
     }
     pub fn to_string(self: &Self) -> String {
         self.try_to_string().expect("Unexpected type!")
-    }
-
-    pub fn try_to_u32(self: &Self) -> Option<u32> {
-        match self {
-            Value::Ushort(v) => Some(*v as u32),
-            Value::Uint(v) => Some(*v as u32),
-            _ => None,
-        }
-    }
-
-    pub fn to_u32(self: &Self) -> u32 {
-        match self {
-            Value::Ushort(v) => (*v as u32),
-            Value::Uint(v) => (*v as u32),
-            _ => panic!("Unexpected type"),
-        }
-    }
-
-    pub fn to_u16(self: &Self) -> u16 {
-        match self {
-            Value::Ushort(v) => (*v as u16),
-            _ => panic!("Unexpected type"),
-        }
-    }
-
-    pub fn try_to_u16(self: &Self) -> Option<u16> {
-        match self {
-            Value::Ushort(v) => Some(*v as u16),
-            _ => None,
-        }
     }
 
     fn value_ref(&self) -> ValueRef {
@@ -175,6 +127,29 @@ impl Value {
             Value::String(ref value) => ValueRef::String(value),
             Value::Symbol(ref value) => ValueRef::Symbol(value),
             _ => ValueRef::Null,
+        }
+    }
+}
+
+pub struct FrameDecoder {
+    desc: Value,
+    input: Value,
+    iter: Iter<Value>,
+}
+
+impl FrameDecoder {
+    pub fn new(desc: Value, input: Value) -> Result<FrameDecoder> {
+        if let Value::List(args) = input {
+            return Ok(FrameDecoder {
+                desc: desc,
+                input: input,
+                iter: args.iter(),
+            });
+        } else {
+            return Err(AmqpError::amqp_error(
+                condition::DECODE_ERROR,
+                Some("Error decoding frame arguments"),
+            ));
         }
     }
 }
@@ -220,23 +195,27 @@ const LIST32_MAX: usize = (std::u32::MAX as usize) - 4;
 
 impl Encoder for Symbol {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        if self.0.len() > U8_MAX {
-            writer.write_u8(TypeCode::Sym32 as u8)?;
-            writer.write_u32::<NetworkEndian>(self.0.len() as u32)?;
-            writer.write(self.0)?;
-            Ok(TypeCode::Sym32)
-        } else {
-            writer.write_u8(TypeCode::Sym8 as u8)?;
-            writer.write_u8(self.0.len() as u8)?;
-            writer.write(self.0)?;
-            Ok(TypeCode::Sym8)
+        ValueRef::Symbol(self).encode(writer)
+    }
+}
+
+impl Encoder for Vec<String> {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut values = Vec::new();
+        for s in self.iter() {
+            values.push(ValueRef::String(s));
         }
+        ValueRef::Array(&values).encode(writer)
     }
 }
 
 impl Encoder for Vec<Symbol> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        ValueRef::Array(self.iter().map(|v| ValueRef::Symbol(v))).encode(writer)
+        let mut values = Vec::new();
+        for sym in self.iter() {
+            values.push(ValueRef::Symbol(sym));
+        }
+        ValueRef::Array(&values).encode(writer)
     }
 }
 
@@ -288,6 +267,23 @@ impl<T: Encoder> Encoder for Option<T> {
             Some(value) => value.encode(writer),
             _ => Value::Null.encode(writer),
         }
+    }
+}
+
+impl Encoder for BTreeMap<String, Value> {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let m = BTreeMap::from_iter(
+            self.iter()
+                .map(|(k, v)| (ValueRef::String(k), v.value_ref())),
+        );
+        ValueRef::Map(&m).encode(writer)
+    }
+}
+
+impl Encoder for BTreeMap<Value, Value> {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let m = BTreeMap::from_iter(self.iter().map(|(k, v)| (k.value_ref(), v.value_ref())));
+        ValueRef::Map(&m).encode(writer)
     }
 }
 
@@ -358,15 +354,15 @@ impl Encoder for ValueRef<'_> {
                 }
             }
             ValueRef::Symbol(val) => {
-                if val.len() > U8_MAX {
+                if val.data.len() > U8_MAX {
                     writer.write_u8(TypeCode::Sym32 as u8)?;
-                    writer.write_u32::<NetworkEndian>(val.len() as u32)?;
-                    writer.write(&val[..])?;
+                    writer.write_u32::<NetworkEndian>(val.data.len() as u32)?;
+                    writer.write(&val.data[..])?;
                     Ok(TypeCode::Sym32)
                 } else {
                     writer.write_u8(TypeCode::Sym8 as u8)?;
-                    writer.write_u8(val.len() as u8)?;
-                    writer.write(&val[..])?;
+                    writer.write_u8(val.data.len() as u8)?;
+                    writer.write(&val.data[..])?;
                     Ok(TypeCode::Sym8)
                 }
             }
@@ -644,13 +640,13 @@ fn decode_value_with_ctor(raw_code: u8, reader: &mut dyn Read) -> Result<Value> 
             let len = reader.read_u8()? as usize;
             let mut buffer = vec![0u8; len];
             reader.read_exact(&mut buffer)?;
-            Ok(Value::Symbol(buffer))
+            Ok(Value::Symbol(Symbol::from_vec(buffer)))
         }
         TypeCode::Sym32 => {
             let len = reader.read_u32::<NetworkEndian>()? as usize;
             let mut buffer = vec![0u8; len];
             reader.read_exact(&mut buffer)?;
-            Ok(Value::Symbol(buffer))
+            Ok(Value::Symbol(Symbol::from_vec(buffer)))
         }
         TypeCode::Bin8 => {
             let len = reader.read_u8()? as usize;
