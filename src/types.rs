@@ -38,11 +38,28 @@ impl<T> OptionValue<T> for Option<T> {
     }
 }
 
-pub struct Symbol(&'static [u8]);
+#[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq)]
+pub struct Symbol {
+    data: Vec<u8>,
+}
 
 impl Symbol {
-    pub fn new(data: &'static [u8]) -> Symbol {
-        return Symbol(data);
+    pub fn from_slice(data: &[u8]) -> Symbol {
+        return Symbol {
+            data: Vec::new(data),
+        };
+    }
+
+    pub fn from_vec(data: &Vec<u8>) -> Symbol {
+        return Symbol {
+            data: Vec::new(data),
+        };
+    }
+
+    pub fn from_string(data: &str) -> Symbol {
+        return Symbol {
+            data: Vec::new(data.to_vec()),
+        };
     }
 }
 
@@ -86,6 +103,23 @@ pub enum Value {
     Array(Vec<Value>),
     List(Vec<Value>),
     Map(BTreeMap<Value, Value>),
+}
+
+#[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq, Copy)]
+pub enum ValueKind {
+    Null,
+    Bool,
+    Ubyte,
+    Ushort,
+    Uint,
+    Ulong,
+    Byte,
+    Short,
+    Int,
+    Long,
+    String,
+    Binary,
+    Symbol,
 }
 
 impl Value {
@@ -155,16 +189,28 @@ impl FrameEncoder {
     pub fn new(desc: Value) -> FrameEncoder {
         return FrameEncoder {
             desc: desc,
-            buffer: Vec::new(),
+            args: Vec::new(),
             nelems: 0,
         };
     }
 
-    pub fn encode_arg<T: Encoder>(&self, arg: &dyn Encoder) -> Result<()> {
-        arg.encode(self.buffer)?;
+    pub fn encode_arg(&mut self, arg: &dyn Encoder) -> Result<()> {
+        arg.encode(&mut self.args)?;
         self.nelems += 1;
         Ok(())
     }
+
+    /*
+    pub fn encode_arg(&mut self, arg: &dyn Encoder, kind: ValueKind) -> Result<()> {
+        // F(arg).encode(self.buffer)?;
+        match kind {
+            Null => Value::Null.encode(writer),
+            Bool =>
+        }
+        self.nelems += 1;
+        Ok(())
+    }
+    */
 }
 
 const U8_MAX: usize = std::u8::MAX as usize;
@@ -188,6 +234,24 @@ impl Encoder for Symbol {
     }
 }
 
+impl Encoder for Vec<Symbol> {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        ValueRef::Array(self.iter().map(|v| ValueRef::Symbol(v))).encode(writer)
+    }
+}
+
+impl Encoder for Vec<u8> {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        ValueRef::Binary(self).encode(writer)
+    }
+}
+
+impl Encoder for &[u8] {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        ValueRef::Binary(self).encode(writer)
+    }
+}
+
 impl Encoder for String {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         ValueRef::String(self).encode(writer)
@@ -206,11 +270,23 @@ impl Encoder for u64 {
     }
 }
 
-impl Encoder for Option<T: Encoder> {
+impl Encoder for u32 {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        ValueRef::Uint(self).encode(writer)
+    }
+}
+
+impl Encoder for u16 {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        ValueRef::Ushort(self).encode(writer)
+    }
+}
+
+impl<T: Encoder> Encoder for Option<T> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         match self {
-            Some(value) => writer.encode(value),
-            _ => writer.encode(Value::Null),
+            Some(value) => value.encode(writer),
+            _ => Value::Null.encode(writer),
         }
     }
 }
@@ -399,14 +475,14 @@ impl Encoder for ValueRef<'_> {
                     writer.write_u32::<NetworkEndian>((5 + arraybuf.len()) as u32)?;
                     writer.write_u32::<NetworkEndian>(vec.len() as u32)?;
                     writer.write_u8(code)?;
-                    writer.write(&arraybuf[..]);
+                    writer.write(&arraybuf[..])?;
                     Ok(TypeCode::Array32)
                 } else if arraybuf.len() > 0 {
                     writer.write_u8(TypeCode::Array8 as u8)?;
                     writer.write_u8((2 + arraybuf.len()) as u8)?;
                     writer.write_u8(vec.len() as u8)?;
                     writer.write_u8(code)?;
-                    writer.write(&arraybuf[..]);
+                    writer.write(&arraybuf[..])?;
                     Ok(TypeCode::Array8)
                 } else {
                     writer.write_u8(TypeCode::Null as u8)?;
@@ -428,13 +504,13 @@ impl Encoder for ValueRef<'_> {
                     writer.write_u8(TypeCode::List32 as u8)?;
                     writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
                     writer.write_u32::<NetworkEndian>(vec.len() as u32)?;
-                    writer.write(&listbuf[..]);
+                    writer.write(&listbuf[..])?;
                     Ok(TypeCode::List32)
                 } else if listbuf.len() > 0 {
                     writer.write_u8(TypeCode::List8 as u8)?;
                     writer.write_u8((1 + listbuf.len()) as u8)?;
                     writer.write_u8(vec.len() as u8)?;
-                    writer.write(&listbuf[..]);
+                    writer.write(&listbuf[..])?;
                     Ok(TypeCode::List8)
                 } else {
                     writer.write_u8(TypeCode::List0 as u8)?;
@@ -459,13 +535,13 @@ impl Encoder for ValueRef<'_> {
                     writer.write_u8(TypeCode::Map32 as u8)?;
                     writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
                     writer.write_u32::<NetworkEndian>(n_items as u32)?;
-                    writer.write(&listbuf[..]);
+                    writer.write(&listbuf[..])?;
                     Ok(TypeCode::Map32)
                 } else {
                     writer.write_u8(TypeCode::Map8 as u8)?;
                     writer.write_u8((1 + listbuf.len()) as u8)?;
                     writer.write_u8(n_items as u8)?;
-                    writer.write(&listbuf[..]);
+                    writer.write(&listbuf[..])?;
                     Ok(TypeCode::Map8)
                 }
             }

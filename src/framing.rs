@@ -69,11 +69,11 @@ pub type SaslCode = u8;
 impl Encoder for SaslMechanism {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let value = match self {
-            SaslMechanism::Anonymous => Symbol::new(b"ANONYMOUS"),
-            SaslMechanism::Plain => Symbol::new(b"PLAIN"),
-            SaslMechanism::CramMd5 => Symbol::new(b"CRAM-MD5"),
-            SaslMechanism::ScramSha1 => Symbol::new(b"SCRAM-SHA-1"),
-            SaslMechanism::ScramSha256 => Symbol::new(b"SCRAM-SHA-256"),
+            SaslMechanism::Anonymous => Symbol::from_slice(b"ANONYMOUS"),
+            SaslMechanism::Plain => Symbol::from_slice(b"PLAIN"),
+            SaslMechanism::CramMd5 => Symbol::from_slice(b"CRAM-MD5"),
+            SaslMechanism::ScramSha1 => Symbol::from_slice(b"SCRAM-SHA-1"),
+            SaslMechanism::ScramSha256 => Symbol::from_slice(b"SCRAM-SHA-256"),
         };
         value.encode(writer)
     }
@@ -85,7 +85,7 @@ impl Encoder for SaslInit {
         encoder.encode_arg(&self.mechanism)?;
         encoder.encode_arg(&self.initial_response)?;
         encoder.encode_arg(&self.hostname)?;
-        encoder.encode(self.writer)
+        encoder.encode(writer)
     }
 }
 
@@ -105,10 +105,10 @@ pub struct Open {
     pub max_frame_size: Option<u32>,
     pub channel_max: Option<u16>,
     pub idle_timeout: Option<u32>,
-    pub outgoing_locales: Option<Vec<String>>,
-    pub incoming_locales: Option<Vec<String>>,
-    pub offered_capabilities: Option<Vec<String>>,
-    pub desired_capabilities: Option<Vec<String>>,
+    pub outgoing_locales: Option<Vec<Symbol>>,
+    pub incoming_locales: Option<Vec<Symbol>>,
+    pub offered_capabilities: Option<Vec<Symbol>>,
+    pub desired_capabilities: Option<Vec<Symbol>>,
     pub properties: Option<BTreeMap<String, Value>>,
 }
 
@@ -308,13 +308,9 @@ impl Open {
 
             if let Some(offered_capabilities) = it.next() {
                 if let Value::Array(vec) = offered_capabilities {
-                    let mut cap = Vec::new();
-                    for val in vec.iter() {
-                        cap.push(val.to_string())
-                    }
-                    open.offered_capabilities = Some(cap);
+                    open.offered_capabilities = Some(Symbol::from_vec(vec));
                 } else if let Value::Symbol(s) = offered_capabilities {
-                    open.offered_capabilities = Some(vec![String::from_utf8(s.to_vec()).unwrap()]);
+                    open.offered_capabilities = Some(Symbol::from_string(s));
                 }
             }
 
@@ -532,8 +528,17 @@ impl Close {
 
 impl Encoder for Open {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_OPEN);
+        encoder.encode_arg(&self.container_id)?;
+        encoder.encode_arg(&self.hostname)?;
+        encoder.encode_arg(&self.max_frame_size)?;
+        encoder.encode_arg(&self.channel_max)?;
+        encoder.encode_arg(&self.idle_timeout)?;
+        encoder.encode_arg(&self.outgoing_locales, ValueKind::Symbol)?;
+        encoder.encode(writer)
+        /*
         let args = vec![
-            ValueRef::String(self.container_id),
+            ValueRef::String(&self.container_id),
             self.hostname.to_value(|v| ValueRef::String(v)),
             self.max_frame_size.to_value(|v| ValueRef::Uint(v)),
             self.channel_max.to_value(|v| ValueRef::Ushort(v)),
@@ -574,6 +579,7 @@ impl Encoder for Open {
         ];
         Value::Described(Box::new(DESC_OPEN), Box::new(Value::List(args))).encode(writer)?;
         Ok(TypeCode::Described)
+            */
     }
 }
 

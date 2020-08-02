@@ -248,10 +248,7 @@ impl ConnectionDriver {
 
 fn unwrap_frame(frame: Frame) -> Result<(ChannelId, Option<Performative>)> {
     match frame {
-        Frame::AMQP(AmqpFrame {
-            channel: channel,
-            body: body,
-        }) => {
+        Frame::AMQP(AmqpFrame { channel, body }) => {
             return Ok((channel as ChannelId, body));
         }
         _ => return Err(AmqpError::framing_error()),
