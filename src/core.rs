@@ -93,6 +93,7 @@ pub struct Connection {
 
 type ChannelId = u16;
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum SessionState {
     Unmapped,
@@ -104,6 +105,7 @@ enum SessionState {
     Discarding,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum LinkState {
     Unmapped,

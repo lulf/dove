@@ -31,6 +31,12 @@ impl Symbol {
         return Symbol { data: vec };
     }
 
+    pub fn from_str(data: &str) -> Symbol {
+        let mut vec = Vec::new();
+        vec.extend_from_slice(data.as_bytes());
+        return Symbol { data: vec };
+    }
+
     pub fn from_vec(data: Vec<u8>) -> Symbol {
         return Symbol { data };
     }
@@ -41,8 +47,8 @@ impl Symbol {
         return Symbol { data: vec };
     }
 
-    pub fn to_vec(&self) -> Vec<u8> {
-        return self.data;
+    pub fn to_slice(&self) -> &[u8] {
+        return &self.data[..];
     }
 }
 
@@ -62,6 +68,7 @@ pub enum ValueRef<'a> {
     String(&'a str),
     Binary(&'a [u8]),
     Symbol(&'a Symbol),
+    SymbolRef(&'a str),
     Array(&'a Vec<ValueRef<'a>>),
     List(&'a Vec<ValueRef<'a>>),
     Map(&'a BTreeMap<ValueRef<'a>, ValueRef<'a>>),
@@ -115,7 +122,9 @@ impl Value {
     pub fn try_to_string(self: &Self) -> Option<String> {
         match self {
             Value::String(v) => Some(v.clone()),
-            Value::Symbol(v) => Some(String::from_utf8(v.data).expect("Error decoding symbol")),
+            Value::Symbol(v) => {
+                Some(String::from_utf8(v.data.clone()).expect("Error decoding symbol"))
+            }
             _ => None,
         }
     }
@@ -138,6 +147,7 @@ impl Value {
     }
 }
 
+#[allow(dead_code)]
 pub struct FrameDecoder<'a> {
     desc: &'a Value,
     input: &'a Value,
@@ -519,6 +529,19 @@ impl Encoder for ValueRef<'_> {
                     writer.write_u8(val.len() as u8)?;
                     writer.write(val.as_bytes())?;
                     Ok(TypeCode::Str8)
+                }
+            }
+            ValueRef::SymbolRef(val) => {
+                if val.len() > U8_MAX {
+                    writer.write_u8(TypeCode::Sym32 as u8)?;
+                    writer.write_u32::<NetworkEndian>(val.len() as u32)?;
+                    writer.write(&val.as_bytes()[..])?;
+                    Ok(TypeCode::Sym32)
+                } else {
+                    writer.write_u8(TypeCode::Sym8 as u8)?;
+                    writer.write_u8(val.len() as u8)?;
+                    writer.write(&val.as_bytes()[..])?;
+                    Ok(TypeCode::Sym8)
                 }
             }
             ValueRef::Symbol(val) => {

@@ -500,6 +500,7 @@ impl Attach {
     }
 }
 
+#[allow(dead_code)]
 fn decode_condition(value: Value) -> Result<ErrorCondition> {
     if let Value::Described(descriptor, list) = value {
         match *descriptor {
@@ -732,43 +733,58 @@ impl Encoder for Vec<Outcome> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let mut values = Vec::new();
         for outcome in self.iter() {
-            values.push(ValueRef::Symbol(outcome.to_symbol_ref()));
+            values.push(ValueRef::SymbolRef(outcome.to_str()));
         }
         ValueRef::Array(&values).encode(writer)
     }
 }
 
 impl Outcome {
-    pub fn to_symbol_ref(&self) -> &Symbol {
+    pub fn to_str(&self) -> &'static str {
         match *self {
-            Outcome::Accepted => &Symbol::from_string("Accepted"),
-            Outcome::Rejected => &Symbol::from_string("Rejected"),
-            Outcome::Released => &Symbol::from_string("Released"),
-            Outcome::Modified => &Symbol::from_string("Modified"),
+            Outcome::Accepted => "Accepted",
+            Outcome::Rejected => "Rejected",
+            Outcome::Released => "Released",
+            Outcome::Modified => "Modified",
         }
     }
 }
 impl Encoder for Outcome {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        ValueRef::Symbol(self.to_symbol_ref()).encode(writer)
+        ValueRef::Symbol(&Symbol::from_str(self.to_str())).encode(writer)
+    }
+}
+
+impl TerminusDurability {
+    pub fn to_str(&self) -> &'static str {
+        match *self {
+            TerminusDurability::None => "None",
+            TerminusDurability::Configuration => "Configuration",
+            TerminusDurability::UnsettledState => "UnsettledState",
+        }
+    }
+}
+
+impl TerminusExpiryPolicy {
+    pub fn to_str(&self) -> &'static str {
+        match *self {
+            TerminusExpiryPolicy::LinkDetach => "LinkDetach",
+            TerminusExpiryPolicy::SessionEnd => "SessionEnd",
+            TerminusExpiryPolicy::ConnectionClose => "ConnectionClose",
+            TerminusExpiryPolicy::Never => "Never",
+        }
     }
 }
 
 impl Encoder for TerminusDurability {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let value = match self {
-            _ => &Symbol::from_string("unknown"),
-        };
-        ValueRef::Symbol(value).encode(writer)
+        ValueRef::Symbol(&Symbol::from_str(self.to_str())).encode(writer)
     }
 }
 
 impl Encoder for TerminusExpiryPolicy {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let value = match self {
-            _ => &Symbol::from_string("unknown"),
-        };
-        ValueRef::Symbol(value).encode(writer)
+        ValueRef::Symbol(&Symbol::from_str(self.to_str())).encode(writer)
     }
 }
 
@@ -909,11 +925,10 @@ impl Frame {
                                         }
                                         Some(SaslFrame::SaslMechanisms(mechs))
                                     } else if let Value::Symbol(s) = sasl_server_mechanisms {
-                                        Some(SaslFrame::SaslMechanisms(vec![String::from_utf8(
-                                            s.to_vec(),
-                                        )
-                                        .unwrap()
-                                        .parse::<SaslMechanism>()?]))
+                                        Some(SaslFrame::SaslMechanisms(vec![
+                                            String::from_utf8_lossy(s.to_slice())
+                                                .parse::<SaslMechanism>()?,
+                                        ]))
                                     } else {
                                         Some(SaslFrame::SaslMechanisms(vec![]))
                                     }
