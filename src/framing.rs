@@ -268,7 +268,7 @@ impl Open {
     }
 
     pub fn decode(mut decoder: FrameDecoder) -> Result<Open> {
-        let open = Open {
+        let mut open = Open {
             container_id: String::new(),
             hostname: None,
             max_frame_size: None,
@@ -280,100 +280,17 @@ impl Open {
             desired_capabilities: None,
             properties: None,
         };
-        decoder.decode_next(&open.container_id)?;
-        decoder.decode_next(&open.hostname)?;
-        decoder.decode_next(&open.max_frame_size)?;
-        decoder.decode_next(&open.channel_max)?;
-        decoder.decode_next(&open.idle_timeout)?;
-        decoder.decode_next(&open.outgoing_locales)?;
-        decoder.decode_next(&open.incoming_locales)?;
-        decoder.decode_next(&open.offered_capabilities)?;
-        decoder.decode_next(&open.desired_capabilities)?;
-        decoder.decode_next(&open.properties)?;
+        decoder.decode(&mut open.container_id, true)?;
+        decoder.decode_optional(&mut open.hostname)?;
+        decoder.decode_optional(&mut open.max_frame_size)?;
+        decoder.decode_optional(&mut open.channel_max)?;
+        decoder.decode_optional(&mut open.idle_timeout)?;
+        decoder.decode_optional(&mut open.outgoing_locales)?;
+        decoder.decode_optional(&mut open.incoming_locales)?;
+        decoder.decode_optional(&mut open.offered_capabilities)?;
+        decoder.decode_optional(&mut open.desired_capabilities)?;
+        decoder.decode_optional(&mut open.properties)?;
         Ok(open)
-        /*
-            if let Value::List(args) = value {
-                let mut it = args.iter();
-
-                let container_id =
-                    it.next()
-                        .and_then(|c| c.try_to_string())
-                        .ok_or(AmqpError::decode_error(Some(
-                            "Unable to decode mandatory field 'container_id'",
-                        )))?;
-
-                let mut open = Open::new(container_id.as_str());
-                if let Some(hostname) = it.next() {
-                    open.hostname = hostname.try_to_string();
-                }
-
-                if let Some(max_frame_size) = it.next() {
-                    open.max_frame_size = max_frame_size as u32;
-                }
-
-                if let Some(channel_max) = it.next() {
-                    open.channel_max = channel_max.try_to_u16();
-                }
-
-                if let Some(idle_timeout) = it.next() {
-                    open.idle_timeout = idle_timeout.try_to_u32();
-                }
-
-                if let Some(outgoing_locales) = it.next() {
-                    // TODO:
-                    // println!("OLOC {:?}", outgoing_locales);
-                }
-
-                if let Some(incoming_locales) = it.next() {
-                    // TODO:
-                    // println!("ILOC {:?}", incoming_locales);
-                }
-
-                if let Some(offered_capabilities) = it.next() {
-                    if let Value::Array(vec) = offered_capabilities {
-                        let symbols = Vec::new();
-                        for v in vec.iter() {
-                            if let Value::Symbol(sym) = v {
-                                symbols.push(*sym);
-                            }
-                        }
-                        open.offered_capabilities = Some(symbols);
-                    } else if let Value::Symbol(s) = offered_capabilities {
-                        open.offered_capabilities = Some(vec![*s]);
-                    }
-                }
-
-                if let Some(desired_capabilities) = it.next() {
-                    if let Value::Array(vec) = desired_capabilities {
-                        let symbols = Vec::new();
-                        for v in vec.iter() {
-                            if let Value::Symbol(sym) = v {
-                                symbols.push(*sym);
-                            }
-                        }
-                        open.desired_capabilities = Some(symbols);
-                    } else if let Value::Symbol(s) = desired_capabilities {
-                        open.desired_capabilities = Some(vec![*s]);
-                    }
-                }
-
-                if let Some(properties) = it.next() {
-                    if let Value::Map(m) = properties {
-                        let mut map = BTreeMap::new();
-                        for (key, value) in m.iter() {
-                            map.insert(key.to_string(), value.clone());
-                        }
-                        open.properties = Some(map);
-                    }
-                }
-
-                Ok(open)
-            } else {
-                Err(AmqpError::decode_error(Some(
-                    "Missing expected arguments for open performative",
-                )))
-            }
-        */
     }
 }
 
@@ -875,8 +792,8 @@ impl Frame {
 
         if header.frame_type == 0 {
             let body = if header.size > 8 {
-                if let Value::Described(descriptor, value) = decode_value(reader)? {
-                    let decoder = FrameDecoder::new(&descriptor, &value)?;
+                if let Value::Described(descriptor, mut value) = decode_value(reader)? {
+                    let decoder = FrameDecoder::new(&descriptor, &mut value)?;
                     Some(match *descriptor {
                         DESC_OPEN => {
                             let open = Open::decode(decoder)?;

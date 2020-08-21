@@ -150,17 +150,15 @@ impl Value {
 #[allow(dead_code)]
 pub struct FrameDecoder<'a> {
     desc: &'a Value,
-    input: &'a Value,
-    //iter: std::iter::Iter<Value>,
+    args: &'a mut Vec<Value>,
 }
 
 impl<'a> FrameDecoder<'a> {
-    pub fn new(desc: &'a Value, input: &'a Value) -> Result<FrameDecoder<'a>> {
-        if let Value::List(_) = input {
+    pub fn new(desc: &'a Value, input: &'a mut Value) -> Result<FrameDecoder<'a>> {
+        if let Value::List(args) = input {
             return Ok(FrameDecoder {
                 desc: desc,
-                input: input,
-                //   iter: args.iter(),
+                args: args,
             });
         } else {
             return Err(AmqpError::amqp_error(
@@ -170,7 +168,28 @@ impl<'a> FrameDecoder<'a> {
         }
     }
 
-    pub fn decode_next<T: TryFrom<Value, Error = AmqpError>>(&mut self, _: &T) -> Result<()> {
+    pub fn decode_optional<T: TryFrom<Value, Error = AmqpError>>(
+        &mut self,
+        value: &mut T,
+    ) -> Result<()> {
+        self.decode(value, false)
+    }
+
+    pub fn decode<T: TryFrom<Value, Error = AmqpError>>(
+        &mut self,
+        value: &mut T,
+        required: bool,
+    ) -> Result<()> {
+        let mut drained = self.args.drain(0..0);
+        if let Some(arg) = drained.next() {
+            let v = arg;
+            *value = T::try_from(v)?;
+        } else if required {
+            return Err(AmqpError::amqp_error(
+                condition::DECODE_ERROR,
+                Some("Decoded null value for required argument"),
+            ));
+        }
         Ok(())
     }
 }
