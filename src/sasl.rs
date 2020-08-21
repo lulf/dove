@@ -141,7 +141,7 @@ impl Sasl {
                     _ => println!("Got frame {:?}", frame),
                 }
             }
-            SaslRole::Server(sasl_server) => {}
+            SaslRole::Server(_) => {}
         }
         Ok(())
     }

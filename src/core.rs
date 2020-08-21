@@ -234,7 +234,7 @@ impl ConnectionDriver {
 
     // Poll for events on one of the handles registered with this driver and push the events to the provided buffer.
     pub fn poll(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
-        for (id, conn) in self.connections.iter_mut() {
+        for (_id, conn) in self.connections.iter_mut() {
             let found = conn.poll(event_buffer);
             match found {
                 Err(AmqpError::IoError(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {}
@@ -518,7 +518,7 @@ impl Connection {
 
     // Process work to be performed on sub endpoints
     fn process_work(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
-        for (channel_id, session) in self.sessions.iter_mut() {
+        for (_channel_id, session) in self.sessions.iter_mut() {
             match session.state {
                 SessionState::Unmapped => {
                     if session.opened {
@@ -534,7 +534,7 @@ impl Connection {
                 }
                 SessionState::BeginSent | SessionState::Mapped => {
                     // Check for local sessions opened
-                    for (name, link) in session.links.iter_mut() {
+                    for (_name, link) in session.links.iter_mut() {
                         match link.state {
                             LinkState::Unmapped => {
                                 if link.opened {
@@ -618,7 +618,7 @@ impl Connection {
                 };
                 session.remote_channel = Some(channel_id);
 
-                let local_channel = session.local_channel;
+                // let local_channel = session.local_channel;
                 event_buffer.push(Event::RemoteBegin(id, session.local_channel, begin.clone()));
                 match session.state {
                     SessionState::BeginSent => {
@@ -632,18 +632,19 @@ impl Connection {
                     _ => Err(AmqpError::framing_error()),
                 }
             }
-            Performative::Attach(attach) => {
+            Performative::Attach(_) => {
                 println!("Remote ATTACH");
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
                 // Lookup session
                 if let Some(local_channel) = local_channel_opt {
-                    let session = self.sessions.get_mut(&local_channel).unwrap();
+                    //let session = self.sessions.get_mut(&local_channel).unwrap();
+                    self.sessions.get_mut(&local_channel).unwrap();
                     Ok(())
                 } else {
                     Err(AmqpError::framing_error())
                 }
             }
-            Performative::End(end) => {
+            Performative::End(_) => {
                 println!("SESSION END");
                 Ok(())
             }

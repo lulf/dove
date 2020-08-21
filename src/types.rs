@@ -7,6 +7,7 @@ use byteorder::NetworkEndian;
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
 use std::collections::BTreeMap;
+use std::convert::TryFrom;
 use std::io::Read;
 use std::io::Write;
 use std::iter::FromIterator;
@@ -16,10 +17,6 @@ use crate::error::*;
 
 pub trait Encoder {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode>;
-}
-
-pub trait Decoder: Sized {
-    fn decode(reader: &mut dyn Read) -> Result<Self>;
 }
 
 #[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq)]
@@ -42,6 +39,10 @@ impl Symbol {
         let mut vec = Vec::new();
         vec.extend_from_slice(data.as_bytes());
         return Symbol { data: vec };
+    }
+
+    pub fn to_vec(&self) -> Vec<u8> {
+        return self.data;
     }
 }
 
@@ -105,6 +106,12 @@ pub enum ValueKind {
 }
 
 impl Value {
+    pub fn try_to_u32(self: &Self) -> Option<u32> {
+        return Some(0);
+    }
+    pub fn try_to_u16(self: &Self) -> Option<u16> {
+        return Some(0);
+    }
     pub fn try_to_string(self: &Self) -> Option<String> {
         match self {
             Value::String(v) => Some(v.clone()),
@@ -131,19 +138,19 @@ impl Value {
     }
 }
 
-pub struct FrameDecoder {
-    desc: Value,
-    input: Value,
-    iter: Iter<Value>,
+pub struct FrameDecoder<'a> {
+    desc: &'a Value,
+    input: &'a Value,
+    //iter: std::iter::Iter<Value>,
 }
 
-impl FrameDecoder {
-    pub fn new(desc: Value, input: Value) -> Result<FrameDecoder> {
-        if let Value::List(args) = input {
+impl<'a> FrameDecoder<'a> {
+    pub fn new(desc: &'a Value, input: &'a Value) -> Result<FrameDecoder<'a>> {
+        if let Value::List(_) = input {
             return Ok(FrameDecoder {
                 desc: desc,
                 input: input,
-                iter: args.iter(),
+                //   iter: args.iter(),
             });
         } else {
             return Err(AmqpError::amqp_error(
@@ -151,6 +158,10 @@ impl FrameDecoder {
                 Some("Error decoding frame arguments"),
             ));
         }
+    }
+
+    pub fn decode_next<T: TryFrom<Value, Error = AmqpError>>(&mut self, _: &T) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -192,6 +203,163 @@ const U8_MAX: usize = std::u8::MAX as usize;
 const I8_MAX: usize = std::i8::MAX as usize;
 const LIST8_MAX: usize = (std::u8::MAX as usize) - 1;
 const LIST32_MAX: usize = (std::u32::MAX as usize) - 4;
+
+impl std::convert::TryFrom<Value> for u32 {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Uint(v) => return Ok(v),
+            _ => Err(AmqpError::amqp_error(
+                condition::DECODE_ERROR,
+                Some("Error converting value to u32"),
+            )),
+        }
+    }
+}
+
+impl std::convert::TryFrom<Value> for Option<u32> {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Null => Ok(None),
+            v => Ok(Some(u32::try_from(v)?)),
+        }
+    }
+}
+
+impl std::convert::TryFrom<Value> for u16 {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Ushort(v) => return Ok(v),
+            _ => Err(AmqpError::amqp_error(
+                condition::DECODE_ERROR,
+                Some("Error converting value to u32"),
+            )),
+        }
+    }
+}
+
+impl std::convert::TryFrom<Value> for Option<u16> {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        Ok(match value {
+            Value::Null => None,
+            v => Some(u16::try_from(v)?),
+        })
+    }
+}
+
+impl std::convert::TryFrom<Value> for String {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::String(v) => return Ok(v),
+            _ => Err(AmqpError::amqp_error(
+                condition::DECODE_ERROR,
+                Some("Error converting value to String"),
+            )),
+        }
+    }
+}
+
+impl std::convert::TryFrom<Value> for Option<String> {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        Ok(match value {
+            Value::Null => None,
+            v => Some(String::try_from(v)?),
+        })
+    }
+}
+
+impl std::convert::TryFrom<Value> for Symbol {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Symbol(v) => Ok(v),
+            _ => Err(AmqpError::amqp_error(
+                condition::DECODE_ERROR,
+                Some("Error converting value to Symbol"),
+            )),
+        }
+    }
+}
+
+impl std::convert::TryFrom<Value> for Option<Symbol> {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        Ok(match value {
+            Value::Null => None,
+            v => Some(Symbol::try_from(v)?),
+        })
+    }
+}
+
+impl std::convert::TryFrom<Value> for Vec<Symbol> {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Array(v) => {
+                let (results, errors): (Vec<_>, Vec<_>) = v
+                    .into_iter()
+                    .map(|f| Symbol::try_from(f))
+                    .partition(Result::is_ok);
+                if errors.len() > 0 {
+                    return Err(AmqpError::amqp_error(
+                        condition::DECODE_ERROR,
+                        Some("Error decoding some elements"),
+                    ));
+                } else {
+                    return Ok(results.into_iter().map(Result::unwrap).collect());
+                }
+            }
+            _ => Err(AmqpError::amqp_error(
+                condition::DECODE_ERROR,
+                Some("Error converting value to Vec<Symbol>"),
+            )),
+        }
+    }
+}
+
+impl std::convert::TryFrom<Value> for Option<Vec<Symbol>> {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        Ok(match value {
+            Value::Null => None,
+            v => Some(Vec::try_from(v)?),
+        })
+    }
+}
+
+impl std::convert::TryFrom<Value> for BTreeMap<String, Value> {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Map(v) => {
+                let mut m = BTreeMap::new();
+                for (key, value) in v.into_iter() {
+                    m.insert(String::try_from(key)?, value);
+                }
+                Ok(m)
+            }
+            _ => Err(AmqpError::amqp_error(
+                condition::DECODE_ERROR,
+                Some("Error converting value to Vec<Symbol>"),
+            )),
+        }
+    }
+}
+
+impl std::convert::TryFrom<Value> for Option<BTreeMap<String, Value>> {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        Ok(match value {
+            Value::Null => None,
+            v => Some(BTreeMap::try_from(v)?),
+        })
+    }
+}
 
 impl Encoder for Symbol {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {

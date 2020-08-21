@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Read;
 use std::io::Write;
-use std::iter::FromIterator;
 use std::vec::Vec;
 
 use crate::error::*;
@@ -268,88 +267,113 @@ impl Open {
         }
     }
 
-    pub fn from_value(value: Value) -> Result<Open> {
-        if let Value::List(args) = value {
-            let mut it = args.iter();
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Open> {
+        let open = Open {
+            container_id: String::new(),
+            hostname: None,
+            max_frame_size: None,
+            channel_max: None,
+            idle_timeout: None,
+            outgoing_locales: None,
+            incoming_locales: None,
+            offered_capabilities: None,
+            desired_capabilities: None,
+            properties: None,
+        };
+        decoder.decode_next(&open.container_id)?;
+        decoder.decode_next(&open.hostname)?;
+        decoder.decode_next(&open.max_frame_size)?;
+        decoder.decode_next(&open.channel_max)?;
+        decoder.decode_next(&open.idle_timeout)?;
+        decoder.decode_next(&open.outgoing_locales)?;
+        decoder.decode_next(&open.incoming_locales)?;
+        decoder.decode_next(&open.offered_capabilities)?;
+        decoder.decode_next(&open.desired_capabilities)?;
+        decoder.decode_next(&open.properties)?;
+        Ok(open)
+        /*
+            if let Value::List(args) = value {
+                let mut it = args.iter();
 
-            let container_id =
-                it.next()
-                    .and_then(|c| c.try_to_string())
-                    .ok_or(AmqpError::decode_error(Some(
-                        "Unable to decode mandatory field 'container_id'",
-                    )))?;
+                let container_id =
+                    it.next()
+                        .and_then(|c| c.try_to_string())
+                        .ok_or(AmqpError::decode_error(Some(
+                            "Unable to decode mandatory field 'container_id'",
+                        )))?;
 
-            let mut open = Open::new(container_id.as_str());
-            if let Some(hostname) = it.next() {
-                open.hostname = hostname.try_to_string();
-            }
+                let mut open = Open::new(container_id.as_str());
+                if let Some(hostname) = it.next() {
+                    open.hostname = hostname.try_to_string();
+                }
 
-            if let Some(max_frame_size) = it.next() {
-                open.max_frame_size = max_frame_size.try_to_u32();
-            }
+                if let Some(max_frame_size) = it.next() {
+                    open.max_frame_size = max_frame_size as u32;
+                }
 
-            if let Some(channel_max) = it.next() {
-                open.channel_max = channel_max.try_to_u16();
-            }
+                if let Some(channel_max) = it.next() {
+                    open.channel_max = channel_max.try_to_u16();
+                }
 
-            if let Some(idle_timeout) = it.next() {
-                open.idle_timeout = idle_timeout.try_to_u32();
-            }
+                if let Some(idle_timeout) = it.next() {
+                    open.idle_timeout = idle_timeout.try_to_u32();
+                }
 
-            if let Some(outgoing_locales) = it.next() {
-                // TODO:
-                // println!("OLOC {:?}", outgoing_locales);
-            }
+                if let Some(outgoing_locales) = it.next() {
+                    // TODO:
+                    // println!("OLOC {:?}", outgoing_locales);
+                }
 
-            if let Some(incoming_locales) = it.next() {
-                // TODO:
-                // println!("ILOC {:?}", incoming_locales);
-            }
+                if let Some(incoming_locales) = it.next() {
+                    // TODO:
+                    // println!("ILOC {:?}", incoming_locales);
+                }
 
-            if let Some(offered_capabilities) = it.next() {
-                if let Value::Array(vec) = offered_capabilities {
-                    let symbols = Vec::new();
-                    for v in vec.iter() {
-                        if let Value::Symbol(sym) = v {
-                            symbols.push(*sym);
+                if let Some(offered_capabilities) = it.next() {
+                    if let Value::Array(vec) = offered_capabilities {
+                        let symbols = Vec::new();
+                        for v in vec.iter() {
+                            if let Value::Symbol(sym) = v {
+                                symbols.push(*sym);
+                            }
                         }
+                        open.offered_capabilities = Some(symbols);
+                    } else if let Value::Symbol(s) = offered_capabilities {
+                        open.offered_capabilities = Some(vec![*s]);
                     }
-                    open.offered_capabilities = Some(symbols);
-                } else if let Value::Symbol(s) = offered_capabilities {
-                    open.offered_capabilities = Some(vec![*s]);
                 }
-            }
 
-            if let Some(desired_capabilities) = it.next() {
-                if let Value::Array(vec) = desired_capabilities {
-                    let symbols = Vec::new();
-                    for v in vec.iter() {
-                        if let Value::Symbol(sym) = v {
-                            symbols.push(*sym);
+                if let Some(desired_capabilities) = it.next() {
+                    if let Value::Array(vec) = desired_capabilities {
+                        let symbols = Vec::new();
+                        for v in vec.iter() {
+                            if let Value::Symbol(sym) = v {
+                                symbols.push(*sym);
+                            }
                         }
+                        open.desired_capabilities = Some(symbols);
+                    } else if let Value::Symbol(s) = desired_capabilities {
+                        open.desired_capabilities = Some(vec![*s]);
                     }
-                    open.desired_capabilities = Some(symbols);
-                } else if let Value::Symbol(s) = desired_capabilities {
-                    open.desired_capabilities = Some(vec![*s]);
                 }
-            }
 
-            if let Some(properties) = it.next() {
-                if let Value::Map(m) = properties {
-                    let mut map = BTreeMap::new();
-                    for (key, value) in m.iter() {
-                        map.insert(key.to_string(), value.clone());
+                if let Some(properties) = it.next() {
+                    if let Value::Map(m) = properties {
+                        let mut map = BTreeMap::new();
+                        for (key, value) in m.iter() {
+                            map.insert(key.to_string(), value.clone());
+                        }
+                        open.properties = Some(map);
                     }
-                    open.properties = Some(map);
                 }
-            }
 
-            Ok(open)
-        } else {
-            Err(AmqpError::decode_error(Some(
-                "Missing expected arguments for open performative",
-            )))
-        }
+                Ok(open)
+            } else {
+                Err(AmqpError::decode_error(Some(
+                    "Missing expected arguments for open performative",
+                )))
+            }
+        */
     }
 }
 
@@ -367,84 +391,92 @@ impl Begin {
         }
     }
 
-    pub fn from_value(value: Value) -> Result<Begin> {
-        if let Value::List(args) = value {
-            let mut begin = Begin::new(0, 0, 0);
-            let mut it = args.iter();
-            if let Some(remote_channel) = it.next() {
-                begin.remote_channel = remote_channel.try_to_u16();
-            }
+    pub fn from_value(_: Value) -> Result<Begin> {
+        let begin = Begin::new(0, 0, 0);
+        return Ok(begin);
+    }
 
-            begin.next_outgoing_id =
-                it.next()
-                    .and_then(|c| c.try_to_u32())
-                    .ok_or(AmqpError::decode_error(Some(
-                        "Unable to decode mandatory field 'next-outgoing-id'",
-                    )))?;
+    /*
+        pub fn from_value(value: Value) -> Result<Begin> {
+            if let Value::List(args) = value {
+                let mut begin = Begin::new(0, 0, 0);
+                let mut it = args.iter();
+                if let Some(remote_channel) = it.next() {
+                    begin.remote_channel = remote_channel.try_to_u16();
+                }
 
-            begin.incoming_window =
-                it.next()
-                    .and_then(|c| c.try_to_u32())
-                    .ok_or(AmqpError::decode_error(Some(
-                        "Unable to decode mandatory field 'incoming-window'",
-                    )))?;
+                begin.next_outgoing_id =
+                    it.next()
+                        .and_then(|c| c.try_to_u32())
+                        .ok_or(AmqpError::decode_error(Some(
+                            "Unable to decode mandatory field 'next-outgoing-id'",
+                        )))?;
 
-            begin.outgoing_window =
-                it.next()
-                    .and_then(|c| c.try_to_u32())
-                    .ok_or(AmqpError::decode_error(Some(
-                        "Unable to decode mandatory field 'outgoing-window'",
-                    )))?;
+                begin.incoming_window =
+                    it.next()
+                        .and_then(|c| c.try_to_u32())
+                        .ok_or(AmqpError::decode_error(Some(
+                            "Unable to decode mandatory field 'incoming-window'",
+                        )))?;
 
-            if let Some(handle_max) = it.next() {
-                begin.handle_max = handle_max.try_to_u32();
-            }
+                begin.outgoing_window =
+                    it.next()
+                        .and_then(|c| c.try_to_u32())
+                        .ok_or(AmqpError::decode_error(Some(
+                            "Unable to decode mandatory field 'outgoing-window'",
+                        )))?;
 
-            if let Some(offered_capabilities) = it.next() {
-                if let Value::Array(vec) = offered_capabilities {
-                    let symbols = Vec::new();
-                    for v in vec.iter() {
-                        if let Value::Symbol(sym) = v {
-                            symbols.push(*sym);
+                if let Some(_) = it.next() {
+                    // begin.handle_max.decode( = Some(handle_max as u32); //::try_from(handle_max));
+                }
+
+                if let Some(offered_capabilities) = it.next() {
+                    if let Value::Array(vec) = offered_capabilities {
+                        let mut symbols = Vec::new();
+                        for v in vec.iter() {
+                            if let Value::Symbol(sym) = v {
+                                symbols.push(sym);
+                            }
                         }
+                        begin.offered_capabilities = Some(symbols);
+                    } else if let Value::Symbol(s) = offered_capabilities {
+                        begin.offered_capabilities = Some(vec![*s]);
                     }
-                    begin.offered_capabilities = Some(symbols);
-                } else if let Value::Symbol(s) = offered_capabilities {
-                    begin.offered_capabilities = Some(vec![*s]);
                 }
-            }
 
-            if let Some(desired_capabilities) = it.next() {
-                if let Value::Array(vec) = desired_capabilities {
-                    let symbols = Vec::new();
-                    for v in vec.iter() {
-                        if let Value::Symbol(sym) = v {
-                            symbols.push(*sym);
+                if let Some(desired_capabilities) = it.next() {
+                    if let Value::Array(vec) = desired_capabilities {
+                        let symbols = Vec::new();
+                        for v in vec.iter() {
+                            if let Value::Symbol(sym) = v {
+                                symbols.push(*sym);
+                            }
                         }
+                        begin.desired_capabilities = Some(symbols);
+                    } else if let Value::Symbol(s) = desired_capabilities {
+                        begin.desired_capabilities = Some(vec![*s]);
                     }
-                    begin.desired_capabilities = Some(symbols);
-                } else if let Value::Symbol(s) = desired_capabilities {
-                    begin.desired_capabilities = Some(vec![*s]);
                 }
-            }
 
-            if let Some(properties) = it.next() {
-                if let Value::Map(m) = properties {
-                    let mut map = BTreeMap::new();
-                    for (key, value) in m.iter() {
-                        map.insert(key.to_string(), value.clone());
+                if let Some(properties) = it.next() {
+                    if let Value::Map(m) = properties {
+                        let mut map = BTreeMap::new();
+                        for (key, value) in m.iter() {
+                            map.insert(key.to_string(), value.clone());
+                        }
+                        begin.properties = Some(map);
                     }
-                    begin.properties = Some(map);
                 }
-            }
 
-            Ok(begin)
-        } else {
-            Err(AmqpError::decode_error(Some(
-                "Missing expected arguments for begin performative",
-            )))
+                Ok(begin)
+            } else {
+                Err(AmqpError::decode_error(Some(
+                    "Missing expected arguments for begin performative",
+                )))
+            }
         }
     }
+    */
 }
 
 impl Attach {
@@ -505,7 +537,11 @@ fn decode_condition(value: Value) -> Result<ErrorCondition> {
 }
 
 impl End {
-    pub fn from_value(value: Value) -> Result<End> {
+    pub fn from_value(_: Value) -> Result<End> {
+        let end = End { error: None };
+        return Ok(end);
+    }
+    /*
         let mut end = End { error: None };
         if let Value::List(mut args) = value {
             if args.len() > 0 {
@@ -519,10 +555,15 @@ impl End {
             )))
         }
     }
+    */
 }
 
 impl Close {
-    pub fn from_value(value: Value) -> Result<Close> {
+    pub fn from_value(_: Value) -> Result<Close> {
+        let close = Close { error: None };
+        return Ok(close);
+    }
+    /*
         let mut close = Close { error: None };
         if let Value::List(mut args) = value {
             if args.len() > 0 {
@@ -536,6 +577,7 @@ impl Close {
             )))
         }
     }
+    */
 }
 
 impl Encoder for Open {
@@ -686,12 +728,47 @@ impl Encoder for LinkRole {
     }
 }
 
+impl Encoder for Vec<Outcome> {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut values = Vec::new();
+        for outcome in self.iter() {
+            values.push(ValueRef::Symbol(outcome.to_symbol_ref()));
+        }
+        ValueRef::Array(&values).encode(writer)
+    }
+}
+
+impl Outcome {
+    pub fn to_symbol_ref(&self) -> &Symbol {
+        match *self {
+            Outcome::Accepted => &Symbol::from_string("Accepted"),
+            Outcome::Rejected => &Symbol::from_string("Rejected"),
+            Outcome::Released => &Symbol::from_string("Released"),
+            Outcome::Modified => &Symbol::from_string("Modified"),
+        }
+    }
+}
+impl Encoder for Outcome {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        ValueRef::Symbol(self.to_symbol_ref()).encode(writer)
+    }
+}
+
+impl Encoder for TerminusDurability {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let value = match self {
+            _ => &Symbol::from_string("unknown"),
+        };
+        ValueRef::Symbol(value).encode(writer)
+    }
+}
+
 impl Encoder for TerminusExpiryPolicy {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        writer.write_u8(TypeCode::Sym8 as u8)?;
-        writer.write_u8(val.data.len() as u8)?;
-        writer.write(&val.data[..])?;
-        Ok(TypeCode::Sym8)
+        let value = match self {
+            _ => &Symbol::from_string("unknown"),
+        };
+        ValueRef::Symbol(value).encode(writer)
     }
 }
 
@@ -747,10 +824,6 @@ impl Frame {
                         Performative::Close(close) => {
                             close.encode(&mut buf)?;
                         }
-                        _ => {
-                            println!("Unable to encode frame {:?}", self);
-                            return Err(AmqpError::not_implemented());
-                        }
                     }
                 }
             }
@@ -777,11 +850,6 @@ impl Frame {
     }
 
     pub fn decode(header: FrameHeader, reader: &mut dyn Read) -> Result<Frame> {
-        Err(AmqpError::amqp_error(
-            condition::DECODE_ERROR,
-            Some("Blah!"),
-        ))
-        /*
         // Read off extended header not in use
         let mut doff = header.doff;
         while doff > 2 {
@@ -792,9 +860,10 @@ impl Frame {
         if header.frame_type == 0 {
             let body = if header.size > 8 {
                 if let Value::Described(descriptor, value) = decode_value(reader)? {
+                    let decoder = FrameDecoder::new(&descriptor, &value)?;
                     Some(match *descriptor {
                         DESC_OPEN => {
-                            let open = Open::from_value(*value)?;
+                            let open = Open::decode(decoder)?;
                             Ok(Performative::Open(open))
                         }
                         DESC_CLOSE => {
@@ -900,7 +969,6 @@ impl Frame {
                 Some(format!("Unknown frame type {}", header.frame_type).as_str()),
             ))
         }
-        */
     }
 }
 
