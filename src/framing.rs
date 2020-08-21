@@ -503,7 +503,7 @@ impl Encoder for Vec<Outcome> {
         for outcome in self.iter() {
             values.push(ValueRef::SymbolRef(outcome.to_str()));
         }
-        ValueRef::Array(&values).encode(writer)
+        ValueRef::ArrayRef(&values).encode(writer)
     }
 }
 
@@ -759,8 +759,6 @@ impl Frame {
 mod tests {
 
     use super::*;
-    use crate::error::*;
-    use crate::types::*;
 
     #[test]
     fn check_performatives() {

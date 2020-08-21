@@ -3,16 +3,10 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
-use std::io;
-use std::thread;
-use std::time;
-
 extern crate dove;
 
 use dove::core::*;
-use dove::error::*;
 use dove::sasl::*;
-use dove::*;
 
 #[test]
 fn client() {
@@ -22,7 +16,7 @@ fn client() {
     opts.sasl_mechanism = Some(SaslMechanism::Plain);
 
     println!("REGISTERING");
-    let mut connection = connect(2, "localhost", 5672, opts).expect("Error opening connection");
+    let connection = connect(2, "localhost", 5672, opts).expect("Error opening connection");
 
     let mut driver = ConnectionDriver::new();
 
@@ -82,6 +76,7 @@ fn client() {
 }
 
 //#[test]
+/*
 fn server() {
     let mut listener = listen(
         "localhost",
@@ -135,3 +130,4 @@ fn server() {
         }
     }
 }
+*/

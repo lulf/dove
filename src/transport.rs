@@ -221,7 +221,6 @@ impl Transport {
 mod tests {
 
     use super::ReadBuffer;
-    use std::io::Read;
 
     #[test]
     fn readbuffer() {
