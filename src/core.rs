@@ -390,7 +390,6 @@ impl Connection {
                 }
             }
             ConnectionState::Sasl => {
-                println!("Let the SASL exchange begin!");
                 let sasl = self.sasl.as_mut().unwrap();
                 sasl.perform_handshake(&mut self.transport)?;
                 match sasl.state {

@@ -194,7 +194,18 @@ impl<'a> FrameDecoder<'a> {
         value: &mut T,
         required: bool,
     ) -> Result<()> {
-        let mut drained = self.args.drain(0..0);
+        if self.args.len() == 0 {
+            if required {
+                return Err(AmqpError::amqp_error(
+                    condition::DECODE_ERROR,
+                    Some("Unexpected end of list"),
+                ));
+            } else {
+                return Ok(());
+            }
+        }
+        let mut drained = self.args.drain(0..1);
+        println!("Next arg to decode: {:?}", drained);
         if let Some(arg) = drained.next() {
             let v = arg;
             *value = T::try_from(v)?;
@@ -297,7 +308,8 @@ impl std::convert::TryFrom<Value> for String {
     type Error = AmqpError;
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            Value::String(v) => return Ok(v),
+            Value::Symbol(v) => Ok(String::from_utf8_lossy(v.to_slice()).to_string()),
+            Value::String(v) => Ok(v),
             _ => Err(AmqpError::amqp_error(
                 condition::DECODE_ERROR,
                 Some("Error converting value to String"),
@@ -343,7 +355,22 @@ impl std::convert::TryFrom<Value> for Vec<Symbol> {
     type Error = AmqpError;
     fn try_from(value: Value) -> Result<Self> {
         match value {
+            Value::Symbol(s) => return Ok(vec![s]),
             Value::Array(v) => {
+                let (results, errors): (Vec<_>, Vec<_>) = v
+                    .into_iter()
+                    .map(|f| Symbol::try_from(f))
+                    .partition(Result::is_ok);
+                if errors.len() > 0 {
+                    return Err(AmqpError::amqp_error(
+                        condition::DECODE_ERROR,
+                        Some("Error decoding some elements"),
+                    ));
+                } else {
+                    return Ok(results.into_iter().map(Result::unwrap).collect());
+                }
+            }
+            Value::List(v) => {
                 let (results, errors): (Vec<_>, Vec<_>) = v
                     .into_iter()
                     .map(|f| Symbol::try_from(f))
@@ -534,7 +561,7 @@ impl<T: Encoder> Encoder for Option<T> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         match self {
             Some(value) => value.encode(writer),
-            _ => Value::Null.encode(writer),
+            _ => return Value::Null.encode(writer),
         }
     }
 }
@@ -562,6 +589,7 @@ impl Encoder for FrameEncoder {
      * encoding of frames.
      */
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        writer.write_u8(0)?;
         self.desc.encode(writer)?;
         if self.args.len() > LIST32_MAX {
             return Err(AmqpError::amqp_error(

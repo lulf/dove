@@ -98,12 +98,10 @@ impl Sasl {
                         let mut found = false;
                         for supported_mech in mechs.iter() {
                             if sasl_client.mechanism == *supported_mech {
-                                println!("Found supported mechanism, proceed!");
                                 found = true;
                             }
                         }
                         if !found {
-                            println!("Unable to find supported mechanism");
                             self.state = SaslState::Failed;
                         } else {
                             let mut initial_response = None;
@@ -131,7 +129,6 @@ impl Sasl {
                         }
                     }
                     Frame::SASL(SaslFrame::SaslOutcome(outcome)) => {
-                        println!("Got outcome: {:?}", outcome);
                         if outcome.code == 0 {
                             self.state = SaslState::Success;
                         } else {
