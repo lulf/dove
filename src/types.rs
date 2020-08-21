@@ -69,7 +69,7 @@ pub enum ValueRef<'a> {
     Long(&'a i64),
     String(&'a str),
     Binary(&'a [u8]),
-    Symbol(&'a Symbol),
+    Symbol(&'a [u8]),
     SymbolRef(&'a str),
     Array(&'a Vec<Value>),
     List(&'a Vec<Value>),
@@ -94,49 +94,13 @@ pub enum Value {
     Long(i64),
     String(String),
     Binary(Vec<u8>),
-    Symbol(Symbol),
+    Symbol(Vec<u8>),
     Array(Vec<Value>),
     List(Vec<Value>),
     Map(BTreeMap<Value, Value>),
 }
 
-#[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq, Copy)]
-pub enum ValueKind {
-    Null,
-    Bool,
-    Ubyte,
-    Ushort,
-    Uint,
-    Ulong,
-    Byte,
-    Short,
-    Int,
-    Long,
-    String,
-    Binary,
-    Symbol,
-}
-
 impl Value {
-    pub fn try_to_u32(self: &Self) -> Option<u32> {
-        return Some(0);
-    }
-    pub fn try_to_u16(self: &Self) -> Option<u16> {
-        return Some(0);
-    }
-    pub fn try_to_string(self: &Self) -> Option<String> {
-        match self {
-            Value::String(v) => Some(v.clone()),
-            Value::Symbol(v) => {
-                Some(String::from_utf8(v.data.clone()).expect("Error decoding symbol"))
-            }
-            _ => None,
-        }
-    }
-    pub fn to_string(self: &Self) -> String {
-        self.try_to_string().expect("Unexpected type!")
-    }
-
     fn value_ref(&self) -> ValueRef {
         match self {
             Value::Described(ref descriptor, ref value) => ValueRef::Described(
@@ -146,7 +110,7 @@ impl Value {
             Value::Null => ValueRef::Null,
             Value::Bool(ref value) => ValueRef::Bool(value),
             Value::String(ref value) => ValueRef::String(value),
-            Value::Symbol(ref value) => ValueRef::Symbol(value),
+            Value::Symbol(ref value) => ValueRef::Symbol(&value[..]),
             Value::Ulong(ref value) => ValueRef::Ulong(value),
             Value::List(ref value) => ValueRef::List(value),
             _ => ValueRef::Null,
@@ -239,24 +203,48 @@ impl FrameEncoder {
         self.nelems += 1;
         Ok(())
     }
-
-    /*
-    pub fn encode_arg(&mut self, arg: &dyn Encoder, kind: ValueKind) -> Result<()> {
-        // F(arg).encode(self.buffer)?;
-        match kind {
-            Null => Value::Null.encode(writer),
-            Bool =>
-        }
-        self.nelems += 1;
-        Ok(())
-    }
-    */
 }
 
 const U8_MAX: usize = std::u8::MAX as usize;
 const I8_MAX: usize = std::i8::MAX as usize;
 const LIST8_MAX: usize = (std::u8::MAX as usize) - 1;
 const LIST32_MAX: usize = (std::u32::MAX as usize) - 4;
+
+impl std::convert::TryFrom<Value> for u8 {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Ubyte(v) => return Ok(v),
+            _ => Err(AmqpError::amqp_error(
+                condition::DECODE_ERROR,
+                Some("Error converting value to u8"),
+            )),
+        }
+    }
+}
+
+impl std::convert::TryFrom<Value> for Vec<u8> {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Binary(v) => return Ok(v),
+            _ => Err(AmqpError::amqp_error(
+                condition::DECODE_ERROR,
+                Some("Error converting value to u8"),
+            )),
+        }
+    }
+}
+
+impl std::convert::TryFrom<Value> for Option<Vec<u8>> {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Null => Ok(None),
+            v => Ok(Some(Vec::try_from(v)?)),
+        }
+    }
+}
 
 impl std::convert::TryFrom<Value> for u32 {
     type Error = AmqpError;
@@ -308,7 +296,7 @@ impl std::convert::TryFrom<Value> for String {
     type Error = AmqpError;
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            Value::Symbol(v) => Ok(String::from_utf8_lossy(v.to_slice()).to_string()),
+            Value::Symbol(v) => Ok(String::from_utf8_lossy(&v[..]).to_string()),
             Value::String(v) => Ok(v),
             _ => Err(AmqpError::amqp_error(
                 condition::DECODE_ERROR,
@@ -332,7 +320,7 @@ impl std::convert::TryFrom<Value> for Symbol {
     type Error = AmqpError;
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            Value::Symbol(v) => Ok(v),
+            Value::Symbol(v) => Ok(Symbol::from_vec(v)),
             _ => Err(AmqpError::amqp_error(
                 condition::DECODE_ERROR,
                 Some("Error converting value to Symbol"),
@@ -355,7 +343,7 @@ impl std::convert::TryFrom<Value> for Vec<Symbol> {
     type Error = AmqpError;
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            Value::Symbol(s) => return Ok(vec![s]),
+            Value::Symbol(s) => return Ok(vec![Symbol::from_vec(s)]),
             Value::Array(v) => {
                 let (results, errors): (Vec<_>, Vec<_>) = v
                     .into_iter()
@@ -431,33 +419,25 @@ impl std::convert::TryFrom<Value> for Option<BTreeMap<String, Value>> {
     }
 }
 
+impl ErrorCondition {
+    pub fn decode(mut decoder: FrameDecoder) -> Result<ErrorCondition> {
+        let mut condition = ErrorCondition {
+            condition: String::new(),
+            description: String::new(),
+        };
+        decoder.decode_required(&mut condition.condition)?;
+        decoder.decode_optional(&mut condition.description)?;
+        Ok(condition)
+    }
+}
+
 impl std::convert::TryFrom<Value> for ErrorCondition {
     type Error = AmqpError;
     fn try_from(value: Value) -> Result<Self> {
-        if let Value::Described(descriptor, list) = value {
+        if let Value::Described(descriptor, mut list) = value {
+            let decoder = FrameDecoder::new(&descriptor, &mut list)?;
             match *descriptor {
-                DESC_ERROR => {
-                    if let Value::List(args) = *list {
-                        let mut it = args.iter();
-                        let mut error_condition = ErrorCondition {
-                            condition: String::new(),
-                            description: String::new(),
-                        };
-
-                        if let Some(condition) = it.next() {
-                            error_condition.condition = condition.to_string();
-                        }
-
-                        if let Some(description) = it.next() {
-                            error_condition.description = description.to_string();
-                        }
-                        Ok(error_condition)
-                    } else {
-                        Err(AmqpError::decode_error(Some(
-                            "Expected list with condition and description",
-                        )))
-                    }
-                }
+                DESC_ERROR => ErrorCondition::decode(decoder),
                 _ => Err(AmqpError::decode_error(Some(
                     format!("Expected error descriptor but found {:?}", *descriptor).as_str(),
                 ))),
@@ -482,7 +462,7 @@ impl std::convert::TryFrom<Value> for Option<ErrorCondition> {
 
 impl Encoder for Symbol {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        ValueRef::Symbol(self).encode(writer)
+        ValueRef::Symbol(&self.data[..]).encode(writer)
     }
 }
 
@@ -500,7 +480,7 @@ impl Encoder for Vec<Symbol> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let mut values = Vec::new();
         for sym in self.iter() {
-            values.push(ValueRef::Symbol(sym));
+            values.push(ValueRef::Symbol(sym.to_slice()));
         }
         ValueRef::ArrayRef(&values).encode(writer)
     }
@@ -664,15 +644,15 @@ impl Encoder for ValueRef<'_> {
                 }
             }
             ValueRef::Symbol(val) => {
-                if val.data.len() > U8_MAX {
+                if val.len() > U8_MAX {
                     writer.write_u8(TypeCode::Sym32 as u8)?;
-                    writer.write_u32::<NetworkEndian>(val.data.len() as u32)?;
-                    writer.write(&val.data[..])?;
+                    writer.write_u32::<NetworkEndian>(val.len() as u32)?;
+                    writer.write(val)?;
                     Ok(TypeCode::Sym32)
                 } else {
                     writer.write_u8(TypeCode::Sym8 as u8)?;
-                    writer.write_u8(val.data.len() as u8)?;
-                    writer.write(&val.data[..])?;
+                    writer.write_u8(val.len() as u8)?;
+                    writer.write(val)?;
                     Ok(TypeCode::Sym8)
                 }
             }
@@ -1042,13 +1022,13 @@ fn decode_value_with_ctor(raw_code: u8, reader: &mut dyn Read) -> Result<Value> 
             let len = reader.read_u8()? as usize;
             let mut buffer = vec![0u8; len];
             reader.read_exact(&mut buffer)?;
-            Ok(Value::Symbol(Symbol::from_vec(buffer)))
+            Ok(Value::Symbol(buffer))
         }
         TypeCode::Sym32 => {
             let len = reader.read_u32::<NetworkEndian>()? as usize;
             let mut buffer = vec![0u8; len];
             reader.read_exact(&mut buffer)?;
-            Ok(Value::Symbol(Symbol::from_vec(buffer)))
+            Ok(Value::Symbol(buffer))
         }
         TypeCode::Bin8 => {
             let len = reader.read_u8()? as usize;

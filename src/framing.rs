@@ -58,7 +58,10 @@ pub enum SaslFrame {
     SaslOutcome(SaslOutcome),
 }
 
-type SaslMechanisms = Vec<SaslMechanism>;
+#[derive(Debug)]
+pub struct SaslMechanisms {
+    pub mechanisms: Vec<SaslMechanism>,
+}
 
 #[derive(Debug)]
 pub struct SaslInit {
@@ -73,7 +76,7 @@ pub type SaslResponse = Vec<u8>;
 #[derive(Debug)]
 pub struct SaslOutcome {
     pub code: SaslCode,
-    additional_data: Option<Vec<u8>>,
+    pub additional_data: Option<Vec<u8>>,
 }
 
 pub type SaslCode = u8;
@@ -358,6 +361,57 @@ impl Close {
     }
 }
 
+impl SaslOutcome {
+    pub fn decode(mut decoder: FrameDecoder) -> Result<SaslOutcome> {
+        let mut outcome = SaslOutcome {
+            code: 4,
+            additional_data: None,
+        };
+        decoder.decode_required(&mut outcome.code)?;
+        decoder.decode_optional(&mut outcome.additional_data)?;
+        Ok(outcome)
+    }
+}
+
+impl SaslMechanisms {
+    pub fn decode(mut decoder: FrameDecoder) -> Result<SaslMechanisms> {
+        let mut mechs = SaslMechanisms {
+            mechanisms: Vec::new(),
+        };
+        decoder.decode_optional(&mut mechs.mechanisms)?;
+        Ok(mechs)
+    }
+}
+
+impl std::convert::TryFrom<Value> for SaslMechanism {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            // TODO
+            Value::Symbol(_) => return Ok(SaslMechanism::Anonymous),
+            _ => Err(AmqpError::amqp_error(
+                condition::DECODE_ERROR,
+                Some("Error converting value to SaslMechanism"),
+            )),
+        }
+    }
+}
+
+impl std::convert::TryFrom<Value> for Vec<SaslMechanism> {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            // TODO
+            Value::Array(_) => return Ok(vec![SaslMechanism::Anonymous]),
+            Value::Symbol(_) => return Ok(vec![SaslMechanism::Anonymous]),
+            _ => Err(AmqpError::amqp_error(
+                condition::DECODE_ERROR,
+                Some("Error converting value to SaslMechanism"),
+            )),
+        }
+    }
+}
+
 impl Encoder for Open {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let mut encoder = FrameEncoder::new(DESC_OPEN);
@@ -519,7 +573,7 @@ impl Outcome {
 }
 impl Encoder for Outcome {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        ValueRef::Symbol(&Symbol::from_str(self.to_str())).encode(writer)
+        ValueRef::SymbolRef(self.to_str()).encode(writer)
     }
 }
 
@@ -546,13 +600,13 @@ impl TerminusExpiryPolicy {
 
 impl Encoder for TerminusDurability {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        ValueRef::Symbol(&Symbol::from_str(self.to_str())).encode(writer)
+        ValueRef::SymbolRef(self.to_str()).encode(writer)
     }
 }
 
 impl Encoder for TerminusExpiryPolicy {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        ValueRef::Symbol(&Symbol::from_str(self.to_str())).encode(writer)
+        ValueRef::SymbolRef(self.to_str()).encode(writer)
     }
 }
 
@@ -679,53 +733,14 @@ impl Frame {
             }))
         } else if header.frame_type == 1 {
             if header.size > 8 {
-                if let Value::Described(descriptor, value) = decode_value(reader)? {
+                if let Value::Described(descriptor, mut value) = decode_value(reader)? {
+                    let decoder = FrameDecoder::new(&descriptor, &mut value)?;
                     let frame = match *descriptor {
                         DESC_SASL_MECHANISMS => {
-                            if let Value::List(args) = *value {
-                                let mut it = args.iter();
-
-                                if let Some(sasl_server_mechanisms) = it.next() {
-                                    if let Value::Array(vec) = sasl_server_mechanisms {
-                                        let mut mechs = Vec::new();
-                                        for val in vec.iter() {
-                                            mechs.push(val.to_string().parse::<SaslMechanism>()?)
-                                        }
-                                        Some(SaslFrame::SaslMechanisms(mechs))
-                                    } else if let Value::Symbol(s) = sasl_server_mechanisms {
-                                        Some(SaslFrame::SaslMechanisms(vec![
-                                            String::from_utf8_lossy(s.to_slice())
-                                                .parse::<SaslMechanism>()?,
-                                        ]))
-                                    } else {
-                                        Some(SaslFrame::SaslMechanisms(vec![]))
-                                    }
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
+                            Some(SaslFrame::SaslMechanisms(SaslMechanisms::decode(decoder)?))
                         }
                         DESC_SASL_OUTCOME => {
-                            if let Value::List(args) = *value {
-                                let mut it = args.iter();
-                                let mut outcome = SaslOutcome {
-                                    code: 4,
-                                    additional_data: None,
-                                };
-
-                                if let Some(Value::Ubyte(code)) = it.next() {
-                                    outcome.code = *code;
-                                }
-
-                                if let Some(Value::Binary(additional_data)) = it.next() {
-                                    outcome.additional_data = Some(additional_data.to_vec());
-                                }
-                                Some(SaslFrame::SaslOutcome(outcome))
-                            } else {
-                                None
-                            }
+                            Some(SaslFrame::SaslOutcome(SaslOutcome::decode(decoder)?))
                         }
                         _ => None,
                     };

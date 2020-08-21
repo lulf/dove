@@ -96,7 +96,7 @@ impl Sasl {
                             mechs, sasl_client.mechanism
                         );
                         let mut found = false;
-                        for supported_mech in mechs.iter() {
+                        for supported_mech in mechs.mechanisms.iter() {
                             if sasl_client.mechanism == *supported_mech {
                                 found = true;
                             }
