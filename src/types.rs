@@ -144,6 +144,8 @@ impl Value {
             Value::Bool(ref value) => ValueRef::Bool(value),
             Value::String(ref value) => ValueRef::String(value),
             Value::Symbol(ref value) => ValueRef::Symbol(value),
+            Value::Ulong(ref value) => ValueRef::Ulong(value),
+            //            Value::List(ref value) => ValueRef::List(value),
             _ => ValueRef::Null,
         }
     }
@@ -1091,7 +1093,7 @@ mod tests {
 
     fn assert_type(value: &Value, expected_len: usize, expected_type: TypeCode) {
         let mut output: Vec<u8> = Vec::new();
-        let ctype = encode_value_internal(value, &mut output).unwrap();
+        let ctype = value.encode(&mut output).unwrap();
         assert_eq!(expected_type, ctype);
         assert_eq!(expected_len, output.len());
 
