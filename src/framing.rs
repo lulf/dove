@@ -16,6 +16,19 @@ use crate::error::*;
 use crate::sasl::*;
 use crate::types::*;
 
+const DESC_OPEN: Value = Value::Ulong(0x10);
+const DESC_BEGIN: Value = Value::Ulong(0x11);
+const DESC_ATTACH: Value = Value::Ulong(0x12);
+const DESC_SOURCE: Value = Value::Ulong(0x28);
+const DESC_TARGET: Value = Value::Ulong(0x29);
+
+const DESC_END: Value = Value::Ulong(0x17);
+const DESC_CLOSE: Value = Value::Ulong(0x18);
+
+const DESC_SASL_MECHANISMS: Value = Value::Ulong(0x40);
+const DESC_SASL_INIT: Value = Value::Ulong(0x41);
+const DESC_SASL_OUTCOME: Value = Value::Ulong(0x44);
+
 #[derive(Debug)]
 pub struct FrameHeader {
     pub size: u32,
@@ -237,20 +250,6 @@ pub struct Close {
     pub error: Option<ErrorCondition>,
 }
 
-const DESC_OPEN: Value = Value::Ulong(0x10);
-const DESC_BEGIN: Value = Value::Ulong(0x11);
-const DESC_ATTACH: Value = Value::Ulong(0x12);
-const DESC_SOURCE: Value = Value::Ulong(0x28);
-const DESC_TARGET: Value = Value::Ulong(0x29);
-
-const DESC_END: Value = Value::Ulong(0x17);
-const DESC_CLOSE: Value = Value::Ulong(0x18);
-
-const DESC_SASL_MECHANISMS: Value = Value::Ulong(0x40);
-const DESC_SASL_INIT: Value = Value::Ulong(0x41);
-const DESC_SASL_OUTCOME: Value = Value::Ulong(0x44);
-const DESC_ERROR: Value = Value::Ulong(0x1D);
-
 impl Open {
     pub fn new(container_id: &str) -> Open {
         Open {
@@ -280,7 +279,7 @@ impl Open {
             desired_capabilities: None,
             properties: None,
         };
-        decoder.decode(&mut open.container_id, true)?;
+        decoder.decode_required(&mut open.container_id)?;
         decoder.decode_optional(&mut open.hostname)?;
         decoder.decode_optional(&mut open.max_frame_size)?;
         decoder.decode_optional(&mut open.channel_max)?;
@@ -308,92 +307,18 @@ impl Begin {
         }
     }
 
-    pub fn from_value(_: Value) -> Result<Begin> {
-        let begin = Begin::new(0, 0, 0);
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Begin> {
+        let mut begin = Begin::new(0, 0, 0);
+        decoder.decode_optional(&mut begin.remote_channel)?;
+        decoder.decode_required(&mut begin.next_outgoing_id)?;
+        decoder.decode_required(&mut begin.incoming_window)?;
+        decoder.decode_required(&mut begin.outgoing_window)?;
+        decoder.decode_optional(&mut begin.handle_max)?;
+        decoder.decode_optional(&mut begin.offered_capabilities)?;
+        decoder.decode_optional(&mut begin.desired_capabilities)?;
+        decoder.decode_optional(&mut begin.properties)?;
         return Ok(begin);
     }
-
-    /*
-        pub fn from_value(value: Value) -> Result<Begin> {
-            if let Value::List(args) = value {
-                let mut begin = Begin::new(0, 0, 0);
-                let mut it = args.iter();
-                if let Some(remote_channel) = it.next() {
-                    begin.remote_channel = remote_channel.try_to_u16();
-                }
-
-                begin.next_outgoing_id =
-                    it.next()
-                        .and_then(|c| c.try_to_u32())
-                        .ok_or(AmqpError::decode_error(Some(
-                            "Unable to decode mandatory field 'next-outgoing-id'",
-                        )))?;
-
-                begin.incoming_window =
-                    it.next()
-                        .and_then(|c| c.try_to_u32())
-                        .ok_or(AmqpError::decode_error(Some(
-                            "Unable to decode mandatory field 'incoming-window'",
-                        )))?;
-
-                begin.outgoing_window =
-                    it.next()
-                        .and_then(|c| c.try_to_u32())
-                        .ok_or(AmqpError::decode_error(Some(
-                            "Unable to decode mandatory field 'outgoing-window'",
-                        )))?;
-
-                if let Some(_) = it.next() {
-                    // begin.handle_max.decode( = Some(handle_max as u32); //::try_from(handle_max));
-                }
-
-                if let Some(offered_capabilities) = it.next() {
-                    if let Value::Array(vec) = offered_capabilities {
-                        let mut symbols = Vec::new();
-                        for v in vec.iter() {
-                            if let Value::Symbol(sym) = v {
-                                symbols.push(sym);
-                            }
-                        }
-                        begin.offered_capabilities = Some(symbols);
-                    } else if let Value::Symbol(s) = offered_capabilities {
-                        begin.offered_capabilities = Some(vec![*s]);
-                    }
-                }
-
-                if let Some(desired_capabilities) = it.next() {
-                    if let Value::Array(vec) = desired_capabilities {
-                        let symbols = Vec::new();
-                        for v in vec.iter() {
-                            if let Value::Symbol(sym) = v {
-                                symbols.push(*sym);
-                            }
-                        }
-                        begin.desired_capabilities = Some(symbols);
-                    } else if let Value::Symbol(s) = desired_capabilities {
-                        begin.desired_capabilities = Some(vec![*s]);
-                    }
-                }
-
-                if let Some(properties) = it.next() {
-                    if let Value::Map(m) = properties {
-                        let mut map = BTreeMap::new();
-                        for (key, value) in m.iter() {
-                            map.insert(key.to_string(), value.clone());
-                        }
-                        begin.properties = Some(map);
-                    }
-                }
-
-                Ok(begin)
-            } else {
-                Err(AmqpError::decode_error(Some(
-                    "Missing expected arguments for begin performative",
-                )))
-            }
-        }
-    }
-    */
 }
 
 impl Attach {
@@ -417,85 +342,20 @@ impl Attach {
     }
 }
 
-#[allow(dead_code)]
-fn decode_condition(value: Value) -> Result<ErrorCondition> {
-    if let Value::Described(descriptor, list) = value {
-        match *descriptor {
-            DESC_ERROR => {
-                if let Value::List(args) = *list {
-                    let mut it = args.iter();
-                    let mut error_condition = ErrorCondition {
-                        condition: String::new(),
-                        description: String::new(),
-                    };
-
-                    if let Some(condition) = it.next() {
-                        error_condition.condition = condition.to_string();
-                    }
-
-                    if let Some(description) = it.next() {
-                        error_condition.description = description.to_string();
-                    }
-                    Ok(error_condition)
-                } else {
-                    Err(AmqpError::decode_error(Some(
-                        "Expected list with condition and description",
-                    )))
-                }
-            }
-            _ => Err(AmqpError::decode_error(Some(
-                format!("Expected error descriptor but found {:?}", *descriptor).as_str(),
-            ))),
-        }
-    } else {
-        Err(AmqpError::decode_error(Some(
-            "Missing expected error descriptor",
-        )))
-    }
-}
-
 impl End {
-    pub fn from_value(_: Value) -> Result<End> {
-        let end = End { error: None };
-        return Ok(end);
-    }
-    /*
+    pub fn decode(mut decoder: FrameDecoder) -> Result<End> {
         let mut end = End { error: None };
-        if let Value::List(mut args) = value {
-            if args.len() > 0 {
-                let condition = decode_condition(args.remove(0))?;
-                end.error = Some(condition)
-            }
-            Ok(end)
-        } else {
-            Err(AmqpError::decode_error(Some(
-                "Missing expected arguments for end performative",
-            )))
-        }
+        decoder.decode_optional(&mut end.error)?;
+        Ok(end)
     }
-    */
 }
 
 impl Close {
-    pub fn from_value(_: Value) -> Result<Close> {
-        let close = Close { error: None };
-        return Ok(close);
-    }
-    /*
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Close> {
         let mut close = Close { error: None };
-        if let Value::List(mut args) = value {
-            if args.len() > 0 {
-                let condition = decode_condition(args.remove(0))?;
-                close.error = Some(condition)
-            }
-            Ok(close)
-        } else {
-            Err(AmqpError::decode_error(Some(
-                "Missing expected arguments for close performative",
-            )))
-        }
+        decoder.decode_optional(&mut close.error)?;
+        Ok(close)
     }
-    */
 }
 
 impl Encoder for Open {
@@ -615,15 +475,6 @@ impl Encoder for Close {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let mut encoder = FrameEncoder::new(DESC_CLOSE);
         encoder.encode_arg(&self.error)?;
-        encoder.encode(writer)
-    }
-}
-
-impl Encoder for ErrorCondition {
-    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let mut encoder = FrameEncoder::new(DESC_ERROR);
-        encoder.encode_arg(&self.condition)?;
-        encoder.encode_arg(&self.description)?;
         encoder.encode(writer)
     }
 }
@@ -800,15 +651,15 @@ impl Frame {
                             Ok(Performative::Open(open))
                         }
                         DESC_CLOSE => {
-                            let close = Close::from_value(*value)?;
+                            let close = Close::decode(decoder)?;
                             Ok(Performative::Close(close))
                         }
                         DESC_BEGIN => {
-                            let begin = Begin::from_value(*value)?;
+                            let begin = Begin::decode(decoder)?;
                             Ok(Performative::Begin(begin))
                         }
                         DESC_END => {
-                            let end = End::from_value(*value)?;
+                            let end = End::decode(decoder)?;
                             Ok(Performative::End(end))
                         }
                         v => Err(AmqpError::amqp_error(

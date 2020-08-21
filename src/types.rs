@@ -15,6 +15,8 @@ use std::vec::Vec;
 
 use crate::error::*;
 
+const DESC_ERROR: Value = Value::Ulong(0x1D);
+
 pub trait Encoder {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode>;
 }
@@ -166,6 +168,13 @@ impl<'a> FrameDecoder<'a> {
                 Some("Error decoding frame arguments"),
             ));
         }
+    }
+
+    pub fn decode_required<T: TryFrom<Value, Error = AmqpError>>(
+        &mut self,
+        value: &mut T,
+    ) -> Result<()> {
+        self.decode(value, true)
     }
 
     pub fn decode_optional<T: TryFrom<Value, Error = AmqpError>>(
@@ -390,6 +399,55 @@ impl std::convert::TryFrom<Value> for Option<BTreeMap<String, Value>> {
     }
 }
 
+impl std::convert::TryFrom<Value> for ErrorCondition {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        if let Value::Described(descriptor, list) = value {
+            match *descriptor {
+                DESC_ERROR => {
+                    if let Value::List(args) = *list {
+                        let mut it = args.iter();
+                        let mut error_condition = ErrorCondition {
+                            condition: String::new(),
+                            description: String::new(),
+                        };
+
+                        if let Some(condition) = it.next() {
+                            error_condition.condition = condition.to_string();
+                        }
+
+                        if let Some(description) = it.next() {
+                            error_condition.description = description.to_string();
+                        }
+                        Ok(error_condition)
+                    } else {
+                        Err(AmqpError::decode_error(Some(
+                            "Expected list with condition and description",
+                        )))
+                    }
+                }
+                _ => Err(AmqpError::decode_error(Some(
+                    format!("Expected error descriptor but found {:?}", *descriptor).as_str(),
+                ))),
+            }
+        } else {
+            Err(AmqpError::decode_error(Some(
+                "Missing expected error descriptor",
+            )))
+        }
+    }
+}
+
+impl std::convert::TryFrom<Value> for Option<ErrorCondition> {
+    type Error = AmqpError;
+    fn try_from(value: Value) -> Result<Self> {
+        Ok(match value {
+            Value::Null => None,
+            v => Some(ErrorCondition::try_from(v)?),
+        })
+    }
+}
+
 impl Encoder for Symbol {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         ValueRef::Symbol(self).encode(writer)
@@ -413,6 +471,15 @@ impl Encoder for Vec<Symbol> {
             values.push(ValueRef::Symbol(sym));
         }
         ValueRef::Array(&values).encode(writer)
+    }
+}
+
+impl Encoder for ErrorCondition {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_ERROR);
+        encoder.encode_arg(&self.condition)?;
+        encoder.encode_arg(&self.description)?;
+        encoder.encode(writer)
     }
 }
 
