@@ -12,6 +12,7 @@ use std::io::Read;
 use std::io::Write;
 use std::vec::Vec;
 
+use crate::convert::*;
 use crate::decoding::*;
 use crate::error::*;
 use crate::frame_codec::*;
@@ -333,6 +334,27 @@ impl Attach {
             properties: None,
         }
     }
+
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Attach> {
+        let mut attach = Attach::new("", 0, LinkRole::Sender);
+        /*
+        decoder.decode_required(&mut attach.name)?;
+        decoder.decode_required(&mut attach.handle)?;
+        decoder.decode_required(&mut attach.role)?;
+        decoder.decode_optional(&mut attach.snd_settle_mode)?;
+        decoder.decode_optional(&mut attach.rcv_settle_mode)?;
+        decoder.decode_optional(&mut attach.source)?;
+        decoder.decode_optional(&mut attach.target)?;
+        decoder.decode_optional(&mut attach.unsettled)?;
+        decoder.decode_optional(&mut attach.incomplete_unsettled)?;
+        decoder.decode_optional(&mut attach.initial_delivery_count)?;
+        decoder.decode_optional(&mut attach.max_message_size)?;
+        decoder.decode_optional(&mut attach.offered_capabilities)?;
+        decoder.decode_optional(&mut attach.desired_capabilities)?;
+        decoder.decode_optional(&mut attach.properties)?;
+        */
+        Ok(attach)
+    }
 }
 
 impl End {
@@ -386,8 +408,38 @@ impl SaslMechanisms {
     }
 }
 
-impl std::convert::TryFrom<Value> for SaslMechanism {
-    type Error = AmqpError;
+impl TryFromValue for LinkRole {
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Bool(value) => Ok(if value {
+                LinkRole::Sender
+            } else {
+                LinkRole::Receiver
+            }),
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to LinkRole",
+            ))),
+        }
+    }
+}
+
+impl TryFromValue for SenderSettleMode {
+    fn try_from(value: Value) -> Result<Self> {
+        if let Value::Ubyte(value) = value {
+            Ok(match value {
+                0 => SenderSettleMode::Unsettled,
+                1 => SenderSettleMode::Settled,
+                _ => SenderSettleMode::Mixed,
+            })
+        } else {
+            Err(AmqpError::decode_error(Some(
+                "Error converting value to LinkRole",
+            )))
+        }
+    }
+}
+
+impl TryFromValue for SaslMechanism {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Symbol(mech) => SaslMechanism::from_slice(&mech[..]),
@@ -398,8 +450,7 @@ impl std::convert::TryFrom<Value> for SaslMechanism {
     }
 }
 
-impl std::convert::TryFrom<Value> for Vec<SaslMechanism> {
-    type Error = AmqpError;
+impl TryFromValue for Vec<SaslMechanism> {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Array(v) => {

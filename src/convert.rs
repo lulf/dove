@@ -19,8 +19,22 @@ use crate::types::*;
  *************************************************************************************
  */
 
-impl std::convert::TryFrom<Value> for u8 {
-    type Error = AmqpError;
+pub trait TryFromValue {
+    fn try_from(value: Value) -> Result<Self>
+    where
+        Self: std::marker::Sized;
+}
+
+impl<T: TryFromValue> TryFromValue for Option<T> {
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Null => Ok(None),
+            _ => Ok(Some(T::try_from(value)?)),
+        }
+    }
+}
+
+impl TryFromValue for u8 {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Ubyte(v) => return Ok(v),
@@ -32,8 +46,7 @@ impl std::convert::TryFrom<Value> for u8 {
     }
 }
 
-impl std::convert::TryFrom<Value> for Vec<u8> {
-    type Error = AmqpError;
+impl TryFromValue for Vec<u8> {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Binary(v) => return Ok(v),
@@ -45,18 +58,7 @@ impl std::convert::TryFrom<Value> for Vec<u8> {
     }
 }
 
-impl std::convert::TryFrom<Value> for Option<Vec<u8>> {
-    type Error = AmqpError;
-    fn try_from(value: Value) -> Result<Self> {
-        match value {
-            Value::Null => Ok(None),
-            v => Ok(Some(Vec::try_from(v)?)),
-        }
-    }
-}
-
-impl std::convert::TryFrom<Value> for u32 {
-    type Error = AmqpError;
+impl TryFromValue for u32 {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Uint(v) => return Ok(v),
@@ -68,18 +70,7 @@ impl std::convert::TryFrom<Value> for u32 {
     }
 }
 
-impl std::convert::TryFrom<Value> for Option<u32> {
-    type Error = AmqpError;
-    fn try_from(value: Value) -> Result<Self> {
-        match value {
-            Value::Null => Ok(None),
-            v => Ok(Some(u32::try_from(v)?)),
-        }
-    }
-}
-
-impl std::convert::TryFrom<Value> for u16 {
-    type Error = AmqpError;
+impl TryFromValue for u16 {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Ushort(v) => return Ok(v),
@@ -91,18 +82,7 @@ impl std::convert::TryFrom<Value> for u16 {
     }
 }
 
-impl std::convert::TryFrom<Value> for Option<u16> {
-    type Error = AmqpError;
-    fn try_from(value: Value) -> Result<Self> {
-        Ok(match value {
-            Value::Null => None,
-            v => Some(u16::try_from(v)?),
-        })
-    }
-}
-
-impl std::convert::TryFrom<Value> for String {
-    type Error = AmqpError;
+impl TryFromValue for String {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Symbol(v) => Ok(String::from_utf8_lossy(&v[..]).to_string()),
@@ -115,18 +95,7 @@ impl std::convert::TryFrom<Value> for String {
     }
 }
 
-impl std::convert::TryFrom<Value> for Option<String> {
-    type Error = AmqpError;
-    fn try_from(value: Value) -> Result<Self> {
-        Ok(match value {
-            Value::Null => None,
-            v => Some(String::try_from(v)?),
-        })
-    }
-}
-
-impl std::convert::TryFrom<Value> for BTreeMap<String, Value> {
-    type Error = AmqpError;
+impl TryFromValue for BTreeMap<String, Value> {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Map(v) => {
@@ -144,18 +113,7 @@ impl std::convert::TryFrom<Value> for BTreeMap<String, Value> {
     }
 }
 
-impl std::convert::TryFrom<Value> for Option<BTreeMap<String, Value>> {
-    type Error = AmqpError;
-    fn try_from(value: Value) -> Result<Self> {
-        Ok(match value {
-            Value::Null => None,
-            v => Some(BTreeMap::try_from(v)?),
-        })
-    }
-}
-
-impl std::convert::TryFrom<Value> for Symbol {
-    type Error = AmqpError;
+impl TryFromValue for Symbol {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Symbol(v) => Ok(Symbol::from_vec(v)),
@@ -167,18 +125,7 @@ impl std::convert::TryFrom<Value> for Symbol {
     }
 }
 
-impl std::convert::TryFrom<Value> for Option<Symbol> {
-    type Error = AmqpError;
-    fn try_from(value: Value) -> Result<Self> {
-        Ok(match value {
-            Value::Null => None,
-            v => Some(Symbol::try_from(v)?),
-        })
-    }
-}
-
-impl std::convert::TryFrom<Value> for Vec<Symbol> {
-    type Error = AmqpError;
+impl TryFromValue for Vec<Symbol> {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Symbol(s) => return Ok(vec![Symbol::from_vec(s)]),
@@ -218,18 +165,7 @@ impl std::convert::TryFrom<Value> for Vec<Symbol> {
     }
 }
 
-impl std::convert::TryFrom<Value> for Option<Vec<Symbol>> {
-    type Error = AmqpError;
-    fn try_from(value: Value) -> Result<Self> {
-        Ok(match value {
-            Value::Null => None,
-            v => Some(Vec::try_from(v)?),
-        })
-    }
-}
-
-impl std::convert::TryFrom<Value> for ErrorCondition {
-    type Error = AmqpError;
+impl TryFromValue for ErrorCondition {
     fn try_from(value: Value) -> Result<Self> {
         if let Value::Described(descriptor, mut list) = value {
             let decoder = FrameDecoder::new(&descriptor, &mut list)?;
@@ -244,15 +180,5 @@ impl std::convert::TryFrom<Value> for ErrorCondition {
                 "Missing expected error descriptor",
             )))
         }
-    }
-}
-
-impl std::convert::TryFrom<Value> for Option<ErrorCondition> {
-    type Error = AmqpError;
-    fn try_from(value: Value) -> Result<Self> {
-        Ok(match value {
-            Value::Null => None,
-            v => Some(ErrorCondition::try_from(v)?),
-        })
     }
 }

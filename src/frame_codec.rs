@@ -5,10 +5,10 @@
 
 use byteorder::NetworkEndian;
 use byteorder::WriteBytesExt;
-use std::convert::TryFrom;
 use std::io::Write;
 use std::vec::Vec;
 
+use crate::convert::*;
 use crate::error::*;
 use crate::types::*;
 
@@ -63,25 +63,15 @@ impl<'a> FrameDecoder<'a> {
         }
     }
 
-    pub fn decode_required<T: TryFrom<Value, Error = AmqpError>>(
-        &mut self,
-        value: &mut T,
-    ) -> Result<()> {
+    pub fn decode_required<T: TryFromValue>(&mut self, value: &mut T) -> Result<()> {
         self.decode(value, true)
     }
 
-    pub fn decode_optional<T: TryFrom<Value, Error = AmqpError>>(
-        &mut self,
-        value: &mut T,
-    ) -> Result<()> {
+    pub fn decode_optional<T: TryFromValue>(&mut self, value: &mut T) -> Result<()> {
         self.decode(value, false)
     }
 
-    pub fn decode<T: TryFrom<Value, Error = AmqpError>>(
-        &mut self,
-        value: &mut T,
-        required: bool,
-    ) -> Result<()> {
+    pub fn decode<T: TryFromValue>(&mut self, value: &mut T, required: bool) -> Result<()> {
         if self.args.len() == 0 {
             if required {
                 return Err(AmqpError::amqp_error(
