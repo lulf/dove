@@ -12,22 +12,13 @@ use std::io::Read;
 use std::io::Write;
 use std::vec::Vec;
 
+use crate::decoding::*;
+use crate::frame_codec::*;
 use crate::error::*;
 use crate::sasl::*;
 use crate::types::*;
+use crate::symbol::*;
 
-const DESC_OPEN: Value = Value::Ulong(0x10);
-const DESC_BEGIN: Value = Value::Ulong(0x11);
-const DESC_ATTACH: Value = Value::Ulong(0x12);
-const DESC_SOURCE: Value = Value::Ulong(0x28);
-const DESC_TARGET: Value = Value::Ulong(0x29);
-
-const DESC_END: Value = Value::Ulong(0x17);
-const DESC_CLOSE: Value = Value::Ulong(0x18);
-
-const DESC_SASL_MECHANISMS: Value = Value::Ulong(0x40);
-const DESC_SASL_INIT: Value = Value::Ulong(0x41);
-const DESC_SASL_OUTCOME: Value = Value::Ulong(0x44);
 
 #[derive(Debug)]
 pub struct FrameHeader {
@@ -80,6 +71,7 @@ pub struct SaslOutcome {
 }
 
 pub type SaslCode = u8;
+
 
 impl Encoder for SaslMechanism {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {

@@ -1,0 +1,65 @@
+/*
+ * Copyright 2020, Ulf Lilleengen
+ * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
+ */
+
+use std::io::Write;
+use std::vec::Vec;
+
+
+use crate::types::*;
+use crate::error::*;
+
+/**
+ * A type for working with symbols, typically used in some AMQP structures.
+ */
+#[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq)]
+pub struct Symbol {
+    data: Vec<u8>,
+}
+
+
+impl Symbol {
+    pub fn from_slice(data: &[u8]) -> Symbol {
+        let mut vec = Vec::new();
+        vec.extend_from_slice(data);
+        return Symbol { data: vec };
+    }
+
+    pub fn from_str(data: &str) -> Symbol {
+        let mut vec = Vec::new();
+        vec.extend_from_slice(data.as_bytes());
+        return Symbol { data: vec };
+    }
+
+    pub fn from_vec(data: Vec<u8>) -> Symbol {
+        return Symbol { data };
+    }
+
+    pub fn from_string(data: &str) -> Symbol {
+        let mut vec = Vec::new();
+        vec.extend_from_slice(data.as_bytes());
+        return Symbol { data: vec };
+    }
+
+    pub fn to_slice(&self) -> &[u8] {
+        return &self.data[..];
+    }
+}
+
+impl Encoder for Symbol {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        ValueRef::Symbol(&self.data[..]).encode(writer)
+    }
+}
+
+impl Encoder for Vec<Symbol> {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut values = Vec::new();
+        for sym in self.iter() {
+            values.push(ValueRef::Symbol(sym.to_slice()));
+        }
+        ValueRef::ArrayRef(&values).encode(writer)
+    }
+}
+
