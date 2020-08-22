@@ -363,6 +363,19 @@ impl SaslOutcome {
     }
 }
 
+impl SaslMechanism {
+    pub fn from_slice(data: &[u8]) -> Result<SaslMechanism> {
+        let input = std::str::from_utf8(data)?;
+        match input {
+            "ANONYMOUS" => Ok(SaslMechanism::Anonymous),
+            "PLAIN" => Ok(SaslMechanism::Plain),
+            v => Err(AmqpError::decode_error(Some(
+                format!("Unsupported SASL mechanism {:?}", v).as_str(),
+            ))),
+        }
+    }
+}
+
 impl SaslMechanisms {
     pub fn decode(mut decoder: FrameDecoder) -> Result<SaslMechanisms> {
         let mut mechs = SaslMechanisms {
@@ -377,12 +390,10 @@ impl std::convert::TryFrom<Value> for SaslMechanism {
     type Error = AmqpError;
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            // TODO
-            Value::Symbol(_) => return Ok(SaslMechanism::Anonymous),
-            _ => Err(AmqpError::amqp_error(
-                condition::DECODE_ERROR,
-                Some("Error converting value to SaslMechanism"),
-            )),
+            Value::Symbol(mech) => SaslMechanism::from_slice(&mech[..]),
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to SaslMechanism",
+            ))),
         }
     }
 }
@@ -391,13 +402,26 @@ impl std::convert::TryFrom<Value> for Vec<SaslMechanism> {
     type Error = AmqpError;
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            // TODO
-            Value::Array(_) => return Ok(vec![SaslMechanism::Anonymous]),
-            Value::Symbol(_) => return Ok(vec![SaslMechanism::Anonymous]),
-            _ => Err(AmqpError::amqp_error(
-                condition::DECODE_ERROR,
-                Some("Error converting value to SaslMechanism"),
-            )),
+            Value::Array(v) => {
+                let (results, errors): (Vec<_>, Vec<_>) = v
+                    .into_iter()
+                    .map(|f| SaslMechanism::try_from(f))
+                    .partition(Result::is_ok);
+                if errors.len() > 0 {
+                    return Err(AmqpError::decode_error(Some(
+                        "Error decoding some elements",
+                    )));
+                } else {
+                    return Ok(results.into_iter().map(Result::unwrap).collect());
+                }
+            }
+            Value::Symbol(v) => {
+                let mech = SaslMechanism::from_slice(&v[..])?;
+                return Ok(vec![mech]);
+            }
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to SaslMechanism",
+            ))),
         }
     }
 }
@@ -501,17 +525,6 @@ impl Encoder for End {
         let mut encoder = FrameEncoder::new(DESC_END);
         encoder.encode_arg(&self.error)?;
         encoder.encode(writer)
-        /*
-        let val = self.error.to_value(|e| {
-            Value::Described(
-                Box::new(Value::Ulong(0x1D)),
-                Box::new(Value::List(vec![
-                    Value::Symbol(e.condition.clone().into_bytes()),
-                    Value::String(e.description.clone()),
-                ])),
-            )
-        });
-            */
     }
 }
 

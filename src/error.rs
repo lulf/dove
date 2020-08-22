@@ -79,6 +79,12 @@ impl std::convert::From<io::Error> for AmqpError {
     }
 }
 
+impl std::convert::From<std::str::Utf8Error> for AmqpError {
+    fn from(error: std::str::Utf8Error) -> Self {
+        return AmqpError::Generic(error.to_string());
+    }
+}
+
 impl std::convert::From<std::string::FromUtf8Error> for AmqpError {
     fn from(error: std::string::FromUtf8Error) -> Self {
         return AmqpError::Generic(error.to_string());
