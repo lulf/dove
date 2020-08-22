@@ -27,15 +27,14 @@ pub const DESC_BEGIN: Value = Value::Ulong(0x11);
 pub const DESC_ATTACH: Value = Value::Ulong(0x12);
 pub const DESC_SOURCE: Value = Value::Ulong(0x28);
 pub const DESC_TARGET: Value = Value::Ulong(0x29);
- 
+
 pub const DESC_END: Value = Value::Ulong(0x17);
 pub const DESC_CLOSE: Value = Value::Ulong(0x18);
- 
+
 pub const DESC_SASL_MECHANISMS: Value = Value::Ulong(0x40);
 pub const DESC_SASL_INIT: Value = Value::Ulong(0x41);
 pub const DESC_SASL_OUTCOME: Value = Value::Ulong(0x44);
 pub const DESC_ERROR: Value = Value::Ulong(0x1D);
-
 
 /**
  * A reference to a type with a given value. This allows efficient zero copy of the provided values and should

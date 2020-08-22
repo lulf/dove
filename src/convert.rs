@@ -6,10 +6,10 @@
 use std::collections::BTreeMap;
 use std::vec::Vec;
 
-use crate::types::*;
 use crate::error::*;
-use crate::symbol::*;
 use crate::frame_codec::*;
+use crate::symbol::*;
+use crate::types::*;
 
 /**
  *************************************************************************************
@@ -154,8 +154,6 @@ impl std::convert::TryFrom<Value> for Option<BTreeMap<String, Value>> {
     }
 }
 
-
-
 impl std::convert::TryFrom<Value> for Symbol {
     type Error = AmqpError;
     fn try_from(value: Value) -> Result<Self> {
@@ -258,4 +256,3 @@ impl std::convert::TryFrom<Value> for Option<ErrorCondition> {
         })
     }
 }
-

@@ -9,9 +9,9 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::vec::Vec;
 
-use crate::types::*;
 use crate::error::*;
 use crate::frame_codec::*;
+use crate::types::*;
 
 /**
  * Decode an AMQP value from an byte reader. Reads the type constructor

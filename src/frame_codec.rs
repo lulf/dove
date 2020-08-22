@@ -5,8 +5,8 @@
 
 use byteorder::NetworkEndian;
 use byteorder::WriteBytesExt;
-use std::io::Write;
 use std::convert::TryFrom;
+use std::io::Write;
 use std::vec::Vec;
 
 use crate::error::*;
@@ -22,7 +22,6 @@ pub struct FrameEncoder {
     nelems: usize,
 }
 
-
 /**
  * A decoder helper type that provides convenient decoding of described list types,
  * such as frames and a few other AMQP types.
@@ -32,8 +31,6 @@ pub struct FrameDecoder<'a> {
     desc: &'a Value,
     args: &'a mut Vec<Value>,
 }
-
-
 
 impl FrameEncoder {
     pub fn new(desc: Value) -> FrameEncoder {
@@ -139,4 +136,3 @@ impl Encoder for FrameEncoder {
         Ok(TypeCode::Described)
     }
 }
-

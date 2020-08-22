@@ -13,12 +13,11 @@ use std::io::Write;
 use std::vec::Vec;
 
 use crate::decoding::*;
-use crate::frame_codec::*;
 use crate::error::*;
+use crate::frame_codec::*;
 use crate::sasl::*;
-use crate::types::*;
 use crate::symbol::*;
-
+use crate::types::*;
 
 #[derive(Debug)]
 pub struct FrameHeader {
@@ -71,7 +70,6 @@ pub struct SaslOutcome {
 }
 
 pub type SaslCode = u8;
-
 
 impl Encoder for SaslMechanism {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {

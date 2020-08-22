@@ -6,9 +6,8 @@
 use std::io::Write;
 use std::vec::Vec;
 
-
-use crate::types::*;
 use crate::error::*;
+use crate::types::*;
 
 /**
  * A type for working with symbols, typically used in some AMQP structures.
@@ -17,7 +16,6 @@ use crate::error::*;
 pub struct Symbol {
     data: Vec<u8>,
 }
-
 
 impl Symbol {
     pub fn from_slice(data: &[u8]) -> Symbol {
@@ -62,4 +60,3 @@ impl Encoder for Vec<Symbol> {
         ValueRef::ArrayRef(&values).encode(writer)
     }
 }
-

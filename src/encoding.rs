@@ -10,9 +10,9 @@ use std::io::Write;
 use std::iter::FromIterator;
 use std::vec::Vec;
 
-use crate::types::*;
 use crate::error::*;
 use crate::frame_codec::*;
+use crate::types::*;
 
 /**
  * This is the main encoder implementation for AMQP types.
@@ -358,9 +358,6 @@ impl Encoder for Value {
     }
 }
 
-
-
-
 impl Encoder for ErrorCondition {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let mut encoder = FrameEncoder::new(DESC_ERROR);
@@ -450,5 +447,3 @@ impl Encoder for BTreeMap<Value, Value> {
         ValueRef::MapRef(&m).encode(writer)
     }
 }
-
-
