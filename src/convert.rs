@@ -34,6 +34,40 @@ impl<T: TryFromValue> TryFromValue for Option<T> {
     }
 }
 
+impl<T: TryFromValue> TryFromValue for Vec<T> {
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::List(v) => {
+                let (results, errors): (Vec<_>, Vec<_>) = v
+                    .into_iter()
+                    .map(|f| T::try_from(f))
+                    .partition(Result::is_ok);
+                if errors.len() > 0 {
+                    return Err(AmqpError::decode_error(Some(
+                        "Error decoding list elements",
+                    )));
+                } else {
+                    return Ok(results.into_iter().map(Result::unwrap).collect());
+                }
+            }
+            Value::Array(v) => {
+                let (results, errors): (Vec<_>, Vec<_>) = v
+                    .into_iter()
+                    .map(|f| T::try_from(f))
+                    .partition(Result::is_ok);
+                if errors.len() > 0 {
+                    return Err(AmqpError::decode_error(Some(
+                        "Error decoding array elements",
+                    )));
+                } else {
+                    return Ok(results.into_iter().map(Result::unwrap).collect());
+                }
+            }
+            _ => return Ok(vec![T::try_from(value)?]),
+        }
+    }
+}
+
 impl TryFromValue for u8 {
     fn try_from(value: Value) -> Result<Self> {
         match value {
@@ -46,14 +80,13 @@ impl TryFromValue for u8 {
     }
 }
 
-impl TryFromValue for Vec<u8> {
+impl TryFromValue for u64 {
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            Value::Binary(v) => return Ok(v),
-            _ => Err(AmqpError::amqp_error(
-                condition::DECODE_ERROR,
-                Some("Error converting value to u8"),
-            )),
+            Value::Ulong(v) => return Ok(v),
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to u64",
+            ))),
         }
     }
 }
@@ -78,6 +111,17 @@ impl TryFromValue for u16 {
                 condition::DECODE_ERROR,
                 Some("Error converting value to u32"),
             )),
+        }
+    }
+}
+
+impl TryFromValue for bool {
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Bool(v) => return Ok(v),
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to bool",
+            ))),
         }
     }
 }
@@ -113,6 +157,18 @@ impl TryFromValue for BTreeMap<String, Value> {
     }
 }
 
+impl TryFromValue for BTreeMap<Value, Value> {
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Map(v) => Ok(v),
+            _ => Err(AmqpError::amqp_error(
+                condition::DECODE_ERROR,
+                Some("Error converting value to Vec<Symbol>"),
+            )),
+        }
+    }
+}
+
 impl TryFromValue for Symbol {
     fn try_from(value: Value) -> Result<Self> {
         match value {
@@ -120,46 +176,6 @@ impl TryFromValue for Symbol {
             _ => Err(AmqpError::amqp_error(
                 condition::DECODE_ERROR,
                 Some("Error converting value to Symbol"),
-            )),
-        }
-    }
-}
-
-impl TryFromValue for Vec<Symbol> {
-    fn try_from(value: Value) -> Result<Self> {
-        match value {
-            Value::Symbol(s) => return Ok(vec![Symbol::from_vec(s)]),
-            Value::Array(v) => {
-                let (results, errors): (Vec<_>, Vec<_>) = v
-                    .into_iter()
-                    .map(|f| Symbol::try_from(f))
-                    .partition(Result::is_ok);
-                if errors.len() > 0 {
-                    return Err(AmqpError::amqp_error(
-                        condition::DECODE_ERROR,
-                        Some("Error decoding some elements"),
-                    ));
-                } else {
-                    return Ok(results.into_iter().map(Result::unwrap).collect());
-                }
-            }
-            Value::List(v) => {
-                let (results, errors): (Vec<_>, Vec<_>) = v
-                    .into_iter()
-                    .map(|f| Symbol::try_from(f))
-                    .partition(Result::is_ok);
-                if errors.len() > 0 {
-                    return Err(AmqpError::amqp_error(
-                        condition::DECODE_ERROR,
-                        Some("Error decoding some elements"),
-                    ));
-                } else {
-                    return Ok(results.into_iter().map(Result::unwrap).collect());
-                }
-            }
-            _ => Err(AmqpError::amqp_error(
-                condition::DECODE_ERROR,
-                Some("Error converting value to Vec<Symbol>"),
             )),
         }
     }

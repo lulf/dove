@@ -41,7 +41,10 @@ impl FrameEncoder {
         };
     }
 
-    pub fn encode_arg(&mut self, arg: &dyn Encoder) -> Result<()> {
+    pub fn encode_arg<T>(&mut self, arg: &T) -> Result<()>
+    where
+        T: Encoder,
+    {
         arg.encode(&mut self.args)?;
         self.nelems += 1;
         Ok(())

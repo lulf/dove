@@ -337,7 +337,6 @@ impl Attach {
 
     pub fn decode(mut decoder: FrameDecoder) -> Result<Attach> {
         let mut attach = Attach::new("", 0, LinkRole::Sender);
-        /*
         decoder.decode_required(&mut attach.name)?;
         decoder.decode_required(&mut attach.handle)?;
         decoder.decode_required(&mut attach.role)?;
@@ -352,7 +351,6 @@ impl Attach {
         decoder.decode_optional(&mut attach.offered_capabilities)?;
         decoder.decode_optional(&mut attach.desired_capabilities)?;
         decoder.decode_optional(&mut attach.properties)?;
-        */
         Ok(attach)
     }
 }
@@ -398,6 +396,83 @@ impl SaslMechanism {
     }
 }
 
+impl TerminusDurability {
+    pub fn from_slice(data: &[u8]) -> Result<TerminusDurability> {
+        let input = std::str::from_utf8(data)?;
+        match input {
+            "None" => Ok(TerminusDurability::None),
+            "Configuration" => Ok(TerminusDurability::Configuration),
+            "UnsettledState" => Ok(TerminusDurability::UnsettledState),
+            v => Err(AmqpError::decode_error(Some(
+                format!("Unknown terminus durability{:?}", v).as_str(),
+            ))),
+        }
+    }
+}
+
+impl TryFromValue for TerminusDurability {
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Symbol(v) => TerminusDurability::from_slice(&v[..]),
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to TerminusDurability",
+            ))),
+        }
+    }
+}
+
+impl TerminusExpiryPolicy {
+    pub fn from_slice(data: &[u8]) -> Result<TerminusExpiryPolicy> {
+        let input = std::str::from_utf8(data)?;
+        match input {
+            "LinkDetach" => Ok(TerminusExpiryPolicy::LinkDetach),
+            "SessionEnd" => Ok(TerminusExpiryPolicy::SessionEnd),
+            "ConnectionClose" => Ok(TerminusExpiryPolicy::ConnectionClose),
+            "Never" => Ok(TerminusExpiryPolicy::Never),
+            v => Err(AmqpError::decode_error(Some(
+                format!("Unknown terminus expiry policy {:?}", v).as_str(),
+            ))),
+        }
+    }
+}
+
+impl TryFromValue for TerminusExpiryPolicy {
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Symbol(v) => TerminusExpiryPolicy::from_slice(&v[..]),
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to TerminusExpiryPolicy",
+            ))),
+        }
+    }
+}
+
+impl Outcome {
+    pub fn from_slice(data: &[u8]) -> Result<Outcome> {
+        let input = std::str::from_utf8(data)?;
+        match input {
+            "Accepted" => Ok(Outcome::Accepted),
+            "Rejected" => Ok(Outcome::Rejected),
+            "Released" => Ok(Outcome::Released),
+            "Modified" => Ok(Outcome::Modified),
+            v => Err(AmqpError::decode_error(Some(
+                format!("Unknown outcome {:?}", v).as_str(),
+            ))),
+        }
+    }
+}
+
+impl TryFromValue for Outcome {
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Symbol(v) => Outcome::from_slice(&v[..]),
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to Outcome",
+            ))),
+        }
+    }
+}
+
 impl SaslMechanisms {
     pub fn decode(mut decoder: FrameDecoder) -> Result<SaslMechanisms> {
         let mut mechs = SaslMechanisms {
@@ -433,7 +508,51 @@ impl TryFromValue for SenderSettleMode {
             })
         } else {
             Err(AmqpError::decode_error(Some(
-                "Error converting value to LinkRole",
+                "Error converting value to SenderSettleMode",
+            )))
+        }
+    }
+}
+
+impl TryFromValue for Source {
+    fn try_from(value: Value) -> Result<Self> {
+        if let Value::Described(descriptor, mut body) = value {
+            let decoder = FrameDecoder::new(&descriptor, &mut body)?;
+            Ok(Source::decode(decoder)?)
+        } else {
+            Err(AmqpError::decode_error(Some(
+                "Error converting value to ReceiverSettleMode",
+            )))
+        }
+    }
+}
+
+impl TryFromValue for Target {
+    fn try_from(value: Value) -> Result<Self> {
+        if let Value::Described(descriptor, mut body) = value {
+            let decoder = FrameDecoder::new(&descriptor, &mut body)?;
+            Ok(Target::decode(decoder)?)
+        } else {
+            Err(AmqpError::decode_error(Some(
+                "Error converting value to ReceiverSettleMode",
+            )))
+        }
+    }
+}
+
+impl TryFromValue for ReceiverSettleMode {
+    fn try_from(value: Value) -> Result<Self> {
+        if let Value::Ubyte(value) = value {
+            match value {
+                0 => Ok(ReceiverSettleMode::First),
+                1 => Ok(ReceiverSettleMode::Second),
+                _ => Err(AmqpError::decode_error(Some(
+                    "Error converting value to ReceiverSettledMode",
+                ))),
+            }
+        } else {
+            Err(AmqpError::decode_error(Some(
+                "Error converting value to ReceiverSettleMode",
             )))
         }
     }
@@ -443,33 +562,6 @@ impl TryFromValue for SaslMechanism {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Symbol(mech) => SaslMechanism::from_slice(&mech[..]),
-            _ => Err(AmqpError::decode_error(Some(
-                "Error converting value to SaslMechanism",
-            ))),
-        }
-    }
-}
-
-impl TryFromValue for Vec<SaslMechanism> {
-    fn try_from(value: Value) -> Result<Self> {
-        match value {
-            Value::Array(v) => {
-                let (results, errors): (Vec<_>, Vec<_>) = v
-                    .into_iter()
-                    .map(|f| SaslMechanism::try_from(f))
-                    .partition(Result::is_ok);
-                if errors.len() > 0 {
-                    return Err(AmqpError::decode_error(Some(
-                        "Error decoding some elements",
-                    )));
-                } else {
-                    return Ok(results.into_iter().map(Result::unwrap).collect());
-                }
-            }
-            Value::Symbol(v) => {
-                let mech = SaslMechanism::from_slice(&v[..])?;
-                return Ok(vec![mech]);
-            }
             _ => Err(AmqpError::decode_error(Some(
                 "Error converting value to SaslMechanism",
             ))),
@@ -528,6 +620,58 @@ impl Encoder for Source {
         encoder.encode_arg(&self.outcomes)?;
         encoder.encode_arg(&self.capabilities)?;
         encoder.encode(writer)
+    }
+}
+
+impl Source {
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Source> {
+        let mut source = Source {
+            address: None,
+            durable: None,
+            expiry_policy: None,
+            timeout: None,
+            dynamic: None,
+            dynamic_node_properties: None,
+            distribution_mode: None,
+            filter: None,
+            default_outcome: None,
+            outcomes: None,
+            capabilities: None,
+        };
+        decoder.decode_optional(&mut source.address)?;
+        decoder.decode_optional(&mut source.durable)?;
+        decoder.decode_optional(&mut source.expiry_policy)?;
+        decoder.decode_optional(&mut source.timeout)?;
+        decoder.decode_optional(&mut source.dynamic)?;
+        decoder.decode_optional(&mut source.dynamic_node_properties)?;
+        decoder.decode_optional(&mut source.distribution_mode)?;
+        decoder.decode_optional(&mut source.filter)?;
+        decoder.decode_optional(&mut source.default_outcome)?;
+        decoder.decode_optional(&mut source.outcomes)?;
+        decoder.decode_optional(&mut source.capabilities)?;
+        Ok(source)
+    }
+}
+
+impl Target {
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Target> {
+        let mut target = Target {
+            address: None,
+            durable: None,
+            expiry_policy: None,
+            timeout: None,
+            dynamic: None,
+            dynamic_node_properties: None,
+            capabilities: None,
+        };
+        decoder.decode_optional(&mut target.address)?;
+        decoder.decode_optional(&mut target.durable)?;
+        decoder.decode_optional(&mut target.expiry_policy)?;
+        decoder.decode_optional(&mut target.timeout)?;
+        decoder.decode_optional(&mut target.dynamic)?;
+        decoder.decode_optional(&mut target.dynamic_node_properties)?;
+        decoder.decode_optional(&mut target.capabilities)?;
+        Ok(target)
     }
 }
 
