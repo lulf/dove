@@ -7,7 +7,6 @@ use byteorder::NetworkEndian;
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
 use std::collections::BTreeMap;
-use std::fmt;
 use std::io::Read;
 use std::io::Write;
 use std::vec::Vec;
@@ -34,12 +33,7 @@ pub enum Frame {
     SASL(SaslFrame),
 }
 
-#[derive(Debug)]
-pub struct AmqpFrame {
-    pub channel: u16,
-    pub body: Option<Performative>,
-}
-
+/** SASL frame types */
 #[derive(Debug)]
 pub enum SaslFrame {
     SaslMechanisms(SaslMechanisms),
@@ -95,6 +89,61 @@ impl Encoder for SaslInit {
     }
 }
 
+impl SaslOutcome {
+    pub fn decode(mut decoder: FrameDecoder) -> Result<SaslOutcome> {
+        let mut outcome = SaslOutcome {
+            code: 4,
+            additional_data: None,
+        };
+        decoder.decode_required(&mut outcome.code)?;
+        decoder.decode_optional(&mut outcome.additional_data)?;
+        Ok(outcome)
+    }
+}
+
+impl SaslMechanism {
+    pub fn from_slice(data: &[u8]) -> Result<SaslMechanism> {
+        let input = std::str::from_utf8(data)?;
+        match input {
+            "ANONYMOUS" => Ok(SaslMechanism::Anonymous),
+            "PLAIN" => Ok(SaslMechanism::Plain),
+            "CRAM-MD5" => Ok(SaslMechanism::CramMd5),
+            "SCRAM-SHA-1" => Ok(SaslMechanism::ScramSha1),
+            "SCRAM-SHA-256" => Ok(SaslMechanism::ScramSha256),
+            v => Err(AmqpError::decode_error(Some(
+                format!("Unsupported SASL mechanism {:?}", v).as_str(),
+            ))),
+        }
+    }
+}
+
+impl SaslMechanisms {
+    pub fn decode(mut decoder: FrameDecoder) -> Result<SaslMechanisms> {
+        let mut mechs = SaslMechanisms {
+            mechanisms: Vec::new(),
+        };
+        decoder.decode_optional(&mut mechs.mechanisms)?;
+        Ok(mechs)
+    }
+}
+impl TryFromValue for SaslMechanism {
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Symbol(mech) => SaslMechanism::from_slice(&mech[..]),
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to SaslMechanism",
+            ))),
+        }
+    }
+}
+
+/** AMQP frame types. */
+#[derive(Debug)]
+pub struct AmqpFrame {
+    pub channel: u16,
+    pub body: Option<Performative>,
+}
+
 #[derive(Debug)]
 pub enum Performative {
     Open(Open),
@@ -120,6 +169,11 @@ pub struct Open {
 }
 
 #[derive(Debug, Clone)]
+pub struct Close {
+    pub error: Option<ErrorCondition>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Begin {
     pub remote_channel: Option<u16>,
     pub next_outgoing_id: u32,
@@ -129,6 +183,11 @@ pub struct Begin {
     pub offered_capabilities: Option<Vec<Symbol>>,
     pub desired_capabilities: Option<Vec<Symbol>>,
     pub properties: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct End {
+    pub error: Option<ErrorCondition>,
 }
 
 #[derive(Debug, Clone)]
@@ -147,6 +206,39 @@ pub struct Attach {
     pub offered_capabilities: Option<Vec<Symbol>>,
     pub desired_capabilities: Option<Vec<Symbol>>,
     pub properties: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Detach {
+    pub handle: u32,
+    pub closed: Option<bool>,
+    pub error: Option<ErrorCondition>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Source {
+    pub address: Option<String>,
+    pub durable: Option<TerminusDurability>,
+    pub expiry_policy: Option<TerminusExpiryPolicy>,
+    pub timeout: Option<u32>,
+    pub dynamic: Option<bool>,
+    pub dynamic_node_properties: Option<BTreeMap<Symbol, Value>>,
+    pub distribution_mode: Option<Symbol>,
+    pub filter: Option<BTreeMap<Symbol, Value>>,
+    pub default_outcome: Option<Outcome>,
+    pub outcomes: Option<Vec<Outcome>>,
+    pub capabilities: Option<Vec<Symbol>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Target {
+    pub address: Option<String>,
+    pub durable: Option<TerminusDurability>,
+    pub expiry_policy: Option<TerminusExpiryPolicy>,
+    pub timeout: Option<u32>,
+    pub dynamic: Option<bool>,
+    pub dynamic_node_properties: Option<BTreeMap<Symbol, Value>>,
+    pub capabilities: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -170,21 +262,6 @@ pub enum ReceiverSettleMode {
     Second,
 }
 
-#[derive(Debug, Clone)]
-pub struct Source {
-    pub address: Option<String>,
-    pub durable: Option<TerminusDurability>,
-    pub expiry_policy: Option<TerminusExpiryPolicy>,
-    pub timeout: Option<u32>,
-    pub dynamic: Option<bool>,
-    pub dynamic_node_properties: Option<BTreeMap<Symbol, Value>>,
-    pub distribution_mode: Option<Symbol>,
-    pub filter: Option<BTreeMap<Symbol, Value>>,
-    pub default_outcome: Option<Outcome>,
-    pub outcomes: Option<Vec<Outcome>>,
-    pub capabilities: Option<Vec<Symbol>>,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum TerminusDurability {
     None,
@@ -200,58 +277,12 @@ pub enum TerminusExpiryPolicy {
     Never,
 }
 
-impl fmt::Display for TerminusExpiryPolicy {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl fmt::Display for TerminusDurability {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl fmt::Display for Outcome {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum Outcome {
     Accepted,
     Rejected,
     Released,
     Modified,
-}
-
-#[derive(Debug, Clone)]
-pub struct Target {
-    pub address: Option<String>,
-    pub durable: Option<TerminusDurability>,
-    pub expiry_policy: Option<TerminusExpiryPolicy>,
-    pub timeout: Option<u32>,
-    pub dynamic: Option<bool>,
-    pub dynamic_node_properties: Option<BTreeMap<Symbol, Value>>,
-    pub capabilities: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct End {
-    pub error: Option<ErrorCondition>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Close {
-    pub error: Option<ErrorCondition>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Detach {
-    pub handle: u32,
-    pub closed: Option<bool>,
-    pub error: Option<ErrorCondition>,
 }
 
 impl Open {
@@ -297,6 +328,39 @@ impl Open {
     }
 }
 
+impl Encoder for Open {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_OPEN);
+        encoder.encode_arg(&self.container_id)?;
+        encoder.encode_arg(&self.hostname)?;
+        encoder.encode_arg(&self.max_frame_size)?;
+        encoder.encode_arg(&self.channel_max)?;
+        encoder.encode_arg(&self.idle_timeout)?;
+        encoder.encode_arg(&self.outgoing_locales)?;
+        encoder.encode_arg(&self.incoming_locales)?;
+        encoder.encode_arg(&self.offered_capabilities)?;
+        encoder.encode_arg(&self.desired_capabilities)?;
+        encoder.encode_arg(&self.properties)?;
+        encoder.encode(writer)
+    }
+}
+
+impl Close {
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Close> {
+        let mut close = Close { error: None };
+        decoder.decode_optional(&mut close.error)?;
+        Ok(close)
+    }
+}
+
+impl Encoder for Close {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_CLOSE);
+        encoder.encode_arg(&self.error)?;
+        encoder.encode(writer)
+    }
+}
+
 impl Begin {
     pub fn new(next_outgoing_id: u32, incoming_window: u32, outgoing_window: u32) -> Begin {
         Begin {
@@ -325,59 +389,38 @@ impl Begin {
     }
 }
 
-impl Attach {
-    /*
-    pub fn new(name: &str, handle: u32, role: LinkRole) -> Attach {
-        Attach {
-            name: name.to_string(),
-            handle: handle,
-            role: role,
-            snd_settle_mode: None,
-            rcv_settle_mode: None,
-            /*
-            source: Some(Source {
-                address: if role == LinkRole::Sender {
-                    None
-                } else {
-                    Some(name.to_string())
-                },
-                durable: Some(TerminusDurability::None),
-                expiry_policy: Some(TerminusExpiryPolicy::SessionEnd),
-                timeout: Some(0),
-                dynamic: Some(false),
-                dynamic_node_properties: None,
-                distribution_mode: None,
-                filter: None,
-                default_outcome: None,
-                outcomes: None,
-                capabilities: None,
-            }),
-            target: Some(Target {
-                address: if role == LinkRole::Receiver {
-                    None
-                } else {
-                    Some(name.to_string())
-                },
-                durable: Some(TerminusDurability::None),
-                expiry_policy: Some(TerminusExpiryPolicy::SessionEnd),
-                timeout: Some(0),
-                dynamic: Some(false),
-                dynamic_node_properties: None,
-                capabilities: None,
-            }),*/
-            source: None,
-            target: None,
-            unsettled: None,
-            incomplete_unsettled: None,
-            initial_delivery_count: None,
-            max_message_size: None,
-            offered_capabilities: None,
-            desired_capabilities: None,
-            properties: None,
-        }
+impl Encoder for Begin {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_BEGIN);
+        encoder.encode_arg(&self.remote_channel)?;
+        encoder.encode_arg(&self.next_outgoing_id)?;
+        encoder.encode_arg(&self.incoming_window)?;
+        encoder.encode_arg(&self.outgoing_window)?;
+        encoder.encode_arg(&self.handle_max)?;
+        encoder.encode_arg(&self.offered_capabilities)?;
+        encoder.encode_arg(&self.desired_capabilities)?;
+        encoder.encode_arg(&self.properties)?;
+        encoder.encode(writer)
     }
-    */
+}
 
+impl End {
+    pub fn decode(mut decoder: FrameDecoder) -> Result<End> {
+        let mut end = End { error: None };
+        decoder.decode_optional(&mut end.error)?;
+        Ok(end)
+    }
+}
+
+impl Encoder for End {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_END);
+        encoder.encode_arg(&self.error)?;
+        encoder.encode(writer)
+    }
+}
+
+impl Attach {
     pub fn decode(mut decoder: FrameDecoder) -> Result<Attach> {
         let mut attach = Attach {
             name: String::new(),
@@ -413,19 +456,24 @@ impl Attach {
     }
 }
 
-impl End {
-    pub fn decode(mut decoder: FrameDecoder) -> Result<End> {
-        let mut end = End { error: None };
-        decoder.decode_optional(&mut end.error)?;
-        Ok(end)
-    }
-}
-
-impl Close {
-    pub fn decode(mut decoder: FrameDecoder) -> Result<Close> {
-        let mut close = Close { error: None };
-        decoder.decode_optional(&mut close.error)?;
-        Ok(close)
+impl Encoder for Attach {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_ATTACH);
+        encoder.encode_arg(&self.name)?;
+        encoder.encode_arg(&self.handle)?;
+        encoder.encode_arg(&self.role)?;
+        encoder.encode_arg(&self.snd_settle_mode.unwrap_or(SenderSettleMode::Mixed))?;
+        encoder.encode_arg(&self.rcv_settle_mode.unwrap_or(ReceiverSettleMode::First))?;
+        encoder.encode_arg(&self.source)?;
+        encoder.encode_arg(&self.target)?;
+        encoder.encode_arg(&self.unsettled)?;
+        encoder.encode_arg(&self.incomplete_unsettled.unwrap_or(false))?;
+        encoder.encode_arg(&self.initial_delivery_count)?;
+        encoder.encode_arg(&self.max_message_size)?;
+        encoder.encode_arg(&self.offered_capabilities)?;
+        encoder.encode_arg(&self.desired_capabilities)?;
+        encoder.encode_arg(&self.properties)?;
+        encoder.encode(writer)
     }
 }
 
@@ -443,31 +491,105 @@ impl Detach {
     }
 }
 
-impl SaslOutcome {
-    pub fn decode(mut decoder: FrameDecoder) -> Result<SaslOutcome> {
-        let mut outcome = SaslOutcome {
-            code: 4,
-            additional_data: None,
-        };
-        decoder.decode_required(&mut outcome.code)?;
-        decoder.decode_optional(&mut outcome.additional_data)?;
-        Ok(outcome)
+impl Encoder for Detach {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_DETACH);
+        encoder.encode_arg(&self.handle)?;
+        encoder.encode_arg(&self.closed)?;
+        encoder.encode_arg(&self.error)?;
+        encoder.encode(writer)
     }
 }
 
-impl SaslMechanism {
-    pub fn from_slice(data: &[u8]) -> Result<SaslMechanism> {
-        let input = std::str::from_utf8(data)?;
-        match input {
-            "ANONYMOUS" => Ok(SaslMechanism::Anonymous),
-            "PLAIN" => Ok(SaslMechanism::Plain),
-            "CRAM-MD5" => Ok(SaslMechanism::CramMd5),
-            "SCRAM-SHA-1" => Ok(SaslMechanism::ScramSha1),
-            "SCRAM-SHA-256" => Ok(SaslMechanism::ScramSha256),
-            v => Err(AmqpError::decode_error(Some(
-                format!("Unsupported SASL mechanism {:?}", v).as_str(),
-            ))),
-        }
+impl Source {
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Source> {
+        let mut source = Source {
+            address: None,
+            durable: None,
+            expiry_policy: None,
+            timeout: None,
+            dynamic: None,
+            dynamic_node_properties: None,
+            distribution_mode: None,
+            filter: None,
+            default_outcome: None,
+            outcomes: None,
+            capabilities: None,
+        };
+        decoder.decode_optional(&mut source.address)?;
+        decoder.decode_optional(&mut source.durable)?;
+        decoder.decode_optional(&mut source.expiry_policy)?;
+        decoder.decode_optional(&mut source.timeout)?;
+        decoder.decode_optional(&mut source.dynamic)?;
+        decoder.decode_optional(&mut source.dynamic_node_properties)?;
+        decoder.decode_optional(&mut source.distribution_mode)?;
+        decoder.decode_optional(&mut source.filter)?;
+        decoder.decode_optional(&mut source.default_outcome)?;
+        decoder.decode_optional(&mut source.outcomes)?;
+        decoder.decode_optional(&mut source.capabilities)?;
+        Ok(source)
+    }
+}
+
+impl Encoder for Source {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_SOURCE);
+        encoder.encode_arg(&self.address)?;
+        encoder.encode_arg(&self.durable.unwrap_or(TerminusDurability::None))?;
+        encoder.encode_arg(
+            &self
+                .expiry_policy
+                .unwrap_or(TerminusExpiryPolicy::SessionEnd),
+        )?;
+        encoder.encode_arg(&self.timeout.unwrap_or(0))?;
+        encoder.encode_arg(&self.dynamic.unwrap_or(false))?;
+        encoder.encode_arg(&self.dynamic_node_properties)?;
+        encoder.encode_arg(&self.distribution_mode)?;
+        encoder.encode_arg(&self.filter)?;
+        encoder.encode_arg(&self.default_outcome)?;
+        encoder.encode_arg(&self.outcomes)?;
+        encoder.encode_arg(&self.capabilities)?;
+        encoder.encode(writer)
+    }
+}
+
+impl Target {
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Target> {
+        let mut target = Target {
+            address: None,
+            durable: None,
+            expiry_policy: None,
+            timeout: None,
+            dynamic: None,
+            dynamic_node_properties: None,
+            capabilities: None,
+        };
+        decoder.decode_optional(&mut target.address)?;
+        decoder.decode_optional(&mut target.durable)?;
+        decoder.decode_optional(&mut target.expiry_policy)?;
+        decoder.decode_optional(&mut target.timeout)?;
+        decoder.decode_optional(&mut target.dynamic)?;
+        decoder.decode_optional(&mut target.dynamic_node_properties)?;
+        decoder.decode_optional(&mut target.capabilities)?;
+        Ok(target)
+    }
+}
+
+impl Encoder for Target {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_TARGET);
+        encoder.encode_arg(&self.address)?;
+        encoder.encode_arg(&self.durable.unwrap_or(TerminusDurability::None))?;
+        encoder.encode_arg(
+            &self
+                .expiry_policy
+                .unwrap_or(TerminusExpiryPolicy::SessionEnd),
+        )?;
+        encoder.encode_arg(&self.timeout.unwrap_or(0))?;
+        encoder.encode_arg(&self.dynamic.unwrap_or(false))?;
+        encoder.encode_arg(&self.dynamic_node_properties)?;
+        encoder.encode_arg(&self.capabilities)?;
+        encoder.encode(writer)
     }
 }
 
@@ -547,16 +669,6 @@ impl TryFromValue for Outcome {
     }
 }
 
-impl SaslMechanisms {
-    pub fn decode(mut decoder: FrameDecoder) -> Result<SaslMechanisms> {
-        let mut mechs = SaslMechanisms {
-            mechanisms: Vec::new(),
-        };
-        decoder.decode_optional(&mut mechs.mechanisms)?;
-        Ok(mechs)
-    }
-}
-
 impl TryFromValue for LinkRole {
     fn try_from(value: Value) -> Result<Self> {
         match value {
@@ -629,188 +741,6 @@ impl TryFromValue for ReceiverSettleMode {
                 "Error converting value to ReceiverSettleMode",
             )))
         }
-    }
-}
-
-impl TryFromValue for SaslMechanism {
-    fn try_from(value: Value) -> Result<Self> {
-        match value {
-            Value::Symbol(mech) => SaslMechanism::from_slice(&mech[..]),
-            _ => Err(AmqpError::decode_error(Some(
-                "Error converting value to SaslMechanism",
-            ))),
-        }
-    }
-}
-
-impl Encoder for Open {
-    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let mut encoder = FrameEncoder::new(DESC_OPEN);
-        encoder.encode_arg(&self.container_id)?;
-        encoder.encode_arg(&self.hostname)?;
-        encoder.encode_arg(&self.max_frame_size)?;
-        encoder.encode_arg(&self.channel_max)?;
-        encoder.encode_arg(&self.idle_timeout)?;
-        encoder.encode_arg(&self.outgoing_locales)?;
-        encoder.encode_arg(&self.incoming_locales)?;
-        encoder.encode_arg(&self.offered_capabilities)?;
-        encoder.encode_arg(&self.desired_capabilities)?;
-        encoder.encode_arg(&self.properties)?;
-        encoder.encode(writer)
-    }
-}
-
-impl Encoder for Begin {
-    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let mut encoder = FrameEncoder::new(DESC_BEGIN);
-        encoder.encode_arg(&self.remote_channel)?;
-        encoder.encode_arg(&self.next_outgoing_id)?;
-        encoder.encode_arg(&self.incoming_window)?;
-        encoder.encode_arg(&self.outgoing_window)?;
-        encoder.encode_arg(&self.handle_max)?;
-        encoder.encode_arg(&self.offered_capabilities)?;
-        encoder.encode_arg(&self.desired_capabilities)?;
-        encoder.encode_arg(&self.properties)?;
-        encoder.encode(writer)
-    }
-}
-
-impl Encoder for Source {
-    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let mut encoder = FrameEncoder::new(DESC_SOURCE);
-        encoder.encode_arg(&self.address)?;
-        encoder.encode_arg(&self.durable.unwrap_or(TerminusDurability::None))?;
-        encoder.encode_arg(
-            &self
-                .expiry_policy
-                .unwrap_or(TerminusExpiryPolicy::SessionEnd),
-        )?;
-        encoder.encode_arg(&self.timeout.unwrap_or(0))?;
-        encoder.encode_arg(&self.dynamic.unwrap_or(false))?;
-        encoder.encode_arg(&self.dynamic_node_properties)?;
-        encoder.encode_arg(&self.distribution_mode)?;
-        encoder.encode_arg(&self.filter)?;
-        encoder.encode_arg(&self.default_outcome)?;
-        encoder.encode_arg(&self.outcomes)?;
-        encoder.encode_arg(&self.capabilities)?;
-        encoder.encode(writer)
-    }
-}
-
-impl Source {
-    pub fn decode(mut decoder: FrameDecoder) -> Result<Source> {
-        let mut source = Source {
-            address: None,
-            durable: None,
-            expiry_policy: None,
-            timeout: None,
-            dynamic: None,
-            dynamic_node_properties: None,
-            distribution_mode: None,
-            filter: None,
-            default_outcome: None,
-            outcomes: None,
-            capabilities: None,
-        };
-        decoder.decode_optional(&mut source.address)?;
-        decoder.decode_optional(&mut source.durable)?;
-        decoder.decode_optional(&mut source.expiry_policy)?;
-        decoder.decode_optional(&mut source.timeout)?;
-        decoder.decode_optional(&mut source.dynamic)?;
-        decoder.decode_optional(&mut source.dynamic_node_properties)?;
-        decoder.decode_optional(&mut source.distribution_mode)?;
-        decoder.decode_optional(&mut source.filter)?;
-        decoder.decode_optional(&mut source.default_outcome)?;
-        decoder.decode_optional(&mut source.outcomes)?;
-        decoder.decode_optional(&mut source.capabilities)?;
-        Ok(source)
-    }
-}
-
-impl Target {
-    pub fn decode(mut decoder: FrameDecoder) -> Result<Target> {
-        let mut target = Target {
-            address: None,
-            durable: None,
-            expiry_policy: None,
-            timeout: None,
-            dynamic: None,
-            dynamic_node_properties: None,
-            capabilities: None,
-        };
-        decoder.decode_optional(&mut target.address)?;
-        decoder.decode_optional(&mut target.durable)?;
-        decoder.decode_optional(&mut target.expiry_policy)?;
-        decoder.decode_optional(&mut target.timeout)?;
-        decoder.decode_optional(&mut target.dynamic)?;
-        decoder.decode_optional(&mut target.dynamic_node_properties)?;
-        decoder.decode_optional(&mut target.capabilities)?;
-        Ok(target)
-    }
-}
-
-impl Encoder for Target {
-    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let mut encoder = FrameEncoder::new(DESC_TARGET);
-        encoder.encode_arg(&self.address)?;
-        encoder.encode_arg(&self.durable.unwrap_or(TerminusDurability::None))?;
-        encoder.encode_arg(
-            &self
-                .expiry_policy
-                .unwrap_or(TerminusExpiryPolicy::SessionEnd),
-        )?;
-        encoder.encode_arg(&self.timeout.unwrap_or(0))?;
-        encoder.encode_arg(&self.dynamic.unwrap_or(false))?;
-        encoder.encode_arg(&self.dynamic_node_properties)?;
-        encoder.encode_arg(&self.capabilities)?;
-        encoder.encode(writer)
-    }
-}
-
-impl Encoder for Attach {
-    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let mut encoder = FrameEncoder::new(DESC_ATTACH);
-        encoder.encode_arg(&self.name)?;
-        encoder.encode_arg(&self.handle)?;
-        encoder.encode_arg(&self.role)?;
-        encoder.encode_arg(&self.snd_settle_mode.unwrap_or(SenderSettleMode::Mixed))?;
-        encoder.encode_arg(&self.rcv_settle_mode.unwrap_or(ReceiverSettleMode::First))?;
-        encoder.encode_arg(&self.source)?;
-        encoder.encode_arg(&self.target)?;
-        encoder.encode_arg(&self.unsettled)?;
-        encoder.encode_arg(&self.incomplete_unsettled.unwrap_or(false))?;
-        encoder.encode_arg(&self.initial_delivery_count)?;
-        encoder.encode_arg(&self.max_message_size)?;
-        encoder.encode_arg(&self.offered_capabilities)?;
-        encoder.encode_arg(&self.desired_capabilities)?;
-        encoder.encode_arg(&self.properties)?;
-        encoder.encode(writer)
-    }
-}
-
-impl Encoder for End {
-    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let mut encoder = FrameEncoder::new(DESC_END);
-        encoder.encode_arg(&self.error)?;
-        encoder.encode(writer)
-    }
-}
-
-impl Encoder for Close {
-    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let mut encoder = FrameEncoder::new(DESC_CLOSE);
-        encoder.encode_arg(&self.error)?;
-        encoder.encode(writer)
-    }
-}
-
-impl Encoder for Detach {
-    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let mut encoder = FrameEncoder::new(DESC_DETACH);
-        encoder.encode_arg(&self.handle)?;
-        encoder.encode_arg(&self.closed)?;
-        encoder.encode_arg(&self.error)?;
-        encoder.encode(writer)
     }
 }
 

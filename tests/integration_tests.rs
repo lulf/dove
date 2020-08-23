@@ -47,12 +47,6 @@ fn client() {
                             let session = conn.get_session(chan).unwrap();
                             let sender = session.create_sender(Some("a"));
                             sender.open();
-                            /*
-                            conn.close(Some(ErrorCondition {
-                                condition: condition::RESOURCE_LIMIT_EXCEEDED.to_string(),
-                                description: "Buhuu".to_string(),
-                            }))
-                            */
                         }
                         Event::RemoteClose(cid, close) => {
                             let conn = driver.connection(cid).unwrap();
