@@ -667,6 +667,10 @@ impl Connection {
                     Err(AmqpError::framing_error())
                 }
             }
+            Performative::Flow(_) => {
+                println!("Got link flow!");
+                Ok(())
+            }
             Performative::Detach(detach) => {
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
                 // Lookup session and remove link

@@ -152,6 +152,7 @@ pub enum Performative {
     End(End),
     Attach(Attach),
     Detach(Detach),
+    Flow(Flow),
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +214,21 @@ pub struct Detach {
     pub handle: u32,
     pub closed: Option<bool>,
     pub error: Option<ErrorCondition>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Flow {
+    pub next_incoming_id: Option<u32>,
+    pub incoming_window: u32,
+    pub next_outgoing_id: u32,
+    pub outgoing_window: u32,
+    pub handle: Option<u32>,
+    pub delivery_count: Option<u32>,
+    pub link_credit: Option<u32>,
+    pub available: Option<u32>,
+    pub drain: Option<bool>,
+    pub echo: Option<bool>,
+    pub properties: Option<BTreeMap<String, Value>>,
 }
 
 #[derive(Debug, Clone)]
@@ -497,6 +513,54 @@ impl Encoder for Detach {
         encoder.encode_arg(&self.handle)?;
         encoder.encode_arg(&self.closed)?;
         encoder.encode_arg(&self.error)?;
+        encoder.encode(writer)
+    }
+}
+
+impl Flow {
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Flow> {
+        let mut flow = Flow {
+            next_incoming_id: None,
+            incoming_window: 0,
+            next_outgoing_id: 0,
+            outgoing_window: 0,
+            handle: None,
+            delivery_count: None,
+            link_credit: None,
+            available: None,
+            drain: Some(false),
+            echo: Some(false),
+            properties: None,
+        };
+        decoder.decode_optional(&mut flow.next_incoming_id)?;
+        decoder.decode_required(&mut flow.incoming_window)?;
+        decoder.decode_required(&mut flow.next_outgoing_id)?;
+        decoder.decode_required(&mut flow.outgoing_window)?;
+        decoder.decode_optional(&mut flow.handle)?;
+        decoder.decode_optional(&mut flow.delivery_count)?;
+        decoder.decode_optional(&mut flow.link_credit)?;
+        decoder.decode_optional(&mut flow.available)?;
+        decoder.decode_optional(&mut flow.drain)?;
+        decoder.decode_optional(&mut flow.echo)?;
+        decoder.decode_optional(&mut flow.properties)?;
+        Ok(flow)
+    }
+}
+
+impl Encoder for Flow {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_FLOW);
+        encoder.encode_arg(&self.next_incoming_id)?;
+        encoder.encode_arg(&self.incoming_window)?;
+        encoder.encode_arg(&self.next_outgoing_id)?;
+        encoder.encode_arg(&self.outgoing_window)?;
+        encoder.encode_arg(&self.handle)?;
+        encoder.encode_arg(&self.delivery_count)?;
+        encoder.encode_arg(&self.link_credit)?;
+        encoder.encode_arg(&self.available)?;
+        encoder.encode_arg(&self.drain)?;
+        encoder.encode_arg(&self.echo)?;
+        encoder.encode_arg(&self.properties)?;
         encoder.encode(writer)
     }
 }
@@ -871,6 +935,9 @@ impl Frame {
                         Performative::Close(close) => {
                             close.encode(&mut buf)?;
                         }
+                        Performative::Flow(flow) => {
+                            flow.encode(&mut buf)?;
+                        }
                     }
                 }
             }
@@ -932,6 +999,10 @@ impl Frame {
                         DESC_DETACH => {
                             let detach = Detach::decode(decoder)?;
                             Ok(Performative::Detach(detach))
+                        }
+                        DESC_FLOW => {
+                            let flow = Flow::decode(decoder)?;
+                            Ok(Performative::Flow(flow))
                         }
                         v => Err(AmqpError::amqp_error(
                             condition::DECODE_ERROR,

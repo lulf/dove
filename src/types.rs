@@ -25,6 +25,7 @@ pub const LIST32_MAX: usize = (std::u32::MAX as usize) - 4;
 pub const DESC_OPEN: Value = Value::Ulong(0x10);
 pub const DESC_BEGIN: Value = Value::Ulong(0x11);
 pub const DESC_ATTACH: Value = Value::Ulong(0x12);
+pub const DESC_FLOW: Value = Value::Ulong(0x13);
 pub const DESC_SOURCE: Value = Value::Ulong(0x28);
 pub const DESC_TARGET: Value = Value::Ulong(0x29);
 
