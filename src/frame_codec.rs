@@ -66,6 +66,10 @@ impl<'a> FrameDecoder<'a> {
         }
     }
 
+    pub fn get_descriptor(&self) -> &'a Value {
+        return self.desc;
+    }
+
     pub fn decode_required<T: TryFromValue>(&mut self, value: &mut T) -> Result<()> {
         self.decode(value, true)
     }

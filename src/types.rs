@@ -26,8 +26,16 @@ pub const DESC_OPEN: Value = Value::Ulong(0x10);
 pub const DESC_BEGIN: Value = Value::Ulong(0x11);
 pub const DESC_ATTACH: Value = Value::Ulong(0x12);
 pub const DESC_FLOW: Value = Value::Ulong(0x13);
+pub const DESC_TRANSFER: Value = Value::Ulong(0x14);
+pub const DESC_DISPOSITION: Value = Value::Ulong(0x15);
 pub const DESC_SOURCE: Value = Value::Ulong(0x28);
 pub const DESC_TARGET: Value = Value::Ulong(0x29);
+
+pub const DESC_DELIVERY_STATE_RECEIVED: Value = Value::Ulong(0x23);
+pub const DESC_DELIVERY_STATE_ACCEPTED: Value = Value::Ulong(0x24);
+pub const DESC_DELIVERY_STATE_REJECTED: Value = Value::Ulong(0x25);
+pub const DESC_DELIVERY_STATE_RELEASED: Value = Value::Ulong(0x26);
+pub const DESC_DELIVERY_STATE_MODIFIED: Value = Value::Ulong(0x27);
 
 pub const DESC_DETACH: Value = Value::Ulong(0x16);
 pub const DESC_END: Value = Value::Ulong(0x17);

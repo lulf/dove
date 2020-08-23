@@ -153,6 +153,8 @@ pub enum Performative {
     Attach(Attach),
     Detach(Detach),
     Flow(Flow),
+    Transfer(Transfer),
+    Disposition(Disposition),
 }
 
 #[derive(Debug, Clone)]
@@ -229,6 +231,58 @@ pub struct Flow {
     pub drain: Option<bool>,
     pub echo: Option<bool>,
     pub properties: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Transfer {
+    pub handle: u32,
+    pub delivery_id: Option<u32>,
+    pub delivery_tag: Option<Vec<u8>>,
+    pub message_format: Option<u32>,
+    pub settled: Option<bool>,
+    pub more: Option<bool>,
+    pub rcv_settle_mode: Option<ReceiverSettleMode>,
+    pub state: Option<DeliveryState>,
+    pub resume: Option<bool>,
+    pub aborted: Option<bool>,
+    pub batchable: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Disposition {
+    pub role: LinkRole,
+    pub first: u32,
+    pub last: Option<u32>,
+    pub settled: Option<bool>,
+    pub state: Option<DeliveryState>,
+    pub batchable: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub enum DeliveryState {
+    Received(Received),
+    Accepted,
+    Rejected(Rejected),
+    Released,
+    Modified(Modified),
+}
+
+#[derive(Debug, Clone)]
+pub struct Received {
+    pub section_number: u32,
+    pub section_offset: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct Rejected {
+    pub error: Option<ErrorCondition>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Modified {
+    pub delivery_failed: Option<bool>,
+    pub undeliverable_here: Option<bool>,
+    pub message_annotations: Option<BTreeMap<String, Value>>,
 }
 
 #[derive(Debug, Clone)]
@@ -565,6 +619,87 @@ impl Encoder for Flow {
     }
 }
 
+impl Transfer {
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Transfer> {
+        let mut transfer = Transfer {
+            handle: 0,
+            delivery_id: None,
+            delivery_tag: None,
+            message_format: None,
+            settled: None,
+            more: Some(false),
+            rcv_settle_mode: None,
+            state: None,
+            resume: Some(false),
+            aborted: Some(false),
+            batchable: Some(false),
+        };
+        decoder.decode_required(&mut transfer.handle)?;
+        decoder.decode_optional(&mut transfer.delivery_id)?;
+        decoder.decode_optional(&mut transfer.delivery_tag)?;
+        decoder.decode_optional(&mut transfer.message_format)?;
+        decoder.decode_optional(&mut transfer.settled)?;
+        decoder.decode_optional(&mut transfer.more)?;
+        decoder.decode_optional(&mut transfer.rcv_settle_mode)?;
+        decoder.decode_optional(&mut transfer.state)?;
+        decoder.decode_optional(&mut transfer.resume)?;
+        decoder.decode_optional(&mut transfer.aborted)?;
+        decoder.decode_optional(&mut transfer.batchable)?;
+        Ok(transfer)
+    }
+}
+
+impl Encoder for Transfer {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_TRANSFER);
+        encoder.encode_arg(&self.handle)?;
+        encoder.encode_arg(&self.delivery_id)?;
+        encoder.encode_arg(&self.delivery_tag)?;
+        encoder.encode_arg(&self.message_format)?;
+        encoder.encode_arg(&self.settled)?;
+        encoder.encode_arg(&self.more)?;
+        encoder.encode_arg(&self.rcv_settle_mode)?;
+        encoder.encode_arg(&self.state)?;
+        encoder.encode_arg(&self.resume)?;
+        encoder.encode_arg(&self.aborted)?;
+        encoder.encode_arg(&self.batchable)?;
+        encoder.encode(writer)
+    }
+}
+
+impl Disposition {
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Disposition> {
+        let mut disposition = Disposition {
+            role: LinkRole::Sender,
+            first: 0,
+            last: None,
+            settled: Some(false),
+            state: None,
+            batchable: Some(false),
+        };
+        decoder.decode_required(&mut disposition.role)?;
+        decoder.decode_required(&mut disposition.first)?;
+        decoder.decode_optional(&mut disposition.last)?;
+        decoder.decode_optional(&mut disposition.settled)?;
+        decoder.decode_optional(&mut disposition.state)?;
+        decoder.decode_optional(&mut disposition.batchable)?;
+        Ok(disposition)
+    }
+}
+
+impl Encoder for Disposition {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_DISPOSITION);
+        encoder.encode_arg(&self.role)?;
+        encoder.encode_arg(&self.first)?;
+        encoder.encode_arg(&self.last)?;
+        encoder.encode_arg(&self.settled)?;
+        encoder.encode_arg(&self.state)?;
+        encoder.encode_arg(&self.batchable)?;
+        encoder.encode(writer)
+    }
+}
+
 impl Source {
     pub fn decode(mut decoder: FrameDecoder) -> Result<Source> {
         let mut source = Source {
@@ -654,6 +789,78 @@ impl Encoder for Target {
         encoder.encode_arg(&self.dynamic_node_properties)?;
         encoder.encode_arg(&self.capabilities)?;
         encoder.encode(writer)
+    }
+}
+
+impl Encoder for DeliveryState {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let value = match self {
+            DeliveryState::Received(received) => {
+                let mut encoder = FrameEncoder::new(DESC_DELIVERY_STATE_RECEIVED);
+                encoder.encode_arg(&received.section_number)?;
+                encoder.encode_arg(&received.section_offset)?;
+                encoder
+            }
+            DeliveryState::Accepted => FrameEncoder::new(DESC_DELIVERY_STATE_ACCEPTED),
+            DeliveryState::Rejected(rejected) => {
+                let mut encoder = FrameEncoder::new(DESC_DELIVERY_STATE_REJECTED);
+                encoder.encode_arg(&rejected.error)?;
+                encoder
+            }
+            DeliveryState::Released => FrameEncoder::new(DESC_DELIVERY_STATE_RELEASED),
+            DeliveryState::Modified(modified) => {
+                let mut encoder = FrameEncoder::new(DESC_DELIVERY_STATE_MODIFIED);
+                encoder.encode_arg(&modified.delivery_failed)?;
+                encoder.encode_arg(&modified.undeliverable_here)?;
+                encoder.encode_arg(&modified.message_annotations)?;
+                encoder
+            }
+        };
+        value.encode(writer)
+    }
+}
+
+impl TryFromValue for DeliveryState {
+    fn try_from(value: Value) -> Result<Self> {
+        if let Value::Described(descriptor, mut body) = value {
+            let mut decoder = FrameDecoder::new(&descriptor, &mut body)?;
+            match *descriptor {
+                DESC_DELIVERY_STATE_RECEIVED => {
+                    let mut received = Received {
+                        section_number: 0,
+                        section_offset: 0,
+                    };
+                    decoder.decode_required(&mut received.section_number)?;
+                    decoder.decode_required(&mut received.section_offset)?;
+                    Ok(DeliveryState::Received(received))
+                }
+                DESC_DELIVERY_STATE_ACCEPTED => Ok(DeliveryState::Accepted),
+                DESC_DELIVERY_STATE_REJECTED => {
+                    let mut rejected = Rejected { error: None };
+                    decoder.decode_optional(&mut rejected.error)?;
+                    Ok(DeliveryState::Rejected(rejected))
+                }
+                DESC_DELIVERY_STATE_RELEASED => Ok(DeliveryState::Released),
+                DESC_DELIVERY_STATE_MODIFIED => {
+                    let mut modified = Modified {
+                        delivery_failed: None,
+                        undeliverable_here: None,
+                        message_annotations: None,
+                    };
+                    decoder.decode_optional(&mut modified.delivery_failed)?;
+                    decoder.decode_optional(&mut modified.undeliverable_here)?;
+                    decoder.decode_optional(&mut modified.message_annotations)?;
+                    Ok(DeliveryState::Modified(modified))
+                }
+                _ => Err(AmqpError::decode_error(Some(
+                    "Error converting value to DeliveryState",
+                ))),
+            }
+        } else {
+            Err(AmqpError::decode_error(Some(
+                "Error converting value to DeliveryState",
+            )))
+        }
     }
 }
 
@@ -938,6 +1145,12 @@ impl Frame {
                         Performative::Flow(flow) => {
                             flow.encode(&mut buf)?;
                         }
+                        Performative::Transfer(transfer) => {
+                            transfer.encode(&mut buf)?;
+                        }
+                        Performative::Disposition(disposition) => {
+                            disposition.encode(&mut buf)?;
+                        }
                     }
                 }
             }
@@ -1004,10 +1217,17 @@ impl Frame {
                             let flow = Flow::decode(decoder)?;
                             Ok(Performative::Flow(flow))
                         }
-                        v => Err(AmqpError::amqp_error(
-                            condition::DECODE_ERROR,
-                            Some(format!("Unexpected descriptor value: {:?}", v).as_str()),
-                        )),
+                        DESC_TRANSFER => {
+                            let transfer = Transfer::decode(decoder)?;
+                            Ok(Performative::Transfer(transfer))
+                        }
+                        DESC_DISPOSITION => {
+                            let disposition = Disposition::decode(decoder)?;
+                            Ok(Performative::Disposition(disposition))
+                        }
+                        v => Err(AmqpError::decode_error(Some(
+                            format!("Unexpected descriptor value: {:?}", v).as_str(),
+                        ))),
                     }?)
                 } else {
                     None
