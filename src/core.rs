@@ -93,6 +93,8 @@ pub struct Connection {
 
 type ChannelId = u16;
 
+type HandleId = u32;
+
 #[allow(dead_code)]
 #[derive(Debug)]
 enum SessionState {
@@ -124,7 +126,7 @@ pub struct Session {
     state: SessionState,
     opened: bool,
     closed: bool,
-    links: HashMap<String, Link>,
+    links: HashMap<HandleId, Link>,
 }
 
 #[derive(Debug)]
@@ -644,7 +646,6 @@ impl Connection {
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
                 // Lookup session
                 if let Some(local_channel) = local_channel_opt {
-                    println!("Looking up session");
                     //let session = self.sessions.get_mut(&local_channel).unwrap();
                     self.sessions.get_mut(&local_channel).unwrap();
                     Ok(())
@@ -652,18 +653,37 @@ impl Connection {
                     Err(AmqpError::framing_error())
                 }
             }
-            Performative::Detach(_) => {
-                println!("Received detach!");
-                Ok(())
+            Performative::Detach(detach) => {
+                let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
+                // Lookup session and remove link
+                if let Some(local_channel) = local_channel_opt {
+                    let session = self.sessions.get_mut(&local_channel).unwrap();
+                    session.links.remove(&detach.handle);
+                }
+
+                if let Some(error) = detach.error.clone() {
+                    Err(AmqpError::Amqp(error))
+                } else {
+                    Ok(())
+                }
             }
-            Performative::End(_) => {
-                println!("SESSION END");
-                Ok(())
+            Performative::End(end) => {
+                let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
+                if let Some(local_channel) = local_channel_opt {
+                    self.sessions.remove(&local_channel);
+                    self.remote_channel_map.remove(&channel_id);
+                }
+                if let Some(error) = end.error.clone() {
+                    Err(AmqpError::Amqp(error))
+                } else {
+                    Ok(())
+                }
             }
             Performative::Close(close) => {
                 if channel_id == 0 {
                     let id = self.id;
                     event_buffer.push(Event::RemoteClose(id, close.clone()));
+                    self.sessions.clear();
                     self.state = ConnectionState::CloseRcvd;
                 }
                 Ok(())
@@ -753,17 +773,28 @@ impl Session {
         self.opened = true;
     }
 
+    fn allocate_handle(self: &mut Self) -> Option<HandleId> {
+        for i in 0..std::u32::MAX {
+            let id = i as HandleId;
+            if !self.links.contains_key(&id) {
+                return Some(id);
+            }
+        }
+        None
+    }
+
     pub fn create_sender<'a>(self: &mut Self, address: Option<&'a str>) -> &mut Link {
         let name = address.unwrap_or("unknown").to_string();
+        let id = self.allocate_handle().unwrap();
         self.links.insert(
-            name.clone(),
+            id,
             Link {
-                name: name.clone(),
+                name: name,
                 state: LinkState::Unmapped,
                 opened: false,
             },
         );
-        self.links.get_mut(&name).unwrap()
+        self.links.get_mut(&id).unwrap()
     }
 }
 
