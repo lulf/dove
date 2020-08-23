@@ -293,7 +293,6 @@ impl Connection {
         for i in 0..self.channel_max {
             let chan = i as ChannelId;
             if !self.sessions.contains_key(&chan) {
-                println!("ALlocating channel {}", chan);
                 return Some(chan);
             }
         }
@@ -539,10 +538,13 @@ impl Connection {
                         match link.state {
                             LinkState::Unmapped => {
                                 if link.opened {
+                                    println!(
+                                        "Session local_channel: {:?}. Remote channel: {:?}",
+                                        session.local_channel, session.remote_channel,
+                                    );
                                     Self::local_attach(
                                         link,
                                         session.local_channel,
-                                        session.remote_channel.unwrap(),
                                         self.id,
                                         &mut self.tx_frames,
                                         event_buffer,
@@ -612,6 +614,7 @@ impl Connection {
 
                 // Response to locally initiated, use direct lookup
                 let session = if let Some(remote_channel) = begin.remote_channel {
+                    self.remote_channel_map.insert(channel_id, remote_channel);
                     self.sessions.get_mut(&remote_channel).unwrap()
                 } else {
                     // Create session with desired settings
@@ -634,16 +637,24 @@ impl Connection {
                 }
             }
             Performative::Attach(_) => {
-                println!("Remote ATTACH");
+                println!(
+                    "Remote ATTACH to channel {:?}. Map: {:?}",
+                    channel_id, self.remote_channel_map
+                );
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
                 // Lookup session
                 if let Some(local_channel) = local_channel_opt {
+                    println!("Looking up session");
                     //let session = self.sessions.get_mut(&local_channel).unwrap();
                     self.sessions.get_mut(&local_channel).unwrap();
                     Ok(())
                 } else {
                     Err(AmqpError::framing_error())
                 }
+            }
+            Performative::Detach(_) => {
+                println!("Received detach!");
+                Ok(())
             }
             Performative::End(_) => {
                 println!("SESSION END");
@@ -722,14 +733,13 @@ impl Connection {
     fn local_attach(
         link: &Link,
         local_channel: ChannelId,
-        remote_channel: ChannelId,
         connection_id: ConnectionId,
         tx_frames: &mut Vec<Frame>,
         event_buffer: &mut EventBuffer,
     ) {
         let data = Attach::new(link.name.as_str(), 0, LinkRole::Sender);
         let frame = Frame::AMQP(AmqpFrame {
-            channel: remote_channel,
+            channel: local_channel,
             body: Some(Performative::Attach(data.clone())),
         });
 

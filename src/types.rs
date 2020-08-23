@@ -28,6 +28,7 @@ pub const DESC_ATTACH: Value = Value::Ulong(0x12);
 pub const DESC_SOURCE: Value = Value::Ulong(0x28);
 pub const DESC_TARGET: Value = Value::Ulong(0x29);
 
+pub const DESC_DETACH: Value = Value::Ulong(0x16);
 pub const DESC_END: Value = Value::Ulong(0x17);
 pub const DESC_CLOSE: Value = Value::Ulong(0x18);
 

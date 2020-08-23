@@ -100,8 +100,9 @@ pub enum Performative {
     Open(Open),
     Close(Close),
     Begin(Begin),
-    Attach(Attach),
     End(End),
+    Attach(Attach),
+    Detach(Detach),
 }
 
 #[derive(Debug, Clone)]
@@ -243,6 +244,13 @@ pub struct End {
 
 #[derive(Debug, Clone)]
 pub struct Close {
+    pub error: Option<ErrorCondition>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Detach {
+    pub handle: u32,
+    pub closed: Option<bool>,
     pub error: Option<ErrorCondition>,
 }
 
@@ -401,6 +409,20 @@ impl Close {
         let mut close = Close { error: None };
         decoder.decode_optional(&mut close.error)?;
         Ok(close)
+    }
+}
+
+impl Detach {
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Detach> {
+        let mut detach = Detach {
+            handle: 0,
+            closed: None,
+            error: None,
+        };
+        decoder.decode_required(&mut detach.handle)?;
+        decoder.decode_optional(&mut detach.closed)?;
+        decoder.decode_optional(&mut detach.error)?;
+        Ok(detach)
     }
 }
 
@@ -765,6 +787,16 @@ impl Encoder for Close {
     }
 }
 
+impl Encoder for Detach {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let mut encoder = FrameEncoder::new(DESC_DETACH);
+        encoder.encode_arg(&self.handle)?;
+        encoder.encode_arg(&self.closed)?;
+        encoder.encode_arg(&self.error)?;
+        encoder.encode(writer)
+    }
+}
+
 impl Encoder for SenderSettleMode {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         ValueRef::Ubyte(&(*self as u8)).encode(writer)
@@ -870,6 +902,7 @@ impl Frame {
         match self {
             Frame::AMQP(AmqpFrame { channel, body }) => {
                 header.frame_type = 0;
+                println!("Setting channel: {:?}", channel);
                 header.ext = *channel;
 
                 if let Some(body) = body {
@@ -882,6 +915,9 @@ impl Frame {
                         }
                         Performative::Attach(attach) => {
                             attach.encode(&mut buf)?;
+                        }
+                        Performative::Detach(detach) => {
+                            detach.encode(&mut buf)?;
                         }
                         Performative::End(end) => {
                             end.encode(&mut buf)?;
@@ -946,6 +982,10 @@ impl Frame {
                         DESC_ATTACH => {
                             let attach = Attach::decode(decoder)?;
                             Ok(Performative::Attach(attach))
+                        }
+                        DESC_DETACH => {
+                            let detach = Detach::decode(decoder)?;
+                            Ok(Performative::Detach(detach))
                         }
                         v => Err(AmqpError::amqp_error(
                             condition::DECODE_ERROR,
