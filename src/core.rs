@@ -132,7 +132,11 @@ pub struct Session {
 #[derive(Debug)]
 pub struct Link {
     name: String,
+    handle: HandleId,
     opened: bool,
+    role: LinkRole,
+    source: Option<Source>,
+    target: Option<Target>,
     state: LinkState,
 }
 
@@ -460,6 +464,9 @@ impl Connection {
                     self.process_work(event_buffer)?;
                     self.keepalive(event_buffer);
 
+                    // Flush in case we are going to be blocked.
+                    self.flush()?;
+
                     // TODO: Read multiple frames and process
                     let frame = self.transport.read_frame()?;
                     self.process_frame(frame, event_buffer)?;
@@ -569,6 +576,13 @@ impl Connection {
         // Sent out keepalives...
         let now = Instant::now();
         if self.remote_idle_timeout.as_millis() > 0 {
+            /*
+            println!(
+                "Remote idle timeout millis: {:?}. Last sent: {:?}",
+                self.remote_idle_timeout.as_millis(),
+                now - self.transport.last_sent()
+            );
+            */
             if now - self.transport.last_sent() >= self.remote_idle_timeout {
                 let frame = Frame::AMQP(AmqpFrame {
                     channel: 0,
@@ -757,7 +771,23 @@ impl Connection {
         tx_frames: &mut Vec<Frame>,
         event_buffer: &mut EventBuffer,
     ) {
-        let data = Attach::new(link.name.as_str(), 0, LinkRole::Sender);
+        let data = Attach {
+            name: link.name.clone(),
+            handle: link.handle as u32,
+            role: link.role,
+            snd_settle_mode: None,
+            rcv_settle_mode: None,
+            source: link.source.clone(),
+            target: link.target.clone(),
+            unsettled: None,
+            incomplete_unsettled: None,
+            initial_delivery_count: None,
+            max_message_size: None,
+            offered_capabilities: None,
+            desired_capabilities: None,
+            properties: None,
+        };
+
         let frame = Frame::AMQP(AmqpFrame {
             channel: local_channel,
             body: Some(Performative::Attach(data.clone())),
@@ -790,7 +820,31 @@ impl Session {
             id,
             Link {
                 name: name,
+                handle: id,
+                role: LinkRole::Sender,
                 state: LinkState::Unmapped,
+                source: Some(Source {
+                    address: None,
+                    durable: None,
+                    expiry_policy: None,
+                    timeout: None,
+                    dynamic: None,
+                    dynamic_node_properties: None,
+                    default_outcome: None,
+                    distribution_mode: None,
+                    filter: None,
+                    outcomes: None,
+                    capabilities: None,
+                }),
+                target: Some(Target {
+                    address: address.map(|s| s.to_string()),
+                    durable: None,
+                    expiry_policy: None,
+                    timeout: None,
+                    dynamic: Some(false),
+                    dynamic_node_properties: None,
+                    capabilities: None,
+                }),
                 opened: false,
             },
         );

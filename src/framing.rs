@@ -326,6 +326,7 @@ impl Begin {
 }
 
 impl Attach {
+    /*
     pub fn new(name: &str, handle: u32, role: LinkRole) -> Attach {
         Attach {
             name: name.to_string(),
@@ -375,9 +376,25 @@ impl Attach {
             properties: None,
         }
     }
+    */
 
     pub fn decode(mut decoder: FrameDecoder) -> Result<Attach> {
-        let mut attach = Attach::new("", 0, LinkRole::Sender);
+        let mut attach = Attach {
+            name: String::new(),
+            handle: 0,
+            role: LinkRole::Sender,
+            snd_settle_mode: None,
+            rcv_settle_mode: None,
+            source: None,
+            target: None,
+            unsettled: None,
+            incomplete_unsettled: None,
+            initial_delivery_count: None,
+            max_message_size: None,
+            offered_capabilities: None,
+            desired_capabilities: None,
+            properties: None,
+        };
         decoder.decode_required(&mut attach.name)?;
         decoder.decode_required(&mut attach.handle)?;
         decoder.decode_required(&mut attach.role)?;
@@ -902,7 +919,6 @@ impl Frame {
         match self {
             Frame::AMQP(AmqpFrame { channel, body }) => {
                 header.frame_type = 0;
-                println!("Setting channel: {:?}", channel);
                 header.ext = *channel;
 
                 if let Some(body) = body {

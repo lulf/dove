@@ -14,7 +14,7 @@ fn client() {
     opts.username = Some("test".to_string());
     opts.password = Some("test".to_string());
     opts.sasl_mechanism = Some(SaslMechanism::Plain);
-    // opts.sasl_mechanism = Some(SaslMechanism::Anonymous);
+    //opts.sasl_mechanism = Some(SaslMechanism::Anonymous);
 
     println!("REGISTERING");
     let connection = connect(2, "localhost", 5672, opts).expect("Error opening connection");
