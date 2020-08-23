@@ -11,8 +11,9 @@ Dove aims to be an AMQP 1.0 implementation with the following properties:
 
 ## TODO
 
-* Support link layer
-* Finish SASL support
+* Flow, transfer and dispotition handling.
+
+* Finish SASL support (missing SCRAM* support)
 * TLS/SSL support
 * Some AMQP 1.0 types are not yet implemented
 * A higher level API for messaging clients to improve ease of use
@@ -20,6 +21,10 @@ Dove aims to be an AMQP 1.0 implementation with the following properties:
 ## Modules
 
 * types - AMQP type system with encoding and decoding
+* frame_codec - AMQP frame codec utility
+* convert - Convertion of rust types and AMQP types
+* encoding - AMQP type encoding
+* decoding - AMQP type decoding
 * error - AMQP error types and error handling data types
 * framing - API for frame types and encoding/decoding of frames
 * transport - API for the underlying transport/network
