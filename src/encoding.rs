@@ -423,6 +423,12 @@ impl Encoder for u16 {
     }
 }
 
+impl Encoder for u8 {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        ValueRef::Ubyte(self).encode(writer)
+    }
+}
+
 impl<T: Encoder> Encoder for Option<T> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         match self {

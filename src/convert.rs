@@ -25,6 +25,8 @@ pub trait TryFromValue {
         Self: std::marker::Sized;
 }
 
+pub trait TryFromValueVec: TryFromValue {}
+
 impl<T: TryFromValue> TryFromValue for Option<T> {
     fn try_from(value: Value) -> Result<Self> {
         match value {
@@ -34,7 +36,20 @@ impl<T: TryFromValue> TryFromValue for Option<T> {
     }
 }
 
-impl<T: TryFromValue> TryFromValue for Vec<T> {
+impl TryFromValue for Vec<u8> {
+    fn try_from(value: Value) -> Result<Self> {
+        match value {
+            Value::Binary(v) => {
+                return Ok(v);
+            }
+            v => Err(AmqpError::decode_error(Some(
+                format!("Error converting value to u8: {:?}", v).as_str(),
+            ))),
+        }
+    }
+}
+
+impl<T: TryFromValueVec> TryFromValue for Vec<T> {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::List(v) => {
@@ -72,10 +87,9 @@ impl TryFromValue for u8 {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Ubyte(v) => return Ok(v),
-            _ => Err(AmqpError::amqp_error(
-                condition::DECODE_ERROR,
-                Some("Error converting value to u8"),
-            )),
+            v => Err(AmqpError::decode_error(Some(
+                format!("Error converting value to u8: {:?}", v).as_str(),
+            ))),
         }
     }
 }
@@ -126,6 +140,7 @@ impl TryFromValue for bool {
     }
 }
 
+impl TryFromValueVec for String {}
 impl TryFromValue for String {
     fn try_from(value: Value) -> Result<Self> {
         match value {
@@ -156,18 +171,13 @@ impl<T: TryFromValue + std::cmp::Ord> TryFromValue for BTreeMap<T, Value> {
     }
 }
 
-impl TryFromValue for BTreeMap<Value, Value> {
+impl TryFromValue for Value {
     fn try_from(value: Value) -> Result<Self> {
-        match value {
-            Value::Map(v) => Ok(v),
-            _ => Err(AmqpError::amqp_error(
-                condition::DECODE_ERROR,
-                Some("Error converting value to Vec<Symbol>"),
-            )),
-        }
+        Ok(value)
     }
 }
 
+impl TryFromValueVec for Symbol {}
 impl TryFromValue for Symbol {
     fn try_from(value: Value) -> Result<Self> {
         match value {

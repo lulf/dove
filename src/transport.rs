@@ -3,6 +3,7 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
 use std::net::Shutdown;
@@ -176,7 +177,8 @@ impl Transport {
                 );
                 */
                 if buf.len() >= frame_size - 8 {
-                    let frame = Frame::decode(header, &mut buf)?;
+                    let mut cursor = Cursor::new(&mut buf);
+                    let frame = Frame::decode(header, &mut cursor)?;
                     self.incoming.consume(frame_size)?;
                     self.last_received = Instant::now();
                     println!("RX {:?}", frame);

@@ -31,6 +31,16 @@ pub const DESC_DISPOSITION: Value = Value::Ulong(0x15);
 pub const DESC_SOURCE: Value = Value::Ulong(0x28);
 pub const DESC_TARGET: Value = Value::Ulong(0x29);
 
+pub const DESC_MESSAGE_HEADER: Value = Value::Ulong(0x70);
+pub const DESC_MESSAGE_DELIVERY_ANNOTATIONS: Value = Value::Ulong(0x71);
+pub const DESC_MESSAGE_ANNOTATIONS: Value = Value::Ulong(0x72);
+pub const DESC_MESSAGE_PROPERTIES: Value = Value::Ulong(0x73);
+pub const DESC_MESSAGE_APPLICATION_PROPERTIES: Value = Value::Ulong(0x74);
+pub const DESC_MESSAGE_AMQP_DATA: Value = Value::Ulong(0x75);
+pub const DESC_MESSAGE_AMQP_SEQUENCE: Value = Value::Ulong(0x76);
+pub const DESC_MESSAGE_AMQP_VALUE: Value = Value::Ulong(0x77);
+pub const DESC_MESSAGE_FOOTER: Value = Value::Ulong(0x78);
+
 pub const DESC_DELIVERY_STATE_RECEIVED: Value = Value::Ulong(0x23);
 pub const DESC_DELIVERY_STATE_ACCEPTED: Value = Value::Ulong(0x24);
 pub const DESC_DELIVERY_STATE_REJECTED: Value = Value::Ulong(0x25);

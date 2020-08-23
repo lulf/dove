@@ -6,6 +6,7 @@
 extern crate dove;
 
 use dove::core::*;
+use dove::framing::*;
 use dove::sasl::*;
 
 #[test]
@@ -24,8 +25,10 @@ fn client() {
     driver.register(connection);
 
     let mut event_buffer = EventBuffer::new();
+    let mut sent = false;
+    let mut done = false;
 
-    loop {
+    while !done {
         match driver.poll(&mut event_buffer) {
             Ok(_) => {
                 for event in event_buffer.drain(..) {
@@ -45,15 +48,45 @@ fn client() {
                             println!("Remote begin");
                             let conn = driver.connection(cid).unwrap();
                             let session = conn.get_session(chan).unwrap();
-                            let sender = session.create_sender(Some("a"));
-                            sender.open();
+                            let receiver = session.create_receiver(Some("a"));
+                            receiver.open();
+                        }
+                        Event::RemoteAttach(cid, chan, handle, attach) => {
+                            let conn = driver.connection(cid).unwrap();
+                            let session = conn.get_session(chan).unwrap();
+                            let link = session.get_link(handle).unwrap();
+                            if link.role == LinkRole::Receiver {
+                                link.flow(10);
+                                let sender = session.create_sender(Some("a"));
+                                sender.open();
+                            }
                         }
                         Event::Flow(cid, chan, handle, flow) => {
                             println!("Received flow ({:?} credits)", flow.link_credit);
                             let conn = driver.connection(cid).unwrap();
                             let session = conn.get_session(chan).unwrap();
-                            let sender = session.get_sender(handle).unwrap();
-                            sender.send("Hello, World");
+                            let link = session.get_link(handle).unwrap();
+                            if link.role == LinkRole::Sender && !sent {
+                                println!("Sending message!");
+                                link.send("Hello, World");
+                                sent = true;
+                            }
+                        }
+                        Event::Delivery(cid, chan, handle, delivery) => {
+                            println!("Received message: {:?}", delivery.message.body);
+                            let conn = driver.connection(cid).unwrap();
+                            conn.close(None);
+                        }
+                        Event::Disposition(cid, _, disposition) => {
+                            if let Some(settled) = disposition.settled {
+                                if let Some(state) = disposition.state {
+                                    if settled && state == DeliveryState::Accepted {
+                                        println!("Message delivered!");
+                                    } else {
+                                        println!("Error delivering message!");
+                                    }
+                                }
+                            }
                         }
                         Event::RemoteClose(cid, close) => {
                             let conn = driver.connection(cid).unwrap();
@@ -62,6 +95,7 @@ fn client() {
                                 close
                             );
                             conn.close(None);
+                            done = true;
                         }
                         e => {
                             println!("Unhandled event: {:#?}", e);

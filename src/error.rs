@@ -16,7 +16,7 @@ pub enum AmqpError {
     Generic(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ErrorCondition {
     pub condition: String,
     pub description: String,
@@ -37,6 +37,10 @@ pub mod condition {
 }
 
 impl AmqpError {
+    pub fn internal_error() -> AmqpError {
+        AmqpError::amqp_error(condition::INTERNAL_ERROR, None)
+    }
+
     pub fn framing_error() -> AmqpError {
         AmqpError::amqp_error(condition::connection::FRAMING_ERROR, None)
     }

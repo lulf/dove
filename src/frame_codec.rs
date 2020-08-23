@@ -59,10 +59,9 @@ impl<'a> FrameDecoder<'a> {
                 args: args,
             });
         } else {
-            return Err(AmqpError::amqp_error(
-                condition::DECODE_ERROR,
-                Some("Error decoding frame arguments"),
-            ));
+            return Err(AmqpError::decode_error(Some(
+                format!("Error decoding frame arguments: {:?}", input).as_str(),
+            )));
         }
     }
 
@@ -90,7 +89,7 @@ impl<'a> FrameDecoder<'a> {
             }
         }
         let mut drained = self.args.drain(0..1);
-        println!("Next arg to decode: {:?}", drained);
+        println!("(Desc: {:?} Next arg to decode: {:?}", self.desc, drained);
         if let Some(arg) = drained.next() {
             let v = arg;
             *value = T::try_from(v)?;

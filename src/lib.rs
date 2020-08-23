@@ -7,6 +7,7 @@ pub mod convert;
 pub mod core;
 pub mod decoding;
 pub mod encoding;
+pub mod message;
 pub mod error;
 pub mod frame_codec;
 pub mod framing;

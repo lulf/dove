@@ -7,6 +7,7 @@ use byteorder::NetworkEndian;
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
 use std::collections::BTreeMap;
+use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
 use std::vec::Vec;
@@ -126,6 +127,7 @@ impl SaslMechanisms {
         Ok(mechs)
     }
 }
+
 impl TryFromValue for SaslMechanism {
     fn try_from(value: Value) -> Result<Self> {
         match value {
@@ -136,6 +138,7 @@ impl TryFromValue for SaslMechanism {
         }
     }
 }
+impl TryFromValueVec for SaslMechanism {}
 
 /** AMQP frame types. */
 #[derive(Debug)]
@@ -259,7 +262,7 @@ pub struct Disposition {
     pub batchable: Option<bool>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeliveryState {
     Received(Received),
     Accepted,
@@ -268,18 +271,18 @@ pub enum DeliveryState {
     Modified(Modified),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Received {
     pub section_number: u32,
     pub section_offset: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rejected {
     pub error: Option<ErrorCondition>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Modified {
     pub delivery_failed: Option<bool>,
     pub undeliverable_here: Option<bool>,
@@ -930,6 +933,7 @@ impl Outcome {
     }
 }
 
+impl TryFromValueVec for Outcome {}
 impl TryFromValue for Outcome {
     fn try_from(value: Value) -> Result<Self> {
         match value {
@@ -1185,7 +1189,7 @@ impl Frame {
         Ok(header.size as usize)
     }
 
-    pub fn decode(header: FrameHeader, reader: &mut dyn Read) -> Result<Frame> {
+    pub fn decode(header: FrameHeader, reader: &mut Cursor<&mut &[u8]>) -> Result<Frame> {
         // Read off extended header not in use
         let mut doff = header.doff;
         while doff > 2 {
@@ -1194,6 +1198,8 @@ impl Frame {
         }
 
         if header.frame_type == 0 {
+            let performative_position = reader.position() as u32;
+            let total_payload_size = header.size - ((header.doff as u32) * 4);
             let performative = if header.size > 8 {
                 if let Value::Described(descriptor, mut value) = decode_value(reader)? {
                     let decoder = FrameDecoder::new(&descriptor, &mut value)?;
@@ -1244,10 +1250,17 @@ impl Frame {
             } else {
                 None
             };
+
+            let payload_position = reader.position() as u32;
+            let payload_size = total_payload_size - payload_position;
+
+            let mut payload = vec![0; payload_size as usize];
+            reader.read_exact(&mut payload[..])?;
+
             Ok(Frame::AMQP(AmqpFrame {
                 channel: header.ext,
                 performative: performative,
-                payload: None, // TODO
+                payload: Some(payload),
             }))
         } else if header.frame_type == 1 {
             if header.size > 8 {

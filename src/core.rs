@@ -3,7 +3,9 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+use rand::Rng;
 use std::collections::HashMap;
+use std::io::Read;
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::time::Duration;
@@ -12,8 +14,10 @@ use std::vec::Vec;
 
 use crate::error::*;
 use crate::framing::*;
+use crate::message::*;
 use crate::sasl::*;
 use crate::transport::*;
+use crate::types::*;
 
 #[derive(Debug)]
 pub struct ConnectionOptions<'a> {
@@ -128,6 +132,7 @@ pub struct Session {
     opened: bool,
     closed: bool,
     links: HashMap<HandleId, Link>,
+    next_outgoing_id: u32,
 }
 
 #[derive(Debug)]
@@ -135,13 +140,22 @@ pub struct Link {
     name: String,
     handle: HandleId,
     opened: bool,
-    credits: u32,
-    next_transfer_id: u32,
-    role: LinkRole,
+    pub role: LinkRole,
     source: Option<Source>,
     target: Option<Target>,
     state: LinkState,
-    tx: Vec<Vec<u8>>,
+    next_message_id: u64,
+    tx: Vec<Delivery>,
+    flow: Vec<u32>,
+}
+
+#[derive(Debug)]
+pub struct Delivery {
+    pub message: Message,
+    remotely_settled: bool,
+    settled: bool,
+    state: Option<DeliveryState>,
+    tag: Vec<u8>,
 }
 
 pub fn connect(
@@ -217,8 +231,11 @@ pub enum Event {
     SessionInit(ConnectionId, ChannelId),
     LocalBegin(ConnectionId, ChannelId, Begin),
     RemoteBegin(ConnectionId, ChannelId, Begin),
-    LocalAttach(ConnectionId, ChannelId, Attach),
+    LocalAttach(ConnectionId, ChannelId, HandleId, Attach),
+    RemoteAttach(ConnectionId, ChannelId, HandleId, Attach),
     Flow(ConnectionId, ChannelId, HandleId, Flow),
+    Disposition(ConnectionId, ChannelId, Disposition),
+    Delivery(ConnectionId, ChannelId, HandleId, Delivery),
     /*
     LocalEnd(ChannelId, End),
     RemoteEnd(ChannelId, End),
@@ -260,14 +277,14 @@ impl ConnectionDriver {
     }
 }
 
-fn unwrap_frame(frame: Frame) -> Result<(ChannelId, Option<Performative>)> {
+fn unwrap_frame(frame: Frame) -> Result<(ChannelId, Option<Performative>, Option<Vec<u8>>)> {
     match frame {
         Frame::AMQP(AmqpFrame {
             channel,
             performative,
-            payload: _,
+            payload,
         }) => {
-            return Ok((channel as ChannelId, performative));
+            return Ok((channel as ChannelId, performative, payload));
         }
         _ => return Err(AmqpError::framing_error()),
     }
@@ -331,6 +348,7 @@ impl Connection {
             handle_max: std::u32::MAX,
             opened: false,
             closed: false,
+            next_outgoing_id: 0,
             state: SessionState::Unmapped,
             links: HashMap::new(),
         };
@@ -425,7 +443,7 @@ impl Connection {
                     self.state = ConnectionState::OpenSent;
                 } else {
                     let frame = self.transport.read_frame()?;
-                    let (_, performative) = unwrap_frame(frame)?;
+                    let (_, performative, _) = unwrap_frame(frame)?;
                     if let Some(performative) = performative {
                         match performative {
                             Performative::Open(open) => {
@@ -450,7 +468,7 @@ impl Connection {
                     self.state = ConnectionState::ClosePipe;
                 } else {
                     let frame = self.transport.read_frame()?;
-                    let (_, performative) = unwrap_frame(frame)?;
+                    let (_, performative, _) = unwrap_frame(frame)?;
                     if let Some(performative) = performative {
                         match performative {
                             Performative::Open(open) => {
@@ -485,7 +503,7 @@ impl Connection {
             }
             ConnectionState::ClosePipe => {
                 let frame = self.transport.read_frame()?;
-                let (_, performative) = unwrap_frame(frame)?;
+                let (_, performative, _) = unwrap_frame(frame)?;
                 if let Some(performative) = performative {
                     match performative {
                         Performative::Open(open) => {
@@ -504,7 +522,7 @@ impl Connection {
             }
             ConnectionState::CloseSent => {
                 let frame = self.transport.read_frame()?;
-                let (_, performative) = unwrap_frame(frame)?;
+                let (_, performative, _) = unwrap_frame(frame)?;
 
                 if let Some(performative) = performative {
                     match performative {
@@ -512,7 +530,9 @@ impl Connection {
                             event_buffer.push(Event::RemoteClose(self.id, close));
                             self.state = ConnectionState::End;
                         }
-                        _ => return Err(AmqpError::framing_error()),
+                        _ => {
+                            println!("Ignoring other frames than close");
+                        }
                     }
                 }
             }
@@ -574,13 +594,28 @@ impl Connection {
                             }
                             LinkState::AttachSent | LinkState::Mapped => {
                                 let handle = link.handle;
-                                for data in link.tx.drain(..) {
-                                    Self::transfer(
-                                        handle,
-                                        session.local_channel,
-                                        &mut self.tx_frames,
-                                        data,
-                                    );
+                                if link.role == LinkRole::Sender {
+                                    for delivery in link.tx.drain(..) {
+                                        let delivery_id = session.next_outgoing_id;
+                                        session.next_outgoing_id += 1;
+                                        Self::transfer(
+                                            handle,
+                                            delivery_id,
+                                            session.local_channel,
+                                            &mut self.tx_frames,
+                                            delivery,
+                                        )?;
+                                    }
+                                } else {
+                                    for amount in link.flow.drain(..) {
+                                        Self::flow(
+                                            handle,
+                                            session.next_outgoing_id,
+                                            session.local_channel,
+                                            &mut self.tx_frames,
+                                            amount,
+                                        )?;
+                                    }
                                 }
                             }
                             _ => return Err(AmqpError::not_implemented()),
@@ -628,14 +663,14 @@ impl Connection {
 
     // Dispatch frame to relevant endpoint
     fn process_frame(self: &mut Self, frame: Frame, event_buffer: &mut EventBuffer) -> Result<()> {
-        let (channel_id, performative) = unwrap_frame(frame)?;
+        let (channel_id, performative, payload) = unwrap_frame(frame)?;
 
         if performative.is_none() {
             return Ok(());
         }
 
         let performative = performative.unwrap();
-        self.process_frame_internal(channel_id, &performative, event_buffer)
+        self.process_frame_internal(channel_id, &performative, payload, event_buffer)
     }
 
     // Handle frames for a connection
@@ -643,6 +678,7 @@ impl Connection {
         self: &mut Self,
         channel_id: ChannelId,
         performative: &Performative,
+        payload: Option<Vec<u8>>,
         event_buffer: &mut EventBuffer,
     ) -> Result<()> {
         match performative {
@@ -662,6 +698,8 @@ impl Connection {
                 if let Some(handle_max) = begin.handle_max {
                     session.handle_max = handle_max;
                 }
+
+                session.next_outgoing_id = begin.next_outgoing_id;
 
                 session.remote_channel = Some(channel_id);
 
@@ -685,13 +723,25 @@ impl Connection {
                     channel_id, self.remote_channel_map
                 );
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
-                // Lookup session
                 if let Some(local_channel) = local_channel_opt {
-                    //let session = self.sessions.get_mut(&local_channel).unwrap();
                     let session = self.sessions.get_mut(&local_channel).unwrap();
-                    match session.links.get(&attach.handle) {
-                        None => Err(AmqpError::not_implemented()),
-                        _ => Ok(()),
+                    match session.links.get_mut(&attach.handle) {
+                        None => Err(AmqpError::internal_error()),
+                        Some(link) => match link.state {
+                            LinkState::Unmapped => Err(AmqpError::framing_error()),
+                            LinkState::AttachSent => {
+                                link.state = LinkState::Mapped;
+                                event_buffer.push(Event::RemoteAttach(
+                                    self.id,
+                                    session.local_channel,
+                                    link.handle,
+                                    attach.clone(),
+                                ));
+                                return Ok(());
+                            }
+
+                            _ => Err(AmqpError::framing_error()),
+                        },
                     }
                 } else {
                     Err(AmqpError::framing_error())
@@ -703,10 +753,6 @@ impl Connection {
                     let session = self.sessions.get_mut(&local_channel).unwrap();
                     if let Some(handle) = flow.handle {
                         let link = session.links.get_mut(&handle).unwrap();
-                        if let Some(credits) = flow.link_credit {
-                            println!("Replenished credits: {:?}", credits);
-                            link.credits = credits;
-                        }
                         event_buffer.push(Event::Flow(
                             self.id,
                             session.local_channel,
@@ -717,13 +763,35 @@ impl Connection {
                 }
                 Ok(())
             }
-            Performative::Transfer(_) => {
-                println!("Transfer!");
-                Err(AmqpError::not_implemented())
+            Performative::Transfer(transfer) => {
+                let mut input = payload.unwrap();
+                let message = Message::decode(&mut input)?;
+                let delivery = Delivery {
+                    state: transfer.state.clone(),
+                    tag: transfer.delivery_tag.clone().unwrap(),
+                    remotely_settled: transfer.settled.unwrap_or(false),
+                    settled: false,
+                    message: message,
+                };
+                event_buffer.push(Event::Delivery(
+                    self.id,
+                    channel_id,
+                    transfer.handle,
+                    delivery,
+                ));
+                Ok(())
             }
-            Performative::Disposition(_) => {
-                println!("Disposition!");
-                Err(AmqpError::not_implemented())
+            Performative::Disposition(disposition) => {
+                let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
+                if let Some(local_channel) = local_channel_opt {
+                    let session = self.sessions.get_mut(&local_channel).unwrap();
+                    event_buffer.push(Event::Disposition(
+                        self.id,
+                        session.local_channel,
+                        disposition.clone(),
+                    ));
+                }
+                Ok(())
             }
             Performative::Detach(detach) => {
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
@@ -842,7 +910,11 @@ impl Connection {
             target: link.target.clone(),
             unsettled: None,
             incomplete_unsettled: None,
-            initial_delivery_count: None,
+            initial_delivery_count: if link.role == LinkRole::Sender {
+                Some(0)
+            } else {
+                None
+            },
             max_message_size: None,
             offered_capabilities: None,
             desired_capabilities: None,
@@ -856,20 +928,26 @@ impl Connection {
         });
 
         tx_frames.push(frame);
-        event_buffer.push(Event::LocalAttach(connection_id, local_channel, data));
+        event_buffer.push(Event::LocalAttach(
+            connection_id,
+            local_channel,
+            link.handle,
+            data,
+        ));
     }
 
     fn transfer(
         handle: HandleId,
+        delivery_id: u32,
         local_channel: ChannelId,
         tx_frames: &mut Vec<Frame>,
-        data: Vec<u8>,
-    ) {
+        delivery: Delivery,
+    ) -> Result<()> {
         let t = Transfer {
             handle: handle,
-            delivery_id: Some(0),
-            delivery_tag: Some(vec![1, 2, 3]),
-            message_format: None,
+            delivery_id: Some(delivery_id),
+            delivery_tag: Some(delivery.tag),
+            message_format: Some(0),
             settled: Some(false),
             more: Some(false),
             rcv_settle_mode: None,
@@ -879,13 +957,49 @@ impl Connection {
             batchable: None,
         };
 
+        println!("TX MESSAGE: {:?}", delivery.message);
+        let mut msgbuf = Vec::new();
+        delivery.message.encode(&mut msgbuf)?;
+
         let frame = Frame::AMQP(AmqpFrame {
             channel: local_channel,
             performative: Some(Performative::Transfer(t)),
-            payload: Some(data),
+            payload: Some(msgbuf),
         });
 
         tx_frames.push(frame);
+        Ok(())
+    }
+
+    fn flow(
+        handle: HandleId,
+        next_outgoing_id: u32,
+        local_channel: ChannelId,
+        tx_frames: &mut Vec<Frame>,
+        amount: u32,
+    ) -> Result<()> {
+        let f = Flow {
+            next_incoming_id: None,
+            incoming_window: std::i32::MAX as u32,
+            next_outgoing_id: next_outgoing_id,
+            outgoing_window: std::i32::MAX as u32,
+            handle: Some(handle as u32),
+            delivery_count: None,
+            link_credit: Some(amount),
+            available: None,
+            drain: None,
+            echo: None,
+            properties: None,
+        };
+
+        let frame = Frame::AMQP(AmqpFrame {
+            channel: local_channel,
+            performative: Some(Performative::Flow(f)),
+            payload: None,
+        });
+
+        tx_frames.push(frame);
+        Ok(())
     }
 }
 
@@ -894,7 +1008,7 @@ impl Session {
         self.opened = true;
     }
 
-    pub fn get_sender(self: &mut Self, handle_id: HandleId) -> Option<&mut Link> {
+    pub fn get_link(self: &mut Self, handle_id: HandleId) -> Option<&mut Link> {
         self.links.get_mut(&handle_id)
     }
 
@@ -916,8 +1030,7 @@ impl Session {
             Link {
                 name: name,
                 handle: id,
-                next_transfer_id: 0,
-                credits: 0,
+                next_message_id: 0,
                 role: LinkRole::Sender,
                 state: LinkState::Unmapped,
                 source: Some(Source {
@@ -944,6 +1057,48 @@ impl Session {
                 }),
                 opened: false,
                 tx: Vec::new(),
+                flow: Vec::new(),
+            },
+        );
+        self.links.get_mut(&id).unwrap()
+    }
+
+    pub fn create_receiver<'a>(self: &mut Self, address: Option<&'a str>) -> &mut Link {
+        let name = address.unwrap_or("unknown").to_string();
+        let id = self.allocate_handle().unwrap();
+        self.links.insert(
+            id,
+            Link {
+                name: name,
+                handle: id,
+                next_message_id: 0,
+                role: LinkRole::Receiver,
+                state: LinkState::Unmapped,
+                source: Some(Source {
+                    address: address.map(|s| s.to_string()),
+                    durable: None,
+                    expiry_policy: None,
+                    timeout: None,
+                    dynamic: Some(false),
+                    dynamic_node_properties: None,
+                    default_outcome: None,
+                    distribution_mode: None,
+                    filter: None,
+                    outcomes: None,
+                    capabilities: None,
+                }),
+                target: Some(Target {
+                    address: address.map(|s| s.to_string()),
+                    durable: None,
+                    expiry_policy: None,
+                    timeout: None,
+                    dynamic: Some(false),
+                    dynamic_node_properties: None,
+                    capabilities: None,
+                }),
+                opened: false,
+                tx: Vec::new(),
+                flow: Vec::new(),
             },
         );
         self.links.get_mut(&id).unwrap()
@@ -955,7 +1110,37 @@ impl Link {
         self.opened = true;
     }
 
+    pub fn flow(self: &mut Self, credits: u32) {
+        self.flow.push(credits);
+    }
+
     pub fn send(self: &mut Self, data: &str) {
-        self.tx.push(data.to_string().into_bytes());
+        let mut message = Message::amqp_value(Value::String(data.to_string()));
+        message.properties = Some(MessageProperties {
+            message_id: Some(Value::Ulong(self.next_message_id + 1)),
+            user_id: None,
+            to: None,
+            subject: None,
+            reply_to: None,
+            correlation_id: None,
+            content_type: None,
+            content_encoding: None,
+            absolute_expiry_time: None,
+            creation_time: None,
+            group_id: None,
+            group_sequence: None,
+            reply_to_group_id: None,
+        });
+        self.next_message_id += 1;
+
+        let delivery_tag = rand::thread_rng().gen::<[u8; 16]>();
+
+        self.tx.push(Delivery {
+            message: message,
+            tag: delivery_tag.to_vec(),
+            state: None,
+            remotely_settled: false,
+            settled: false,
+        });
     }
 }
