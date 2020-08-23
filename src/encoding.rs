@@ -12,6 +12,7 @@ use std::vec::Vec;
 
 use crate::error::*;
 use crate::frame_codec::*;
+use crate::symbol::*;
 use crate::types::*;
 
 /**
@@ -444,6 +445,16 @@ impl Encoder for BTreeMap<String, Value> {
 impl Encoder for BTreeMap<Value, Value> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let m = BTreeMap::from_iter(self.iter().map(|(k, v)| (k.value_ref(), v.value_ref())));
+        ValueRef::MapRef(&m).encode(writer)
+    }
+}
+
+impl Encoder for BTreeMap<Symbol, Value> {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        let m = BTreeMap::from_iter(
+            self.iter()
+                .map(|(k, v)| (ValueRef::Symbol(k.to_slice()), v.value_ref())),
+        );
         ValueRef::MapRef(&m).encode(writer)
     }
 }

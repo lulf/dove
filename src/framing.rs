@@ -154,6 +154,7 @@ pub enum LinkRole {
     Receiver,
 }
 
+#[repr(u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum SenderSettleMode {
     Unsettled,
@@ -161,6 +162,7 @@ pub enum SenderSettleMode {
     Mixed,
 }
 
+#[repr(u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum ReceiverSettleMode {
     First,
@@ -174,9 +176,9 @@ pub struct Source {
     pub expiry_policy: Option<TerminusExpiryPolicy>,
     pub timeout: Option<u32>,
     pub dynamic: Option<bool>,
-    pub dynamic_node_properties: Option<BTreeMap<String, Value>>,
+    pub dynamic_node_properties: Option<BTreeMap<Symbol, Value>>,
     pub distribution_mode: Option<Symbol>,
-    pub filter: Option<BTreeMap<String, Value>>,
+    pub filter: Option<BTreeMap<Symbol, Value>>,
     pub default_outcome: Option<Outcome>,
     pub outcomes: Option<Vec<Outcome>>,
     pub capabilities: Option<Vec<Symbol>>,
@@ -230,7 +232,7 @@ pub struct Target {
     pub expiry_policy: Option<TerminusExpiryPolicy>,
     pub timeout: Option<u32>,
     pub dynamic: Option<bool>,
-    pub dynamic_node_properties: Option<BTreeMap<String, Value>>,
+    pub dynamic_node_properties: Option<BTreeMap<Symbol, Value>>,
     pub capabilities: Option<Vec<String>>,
 }
 
@@ -323,6 +325,37 @@ impl Attach {
             role: role,
             snd_settle_mode: None,
             rcv_settle_mode: None,
+            /*
+            source: Some(Source {
+                address: if role == LinkRole::Sender {
+                    None
+                } else {
+                    Some(name.to_string())
+                },
+                durable: Some(TerminusDurability::None),
+                expiry_policy: Some(TerminusExpiryPolicy::SessionEnd),
+                timeout: Some(0),
+                dynamic: Some(false),
+                dynamic_node_properties: None,
+                distribution_mode: None,
+                filter: None,
+                default_outcome: None,
+                outcomes: None,
+                capabilities: None,
+            }),
+            target: Some(Target {
+                address: if role == LinkRole::Receiver {
+                    None
+                } else {
+                    Some(name.to_string())
+                },
+                durable: Some(TerminusDurability::None),
+                expiry_policy: Some(TerminusExpiryPolicy::SessionEnd),
+                timeout: Some(0),
+                dynamic: Some(false),
+                dynamic_node_properties: None,
+                capabilities: None,
+            }),*/
             source: None,
             target: None,
             unsettled: None,
@@ -400,12 +433,11 @@ impl SaslMechanism {
 }
 
 impl TerminusDurability {
-    pub fn from_slice(data: &[u8]) -> Result<TerminusDurability> {
-        let input = std::str::from_utf8(data)?;
+    pub fn from_int(input: u32) -> Result<TerminusDurability> {
         match input {
-            "None" => Ok(TerminusDurability::None),
-            "Configuration" => Ok(TerminusDurability::Configuration),
-            "UnsettledState" => Ok(TerminusDurability::UnsettledState),
+            0 => Ok(TerminusDurability::None),
+            1 => Ok(TerminusDurability::Configuration),
+            2 => Ok(TerminusDurability::UnsettledState),
             v => Err(AmqpError::decode_error(Some(
                 format!("Unknown terminus durability{:?}", v).as_str(),
             ))),
@@ -416,7 +448,7 @@ impl TerminusDurability {
 impl TryFromValue for TerminusDurability {
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            Value::Symbol(v) => TerminusDurability::from_slice(&v[..]),
+            Value::Uint(v) => TerminusDurability::from_int(v),
             _ => Err(AmqpError::decode_error(Some(
                 "Error converting value to TerminusDurability",
             ))),
@@ -428,10 +460,10 @@ impl TerminusExpiryPolicy {
     pub fn from_slice(data: &[u8]) -> Result<TerminusExpiryPolicy> {
         let input = std::str::from_utf8(data)?;
         match input {
-            "LinkDetach" => Ok(TerminusExpiryPolicy::LinkDetach),
-            "SessionEnd" => Ok(TerminusExpiryPolicy::SessionEnd),
-            "ConnectionClose" => Ok(TerminusExpiryPolicy::ConnectionClose),
-            "Never" => Ok(TerminusExpiryPolicy::Never),
+            "link-detach" => Ok(TerminusExpiryPolicy::LinkDetach),
+            "session-end" => Ok(TerminusExpiryPolicy::SessionEnd),
+            "connection-close" => Ok(TerminusExpiryPolicy::ConnectionClose),
+            "never" => Ok(TerminusExpiryPolicy::Never),
             v => Err(AmqpError::decode_error(Some(
                 format!("Unknown terminus expiry policy {:?}", v).as_str(),
             ))),
@@ -710,7 +742,6 @@ impl Encoder for Attach {
         encoder.encode_arg(&self.incomplete_unsettled.unwrap_or(false))?;
         encoder.encode_arg(&self.initial_delivery_count)?;
         encoder.encode_arg(&self.max_message_size)?;
-        encoder.encode_arg(&self.max_message_size)?;
         encoder.encode_arg(&self.offered_capabilities)?;
         encoder.encode_arg(&self.desired_capabilities)?;
         encoder.encode_arg(&self.properties)?;
@@ -778,30 +809,25 @@ impl Encoder for Outcome {
     }
 }
 
-impl TerminusDurability {
-    pub fn to_str(&self) -> &'static str {
-        match *self {
-            TerminusDurability::None => "None",
-            TerminusDurability::Configuration => "Configuration",
-            TerminusDurability::UnsettledState => "UnsettledState",
-        }
-    }
-}
-
 impl TerminusExpiryPolicy {
     pub fn to_str(&self) -> &'static str {
         match *self {
-            TerminusExpiryPolicy::LinkDetach => "LinkDetach",
-            TerminusExpiryPolicy::SessionEnd => "SessionEnd",
-            TerminusExpiryPolicy::ConnectionClose => "ConnectionClose",
-            TerminusExpiryPolicy::Never => "Never",
+            TerminusExpiryPolicy::LinkDetach => "link-detach",
+            TerminusExpiryPolicy::SessionEnd => "session-end",
+            TerminusExpiryPolicy::ConnectionClose => "connection-close",
+            TerminusExpiryPolicy::Never => "never",
         }
     }
 }
 
 impl Encoder for TerminusDurability {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        ValueRef::SymbolRef(self.to_str()).encode(writer)
+        Value::Uint(match self {
+            TerminusDurability::None => 0,
+            TerminusDurability::Configuration => 1,
+            TerminusDurability::UnsettledState => 2,
+        })
+        .encode(writer)
     }
 }
 
@@ -916,6 +942,10 @@ impl Frame {
                         DESC_END => {
                             let end = End::decode(decoder)?;
                             Ok(Performative::End(end))
+                        }
+                        DESC_ATTACH => {
+                            let attach = Attach::decode(decoder)?;
+                            Ok(Performative::Attach(attach))
                         }
                         v => Err(AmqpError::amqp_error(
                             condition::DECODE_ERROR,

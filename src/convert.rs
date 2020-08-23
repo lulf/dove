@@ -139,20 +139,19 @@ impl TryFromValue for String {
     }
 }
 
-impl TryFromValue for BTreeMap<String, Value> {
+impl<T: TryFromValue + std::cmp::Ord> TryFromValue for BTreeMap<T, Value> {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Map(v) => {
                 let mut m = BTreeMap::new();
                 for (key, value) in v.into_iter() {
-                    m.insert(String::try_from(key)?, value);
+                    m.insert(T::try_from(key)?, value);
                 }
                 Ok(m)
             }
-            _ => Err(AmqpError::amqp_error(
-                condition::DECODE_ERROR,
-                Some("Error converting value to Vec<Symbol>"),
-            )),
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to Map<T, Value>",
+            ))),
         }
     }
 }

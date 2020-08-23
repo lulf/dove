@@ -103,9 +103,19 @@ impl Value {
             Value::Bool(ref value) => ValueRef::Bool(value),
             Value::String(ref value) => ValueRef::String(value),
             Value::Symbol(ref value) => ValueRef::Symbol(&value[..]),
-            Value::Ulong(ref value) => ValueRef::Ulong(value),
             Value::List(ref value) => ValueRef::List(value),
-            _ => ValueRef::Null,
+            Value::Ubyte(ref value) => ValueRef::Ubyte(value),
+            Value::Ushort(ref value) => ValueRef::Ushort(value),
+            Value::Uint(ref value) => ValueRef::Uint(value),
+            Value::Ulong(ref value) => ValueRef::Ulong(value),
+            Value::Byte(ref value) => ValueRef::Byte(value),
+            Value::Short(ref value) => ValueRef::Short(value),
+            Value::Int(ref value) => ValueRef::Int(value),
+            Value::Long(ref value) => ValueRef::Long(value),
+            v => {
+                println!("Cannot convert value ref {:?}", v);
+                panic!(format!("Cannot convert value ref {:?}", v));
+            }
         }
     }
 }
