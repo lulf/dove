@@ -123,6 +123,7 @@ enum LinkState {
 pub struct Session {
     pub local_channel: ChannelId,
     remote_channel: Option<ChannelId>,
+    handle_max: u32,
     state: SessionState,
     opened: bool,
     closed: bool,
@@ -134,10 +135,13 @@ pub struct Link {
     name: String,
     handle: HandleId,
     opened: bool,
+    credits: u32,
+    next_transfer_id: u32,
     role: LinkRole,
     source: Option<Source>,
     target: Option<Target>,
     state: LinkState,
+    tx: Vec<Vec<u8>>,
 }
 
 pub fn connect(
@@ -213,10 +217,12 @@ pub enum Event {
     SessionInit(ConnectionId, ChannelId),
     LocalBegin(ConnectionId, ChannelId, Begin),
     RemoteBegin(ConnectionId, ChannelId, Begin),
-    LocalAttach(ConnectionId, ChannelId, Attach), /*
-                                                  LocalEnd(ChannelId, End),
-                                                  RemoteEnd(ChannelId, End),
-                                                  */
+    LocalAttach(ConnectionId, ChannelId, Attach),
+    Flow(ConnectionId, ChannelId, HandleId, Flow),
+    /*
+    LocalEnd(ChannelId, End),
+    RemoteEnd(ChannelId, End),
+    */
 }
 
 impl ConnectionDriver {
@@ -256,8 +262,12 @@ impl ConnectionDriver {
 
 fn unwrap_frame(frame: Frame) -> Result<(ChannelId, Option<Performative>)> {
     match frame {
-        Frame::AMQP(AmqpFrame { channel, body }) => {
-            return Ok((channel as ChannelId, body));
+        Frame::AMQP(AmqpFrame {
+            channel,
+            performative,
+            payload: _,
+        }) => {
+            return Ok((channel as ChannelId, performative));
         }
         _ => return Err(AmqpError::framing_error()),
     }
@@ -318,6 +328,7 @@ impl Connection {
         let s = Session {
             remote_channel: channel_id,
             local_channel: chan,
+            handle_max: std::u32::MAX,
             opened: false,
             closed: false,
             state: SessionState::Unmapped,
@@ -414,9 +425,9 @@ impl Connection {
                     self.state = ConnectionState::OpenSent;
                 } else {
                     let frame = self.transport.read_frame()?;
-                    let (_, body) = unwrap_frame(frame)?;
-                    if let Some(body) = body {
-                        match body {
+                    let (_, performative) = unwrap_frame(frame)?;
+                    if let Some(performative) = performative {
+                        match performative {
                             Performative::Open(open) => {
                                 self.update_connection_info(&open);
                                 event_buffer.push(Event::RemoteOpen(self.id, open));
@@ -439,9 +450,9 @@ impl Connection {
                     self.state = ConnectionState::ClosePipe;
                 } else {
                     let frame = self.transport.read_frame()?;
-                    let (_, body) = unwrap_frame(frame)?;
-                    if let Some(body) = body {
-                        match body {
+                    let (_, performative) = unwrap_frame(frame)?;
+                    if let Some(performative) = performative {
+                        match performative {
                             Performative::Open(open) => {
                                 self.update_connection_info(&open);
                                 event_buffer.push(Event::RemoteOpen(self.id, open));
@@ -474,9 +485,9 @@ impl Connection {
             }
             ConnectionState::ClosePipe => {
                 let frame = self.transport.read_frame()?;
-                let (_, body) = unwrap_frame(frame)?;
-                if let Some(body) = body {
-                    match body {
+                let (_, performative) = unwrap_frame(frame)?;
+                if let Some(performative) = performative {
+                    match performative {
                         Performative::Open(open) => {
                             event_buffer.push(Event::RemoteOpen(self.id, open));
                             self.state = ConnectionState::CloseSent;
@@ -493,10 +504,10 @@ impl Connection {
             }
             ConnectionState::CloseSent => {
                 let frame = self.transport.read_frame()?;
-                let (_, body) = unwrap_frame(frame)?;
+                let (_, performative) = unwrap_frame(frame)?;
 
-                if let Some(body) = body {
-                    match body {
+                if let Some(performative) = performative {
+                    match performative {
                         Performative::Close(close) => {
                             event_buffer.push(Event::RemoteClose(self.id, close));
                             self.state = ConnectionState::End;
@@ -561,7 +572,17 @@ impl Connection {
                                     link.state = LinkState::AttachSent;
                                 }
                             }
-                            LinkState::AttachSent | LinkState::Mapped => {}
+                            LinkState::AttachSent | LinkState::Mapped => {
+                                let handle = link.handle;
+                                for data in link.tx.drain(..) {
+                                    Self::transfer(
+                                        handle,
+                                        session.local_channel,
+                                        &mut self.tx_frames,
+                                        data,
+                                    );
+                                }
+                            }
                             _ => return Err(AmqpError::not_implemented()),
                         }
                     }
@@ -586,7 +607,8 @@ impl Connection {
             if now - self.transport.last_sent() >= self.remote_idle_timeout {
                 let frame = Frame::AMQP(AmqpFrame {
                     channel: 0,
-                    body: None,
+                    performative: None,
+                    payload: None,
                 });
                 self.tx_frames.push(frame);
             }
@@ -606,24 +628,24 @@ impl Connection {
 
     // Dispatch frame to relevant endpoint
     fn process_frame(self: &mut Self, frame: Frame, event_buffer: &mut EventBuffer) -> Result<()> {
-        let (channel_id, body) = unwrap_frame(frame)?;
+        let (channel_id, performative) = unwrap_frame(frame)?;
 
-        if body.is_none() {
+        if performative.is_none() {
             return Ok(());
         }
 
-        let body = body.unwrap();
-        self.process_frame_body(channel_id, &body, event_buffer)
+        let performative = performative.unwrap();
+        self.process_frame_internal(channel_id, &performative, event_buffer)
     }
 
     // Handle frames for a connection
-    fn process_frame_body(
+    fn process_frame_internal(
         self: &mut Self,
         channel_id: ChannelId,
-        body: &Performative,
+        performative: &Performative,
         event_buffer: &mut EventBuffer,
     ) -> Result<()> {
-        match body {
+        match performative {
             // TODO: Handle sessions, links etc...
             Performative::Begin(begin) => {
                 let id = self.id;
@@ -636,6 +658,11 @@ impl Connection {
                     // Create session with desired settings
                     self.session_internal(Some(channel_id))
                 };
+
+                if let Some(handle_max) = begin.handle_max {
+                    session.handle_max = handle_max;
+                }
+
                 session.remote_channel = Some(channel_id);
 
                 // let local_channel = session.local_channel;
@@ -652,7 +679,7 @@ impl Connection {
                     _ => Err(AmqpError::framing_error()),
                 }
             }
-            Performative::Attach(_) => {
+            Performative::Attach(attach) => {
                 println!(
                     "Remote ATTACH to channel {:?}. Map: {:?}",
                     channel_id, self.remote_channel_map
@@ -661,15 +688,42 @@ impl Connection {
                 // Lookup session
                 if let Some(local_channel) = local_channel_opt {
                     //let session = self.sessions.get_mut(&local_channel).unwrap();
-                    self.sessions.get_mut(&local_channel).unwrap();
-                    Ok(())
+                    let session = self.sessions.get_mut(&local_channel).unwrap();
+                    match session.links.get(&attach.handle) {
+                        None => Err(AmqpError::not_implemented()),
+                        _ => Ok(()),
+                    }
                 } else {
                     Err(AmqpError::framing_error())
                 }
             }
-            Performative::Flow(_) => {
-                println!("Got link flow!");
+            Performative::Flow(flow) => {
+                let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
+                if let Some(local_channel) = local_channel_opt {
+                    let session = self.sessions.get_mut(&local_channel).unwrap();
+                    if let Some(handle) = flow.handle {
+                        let link = session.links.get_mut(&handle).unwrap();
+                        if let Some(credits) = flow.link_credit {
+                            println!("Replenished credits: {:?}", credits);
+                            link.credits = credits;
+                        }
+                        event_buffer.push(Event::Flow(
+                            self.id,
+                            session.local_channel,
+                            handle,
+                            flow.clone(),
+                        ));
+                    }
+                }
                 Ok(())
+            }
+            Performative::Transfer(_) => {
+                println!("Transfer!");
+                Err(AmqpError::not_implemented())
+            }
+            Performative::Disposition(_) => {
+                println!("Disposition!");
+                Err(AmqpError::not_implemented())
             }
             Performative::Detach(detach) => {
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
@@ -718,7 +772,8 @@ impl Connection {
 
         let frame = Frame::AMQP(AmqpFrame {
             channel: 0,
-            body: Some(Performative::Open(args.clone())),
+            performative: Some(Performative::Open(args.clone())),
+            payload: None,
         });
 
         self.tx_frames.push(frame);
@@ -728,9 +783,10 @@ impl Connection {
     fn local_close(self: &mut Self, event_buffer: &mut EventBuffer) {
         let frame = Frame::AMQP(AmqpFrame {
             channel: 0,
-            body: Some(Performative::Close(Close {
+            performative: Some(Performative::Close(Close {
                 error: self.close_condition.clone(),
             })),
+            payload: None,
         });
 
         self.tx_frames.push(frame);
@@ -757,7 +813,8 @@ impl Connection {
         };
         let frame = Frame::AMQP(AmqpFrame {
             channel: session.local_channel as u16,
-            body: Some(Performative::Begin(data.clone())),
+            performative: Some(Performative::Begin(data.clone())),
+            payload: None,
         });
 
         tx_frames.push(frame);
@@ -794,11 +851,41 @@ impl Connection {
 
         let frame = Frame::AMQP(AmqpFrame {
             channel: local_channel,
-            body: Some(Performative::Attach(data.clone())),
+            performative: Some(Performative::Attach(data.clone())),
+            payload: None,
         });
 
         tx_frames.push(frame);
         event_buffer.push(Event::LocalAttach(connection_id, local_channel, data));
+    }
+
+    fn transfer(
+        handle: HandleId,
+        local_channel: ChannelId,
+        tx_frames: &mut Vec<Frame>,
+        data: Vec<u8>,
+    ) {
+        let t = Transfer {
+            handle: handle,
+            delivery_id: Some(0),
+            delivery_tag: Some(vec![1, 2, 3]),
+            message_format: None,
+            settled: Some(false),
+            more: Some(false),
+            rcv_settle_mode: None,
+            state: None,
+            resume: None,
+            aborted: None,
+            batchable: None,
+        };
+
+        let frame = Frame::AMQP(AmqpFrame {
+            channel: local_channel,
+            performative: Some(Performative::Transfer(t)),
+            payload: Some(data),
+        });
+
+        tx_frames.push(frame);
     }
 }
 
@@ -807,8 +894,12 @@ impl Session {
         self.opened = true;
     }
 
+    pub fn get_sender(self: &mut Self, handle_id: HandleId) -> Option<&mut Link> {
+        self.links.get_mut(&handle_id)
+    }
+
     fn allocate_handle(self: &mut Self) -> Option<HandleId> {
-        for i in 0..std::u32::MAX {
+        for i in 0..self.handle_max {
             let id = i as HandleId;
             if !self.links.contains_key(&id) {
                 return Some(id);
@@ -825,6 +916,8 @@ impl Session {
             Link {
                 name: name,
                 handle: id,
+                next_transfer_id: 0,
+                credits: 0,
                 role: LinkRole::Sender,
                 state: LinkState::Unmapped,
                 source: Some(Source {
@@ -850,6 +943,7 @@ impl Session {
                     capabilities: None,
                 }),
                 opened: false,
+                tx: Vec::new(),
             },
         );
         self.links.get_mut(&id).unwrap()
@@ -859,5 +953,9 @@ impl Session {
 impl Link {
     pub fn open(self: &mut Self) {
         self.opened = true;
+    }
+
+    pub fn send(self: &mut Self, data: &str) {
+        self.tx.push(data.to_string().into_bytes());
     }
 }

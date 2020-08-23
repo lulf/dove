@@ -141,7 +141,8 @@ impl TryFromValue for SaslMechanism {
 #[derive(Debug)]
 pub struct AmqpFrame {
     pub channel: u16,
-    pub body: Option<Performative>,
+    pub performative: Option<Performative>,
+    pub payload: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -1118,12 +1119,16 @@ impl Frame {
         let mut buf: Vec<u8> = Vec::new();
 
         match self {
-            Frame::AMQP(AmqpFrame { channel, body }) => {
+            Frame::AMQP(AmqpFrame {
+                channel,
+                performative,
+                payload,
+            }) => {
                 header.frame_type = 0;
                 header.ext = *channel;
 
-                if let Some(body) = body {
-                    match body {
+                if let Some(performative) = performative {
+                    match performative {
                         Performative::Open(open) => {
                             open.encode(&mut buf)?;
                         }
@@ -1152,6 +1157,10 @@ impl Frame {
                             disposition.encode(&mut buf)?;
                         }
                     }
+                }
+
+                if let Some(data) = payload {
+                    buf.write_all(&data[..])?;
                 }
             }
             Frame::SASL(sasl_frame) => {
@@ -1185,7 +1194,7 @@ impl Frame {
         }
 
         if header.frame_type == 0 {
-            let body = if header.size > 8 {
+            let performative = if header.size > 8 {
                 if let Value::Described(descriptor, mut value) = decode_value(reader)? {
                     let decoder = FrameDecoder::new(&descriptor, &mut value)?;
                     Some(match *descriptor {
@@ -1237,7 +1246,8 @@ impl Frame {
             };
             Ok(Frame::AMQP(AmqpFrame {
                 channel: header.ext,
-                body: body,
+                performative: performative,
+                payload: None, // TODO
             }))
         } else if header.frame_type == 1 {
             if header.size > 8 {
