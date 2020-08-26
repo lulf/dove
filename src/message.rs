@@ -56,7 +56,6 @@ pub enum MessageBody {
     AmqpSequence(Vec<Value>),
     Data(Vec<u8>),
     AmqpValue(Value),
-    Null,
 }
 
 impl Message {
@@ -87,7 +86,7 @@ impl Message {
             message_annotations: None,
             properties: None,
             application_properties: None,
-            body: MessageBody::Null,
+            body: MessageBody::AmqpValue(Value::Null),
             footer: None,
         };
         while cursor.position() < len {
@@ -204,8 +203,24 @@ impl MessageHeader {
 
 impl MessageProperties {
     pub fn encode(&self, writer: &mut dyn Write) -> Result<()> {
+        let mut encoder = FrameEncoder::new(DESC_MESSAGE_PROPERTIES);
+        encoder.encode_arg(&self.message_id)?;
+        encoder.encode_arg(&self.user_id)?;
+        encoder.encode_arg(&self.to)?;
+        encoder.encode_arg(&self.subject)?;
+        encoder.encode_arg(&self.reply_to)?;
+        encoder.encode_arg(&self.correlation_id)?;
+        encoder.encode_arg(&self.content_type)?;
+        encoder.encode_arg(&self.content_encoding)?;
+        encoder.encode_arg(&self.absolute_expiry_time)?;
+        encoder.encode_arg(&self.creation_time)?;
+        encoder.encode_arg(&self.group_id)?;
+        encoder.encode_arg(&self.group_sequence)?;
+        encoder.encode_arg(&self.reply_to_group_id)?;
+        encoder.encode(writer)?;
         Ok(())
     }
+
     pub fn decode(mut decoder: FrameDecoder) -> Result<MessageProperties> {
         let mut properties = MessageProperties {
             message_id: None,
@@ -246,17 +261,20 @@ impl MessageBody {
                 writer.write_u8(0)?;
                 DESC_MESSAGE_AMQP_VALUE.encode(writer)?;
                 value.encode(writer)?;
-                Ok(())
             }
-            _ => Err(AmqpError::decode_error(Some(
-                format!("Expected body but found {:?}", *self).as_str(),
-            ))),
+            MessageBody::AmqpSequence(values) => {
+                writer.write_u8(0)?;
+                DESC_MESSAGE_AMQP_SEQUENCE.encode(writer)?;
+                for value in values.iter() {
+                    value.encode(writer)?;
+                }
+            }
+            MessageBody::Data(data) => {
+                writer.write_u8(0)?;
+                DESC_MESSAGE_AMQP_DATA.encode(writer)?;
+                ValueRef::Binary(data).encode(writer)?;
+            }
         }
-    }
-
-    pub fn decode(mut decoder: FrameDecoder) -> Result<MessageBody> {
-        match decoder.get_descriptor() {
-            _ => Ok(MessageBody::Null),
-        }
+        Ok(())
     }
 }

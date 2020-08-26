@@ -1198,8 +1198,6 @@ impl Frame {
         }
 
         if header.frame_type == 0 {
-            let performative_position = reader.position() as u32;
-            let total_payload_size = header.size - ((header.doff as u32) * 4);
             let performative = if header.size > 8 {
                 if let Value::Described(descriptor, mut value) = decode_value(reader)? {
                     let decoder = FrameDecoder::new(&descriptor, &mut value)?;
@@ -1251,6 +1249,8 @@ impl Frame {
                 None
             };
 
+            // Figure out how much data we have left in the frame
+            let total_payload_size = header.size - ((header.doff as u32) * 4);
             let payload_position = reader.position() as u32;
             let payload_size = total_payload_size - payload_position;
 
