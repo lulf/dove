@@ -7,13 +7,13 @@ Dove aims to be an AMQP 1.0 implementation with the following properties:
 * Low footprint - efficient memory usage and pay only for what you use.
 * Portable - minimize the number of dependencies and use portable APIs.
 
-The library supports only the basics right now: Establishing connections, creating sessions, links and sending and receiving messages. Most AMQP 1.0 types have been implemented, and conversion for many Rust native types exists. Support for SASL ANONYMOUS and PLAIN.
+The library supports only the basics right now: Establishing connections, creating sessions, links and sending and receiving message, except that message acknowledgements are not handled yet :) Most AMQP 1.0 types have been implemented, and conversion for many Rust native types exists. Support for SASL ANONYMOUS and PLAIN.
 
 Dove exposes a low level API that enables multiplexing of multiple connections and processing events for those connections. The goal is to create a higher level API based on this to make it easier to write AMQP clients.
 
 ## TODO
 
-* Support sending dispositions.
+* Support message acknowledgements for receiver and acknowledge state keeping for sender.
 * TLS/SSL support
 * Improve SASL support (missing SCRAM* support)
 * Complete implementation of encoding+decoding for all AMQP 1.0 types.
