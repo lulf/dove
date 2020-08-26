@@ -4,74 +4,27 @@ Dove is an open source Rust implementation of the AMQP 1.0 OASIS standard (http:
 
 Dove aims to be an AMQP 1.0 implementation with the following properties:
 
-* Low footprint - minimize memory usage, pay only for what you use
-* Portable - minimize the number of dependencies and use portable APIs
+* Low footprint - efficient memory usage and pay only for what you use.
+* Portable - minimize the number of dependencies and use portable APIs.
 
-At present, the library supports basic support for establishing connections, creating sessions, links and sending and receiving messages. Most AMQP 1.0 types have been implemented, and conversion for many Rust native types exists.
+The library supports only the basics right now: Establishing connections, creating sessions, links and sending and receiving messages. Most AMQP 1.0 types have been implemented, and conversion for many Rust native types exists. Support for SASL ANONYMOUS and PLAIN.
 
-## Core API example - sending a message
-
-```
-use dove::core::*;
-
-fn main() {
-    let mut opts = ConnectionOptions::new("ce8c4a3e-96b3-11e9-9bfd-c85b7644b4a4");
-    opts.sasl_mechanism = Some(SaslMechanism::Anonymous);
-
-    let connection = connect(2, "localhost", 5672, opts).expect("Error opening connection");
-
-    // For multiplexing connections
-    let mut driver = ConnectionDriver::new();
-    driver.register(connection);
-
-    let mut event_buffer = EventBuffer::new();
-    let mut done = false;
-
-    while !done {
-        match driver.poll(&mut event_buffer) {
-            Ok(_) => {
-                for event in event_buffer.drain(..) {
-                    match event {
-                        Event::ConnectionInit(cid) => {
-                            let conn = driver.connection(cid).unwrap();
-                            conn.open();
-
-                            let session = conn.create_session();
-                            session.open();
-
-                            let sender = session.create_sender(Some("myqueue"));
-                            sender.open();
-                            sender.send("Hello, World");
-                        }
-                        Event::Disposition(cid, _, disposition) => {
-                            if disposition.settled == Some(true)
-                                && disposition.state == Some(DeliveryState::Accepted)
-                            {
-                                driver.connection(cid).unwrap().close(None);
-                            }
-                        }
-                        Event::RemoteClose(_, _) => {
-                            done = true;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Err(e) => {
-                println!("Got error: {:?}", e);
-            }
-        }
-    }
-}
-```
-
+Dove exposes a low level API that enables multiplexing of multiple connections and processing events for those connections. The goal is to create a higher level API based on this to make it easier to write AMQP clients.
 
 ## TODO
 
-* Finish SASL support (missing SCRAM* support)
+* Support sending dispositions.
 * TLS/SSL support
-* Some AMQP 1.0 types are not yet implemented
+* Improve SASL support (missing SCRAM* support)
+* Complete implementation of encoding+decoding for all AMQP 1.0 types.
+* Improve test coverage.
 * A higher level API for messaging clients to improve ease of use
+* Compile to WASM.
+* Figure out public vs private APIs.
+
+## Examples
+
+Client examples can be found in the [examples/](https://github.com/lulf/dove/tree/master/examples) directory.
 
 ## Modules
 
@@ -85,6 +38,3 @@ fn main() {
 * transport - API for the underlying transport/network
 * sasl - SASL handling
 * core - Low level API for writing AMQP clients
-
-At present, the only a low level API for sending and receiving messages is provided. This API allows you to create AMQP connections, and a driver for polling events in a non-blocking fashion. Higher level APIs (reactive, threaded etc.) can be built on top of this module.
-

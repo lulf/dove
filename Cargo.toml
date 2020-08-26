@@ -8,6 +8,18 @@ version = "0.1.0"
 authors = ["Ulf Lilleengen <ulf.lilleengen@gmail.com>"]
 edition = "2018"
 
+[lib]
+name = "dove"
+src = "src/lib.rs"
+
+[[bin]]
+name = "example_send"
+path = "examples/send.rs"
+
+[[bin]]
+name = "example_receive"
+path = "examples/receive.rs"
+
 [dependencies]
 byteorder = "1.3.2"
 uuid = { version = "0.7.4", features = ["v4"] }
