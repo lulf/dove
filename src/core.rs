@@ -3,9 +3,9 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+use log::trace;
 use rand::Rng;
 use std::collections::HashMap;
-use std::io::Read;
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::time::Duration;
@@ -531,7 +531,7 @@ impl Connection {
                             self.state = ConnectionState::End;
                         }
                         _ => {
-                            println!("Ignoring other frames than close");
+                            trace!("Ignoring other frames than close");
                         }
                     }
                 }
@@ -550,7 +550,7 @@ impl Connection {
     // Write outgoing frames
     fn flush(self: &mut Self) -> Result<()> {
         for frame in self.tx_frames.drain(..) {
-            println!("TX {:?}", frame);
+            trace!("TX {:?}", frame);
             self.transport.write_frame(&frame)?;
         }
         Ok(())
@@ -578,9 +578,10 @@ impl Connection {
                         match link.state {
                             LinkState::Unmapped => {
                                 if link.opened {
-                                    println!(
+                                    trace!(
                                         "Session local_channel: {:?}. Remote channel: {:?}",
-                                        session.local_channel, session.remote_channel,
+                                        session.local_channel,
+                                        session.remote_channel,
                                     );
                                     Self::local_attach(
                                         link,
@@ -633,7 +634,7 @@ impl Connection {
         let now = Instant::now();
         if self.remote_idle_timeout.as_millis() > 0 {
             /*
-            println!(
+            trace!(
                 "Remote idle timeout millis: {:?}. Last sent: {:?}",
                 self.remote_idle_timeout.as_millis(),
                 now - self.transport.last_sent()
@@ -718,9 +719,10 @@ impl Connection {
                 }
             }
             Performative::Attach(attach) => {
-                println!(
+                trace!(
                     "Remote ATTACH to channel {:?}. Map: {:?}",
-                    channel_id, self.remote_channel_map
+                    channel_id,
+                    self.remote_channel_map
                 );
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
                 if let Some(local_channel) = local_channel_opt {
@@ -752,7 +754,6 @@ impl Connection {
                 if let Some(local_channel) = local_channel_opt {
                     let session = self.sessions.get_mut(&local_channel).unwrap();
                     if let Some(handle) = flow.handle {
-                        let link = session.links.get_mut(&handle).unwrap();
                         event_buffer.push(Event::Flow(
                             self.id,
                             session.local_channel,
@@ -957,7 +958,7 @@ impl Connection {
             batchable: None,
         };
 
-        println!("TX MESSAGE: {:?}", delivery.message);
+        trace!("TX MESSAGE: {:?}", delivery.message);
         let mut msgbuf = Vec::new();
         delivery.message.encode(&mut msgbuf)?;
 

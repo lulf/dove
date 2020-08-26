@@ -3,6 +3,7 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+use log::trace;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::vec::Vec;
@@ -133,7 +134,7 @@ impl Value {
             Value::Int(ref value) => ValueRef::Int(value),
             Value::Long(ref value) => ValueRef::Long(value),
             v => {
-                println!("Cannot convert value ref {:?}", v);
+                trace!("Cannot convert value ref {:?}", v);
                 panic!(format!("Cannot convert value ref {:?}", v));
             }
         }

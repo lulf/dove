@@ -5,6 +5,7 @@
 
 use byteorder::NetworkEndian;
 use byteorder::WriteBytesExt;
+use log::trace;
 use std::io::Write;
 use std::vec::Vec;
 
@@ -89,7 +90,7 @@ impl<'a> FrameDecoder<'a> {
             }
         }
         let mut drained = self.args.drain(0..1);
-        println!("(Desc: {:?} Next arg to decode: {:?}", self.desc, drained);
+        trace!("(Desc: {:?} Next arg to decode: {:?}", self.desc, drained);
         if let Some(arg) = drained.next() {
             let v = arg;
             *value = T::try_from(v)?;

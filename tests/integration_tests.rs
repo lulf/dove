@@ -17,7 +17,6 @@ fn client() {
     //opts.sasl_mechanism = Some(SaslMechanism::Plain);
     opts.sasl_mechanism = Some(SaslMechanism::Anonymous);
 
-    println!("REGISTERING");
     let connection = connect(2, "localhost", 5672, opts).expect("Error opening connection");
 
     let mut driver = ConnectionDriver::new();
@@ -51,7 +50,7 @@ fn client() {
                             let receiver = session.create_receiver(Some("a"));
                             receiver.open();
                         }
-                        Event::RemoteAttach(cid, chan, handle, attach) => {
+                        Event::RemoteAttach(cid, chan, handle, _) => {
                             let conn = driver.connection(cid).unwrap();
                             let session = conn.get_session(chan).unwrap();
                             let link = session.get_link(handle).unwrap();
@@ -72,12 +71,12 @@ fn client() {
                                 sent = true;
                             }
                         }
-                        Event::Delivery(cid, chan, handle, delivery) => {
+                        Event::Delivery(cid, _, _, delivery) => {
                             println!("Received message: {:?}", delivery.message.body);
                             let conn = driver.connection(cid).unwrap();
                             conn.close(None);
                         }
-                        Event::Disposition(cid, _, disposition) => {
+                        Event::Disposition(_, _, disposition) => {
                             if let Some(settled) = disposition.settled {
                                 if let Some(state) = disposition.state {
                                     if settled && state == DeliveryState::Accepted {

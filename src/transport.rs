@@ -3,6 +3,7 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+use log::trace;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
@@ -181,7 +182,7 @@ impl Transport {
                     let frame = Frame::decode(header, &mut cursor)?;
                     self.incoming.consume(frame_size)?;
                     self.last_received = Instant::now();
-                    println!("RX {:?}", frame);
+                    trace!("RX {:?}", frame);
                     return Ok(frame);
                 }
             } else {
