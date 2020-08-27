@@ -49,7 +49,6 @@ pub struct ConnectionHandle {
 #[derive(Debug)]
 enum ConnectionState {
     Opening,
-    ClosePipe,
     Opened,
     Closing,
     Closed,
@@ -197,10 +196,11 @@ fn unwrap_frame(frame: Frame) -> Result<(ChannelId, Option<Performative>, Option
 
 impl ConnectionHandle {
     pub fn new(id: ConnectionId, connection: Connection) -> ConnectionHandle {
+        let hostname = connection.hostname.clone();
         ConnectionHandle {
             id: id,
             container_id: "dove".to_string(),
-            hostname: connection.hostname,
+            hostname: hostname,
             connection: connection,
             idle_timeout: Duration::from_millis(5000),
             channel_max: std::u16::MAX,
@@ -318,13 +318,13 @@ impl ConnectionHandle {
             match session.state {
                 SessionState::Unmapped => {
                     if session.opened {
-                        self.local_begin(session, self.id, event_buffer);
+                        Self::local_begin(&mut self.connection, session, self.id, event_buffer);
                         session.state = SessionState::BeginSent;
                     }
                 }
                 SessionState::BeginRcvd => {
                     if session.opened {
-                        self.local_begin(session, self.id, event_buffer);
+                        Self::local_begin(&mut self.connection, session, self.id, event_buffer);
                         session.state = SessionState::Mapped;
                     }
                 }
@@ -339,7 +339,8 @@ impl ConnectionHandle {
                                         session.local_channel,
                                         session.remote_channel,
                                     );
-                                    self.local_attach(
+                                    Self::local_attach(
+                                        &mut self.connection,
                                         link,
                                         session.local_channel,
                                         self.id,
@@ -354,7 +355,8 @@ impl ConnectionHandle {
                                     for delivery in link.tx.drain(..) {
                                         let delivery_id = session.next_outgoing_id;
                                         session.next_outgoing_id += 1;
-                                        self.transfer(
+                                        Self::transfer(
+                                            &mut self.connection,
                                             handle,
                                             delivery_id,
                                             session.local_channel,
@@ -363,7 +365,8 @@ impl ConnectionHandle {
                                     }
                                 } else {
                                     for amount in link.flow.drain(..) {
-                                        self.flow(
+                                        Self::flow(
+                                            &mut self.connection,
                                             handle,
                                             session.next_outgoing_id,
                                             session.local_channel,
@@ -591,7 +594,7 @@ impl ConnectionHandle {
     }
 
     fn local_begin(
-        self: &mut Self,
+        connection: &mut Connection,
         session: &Session,
         connection_id: ConnectionId,
         event_buffer: &mut EventBuffer,
@@ -606,7 +609,7 @@ impl ConnectionHandle {
             desired_capabilities: None,
             properties: None,
         };
-        self.connection.begin(session.local_channel, begin.clone());
+        connection.begin(session.local_channel, begin.clone());
         event_buffer.push(Event::LocalBegin(
             connection_id,
             session.local_channel,
@@ -615,7 +618,7 @@ impl ConnectionHandle {
     }
 
     fn local_attach(
-        self: &mut Self,
+        connection: &mut Connection,
         link: &Link,
         local_channel: ChannelId,
         connection_id: ConnectionId,
@@ -641,7 +644,7 @@ impl ConnectionHandle {
             desired_capabilities: None,
             properties: None,
         };
-        self.connection.attach(local_channel, attach.clone());
+        connection.attach(local_channel, attach.clone());
 
         event_buffer.push(Event::LocalAttach(
             connection_id,
@@ -652,7 +655,7 @@ impl ConnectionHandle {
     }
 
     fn transfer(
-        self: &mut Self,
+        connection: &mut Connection,
         handle: HandleId,
         delivery_id: u32,
         local_channel: ChannelId,
@@ -662,7 +665,7 @@ impl ConnectionHandle {
         let mut msgbuf = Vec::new();
         delivery.message.encode(&mut msgbuf)?;
 
-        self.connection.transfer(
+        connection.transfer(
             local_channel,
             Transfer {
                 handle: handle,
@@ -683,13 +686,13 @@ impl ConnectionHandle {
     }
 
     fn flow(
-        self: &mut Self,
+        connection: &mut Connection,
         handle: HandleId,
         next_outgoing_id: u32,
         local_channel: ChannelId,
         amount: u32,
     ) -> Result<()> {
-        self.connection.flow(
+        connection.flow(
             local_channel,
             Flow {
                 next_incoming_id: None,
