@@ -6,8 +6,6 @@
 //! The conn module contains basic primitives for establishing and accepting AMQP connections and performing the initial handshake. Once handshake is complete, the connection can be used to send and receive frames.
 
 use log::trace;
-use rand::Rng;
-use std::collections::HashMap;
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::time::Duration;
@@ -16,10 +14,8 @@ use std::vec::Vec;
 
 use crate::error::*;
 use crate::framing::*;
-use crate::message::*;
 use crate::sasl::*;
 use crate::transport::*;
-use crate::types::*;
 
 #[derive(Debug)]
 pub struct ConnectionOptions {
@@ -35,6 +31,21 @@ impl ConnectionOptions {
             password: None,
             sasl_mechanism: None,
         }
+    }
+
+    pub fn sasl_mechanism(mut self, mechanism: SaslMechanism) -> Self {
+        self.sasl_mechanism = Some(mechanism);
+        self
+    }
+
+    pub fn username(mut self, username: &str) -> Self {
+        self.username = Some(username.to_string());
+        self
+    }
+
+    pub fn password(mut self, password: &str) -> Self {
+        self.password = Some(password.to_string());
+        self
     }
 }
 
@@ -89,7 +100,7 @@ pub struct Listener {
     pub sasl_mechanisms: Option<Vec<SaslMechanism>>,
 }
 
-pub fn listen(host: &str, port: u16, opts: ListenOptions) -> Result<Listener> {
+pub fn listen(host: &str, port: u16, _opts: ListenOptions) -> Result<Listener> {
     let listener = TcpListener::bind(format!("{}:{}", host, port))?;
     Ok(Listener {
         listener: listener,
@@ -304,10 +315,10 @@ impl Connection {
                     }
                     _ => {}
                 }
-                self.flush();
+                self.flush()?;
             }
             ConnectionState::Opened => {
-                self.flush();
+                self.flush()?;
                 frames.push(self.transport.read_frame()?);
             }
             ConnectionState::Closed => {

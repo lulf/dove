@@ -1,5 +1,5 @@
 /*
- * Copyright 2019, Ulf Lilleengen
+ * Copyright 2019-2020, Ulf Lilleengen
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
@@ -8,8 +8,6 @@
 use log::trace;
 use rand::Rng;
 use std::collections::HashMap;
-use std::net::TcpListener;
-use std::net::TcpStream;
 use std::time::Duration;
 use std::time::Instant;
 use std::vec::Vec;
@@ -18,7 +16,6 @@ use crate::conn::*;
 use crate::error::*;
 use crate::framing::*;
 use crate::message::*;
-use crate::sasl::*;
 use crate::types::*;
 
 #[derive(Debug)]
@@ -37,7 +34,6 @@ pub struct ConnectionHandle {
     pub remote_container_id: String,
     pub remote_channel_max: u16,
     connection: Connection,
-    sasl: Option<Sasl>,
     state: ConnectionState,
     opened: bool,
     closed: bool,
@@ -46,7 +42,7 @@ pub struct ConnectionHandle {
     remote_channel_map: HashMap<ChannelId, ChannelId>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum ConnectionState {
     Opening,
     Opened,
@@ -60,30 +56,25 @@ type HandleId = u32;
 #[allow(dead_code)]
 #[derive(Debug)]
 enum SessionState {
-    Unmapped,
-    BeginSent,
-    BeginRcvd,
-    Mapped,
-    EndSent,
-    EndRcvd,
-    Discarding,
+    Opening,
+    Opened,
+    Closing,
+    Closed,
 }
 
 #[allow(dead_code)]
 #[derive(Debug)]
 enum LinkState {
-    Unmapped,
-    AttachSent,
-    AttachRcvd,
-    Mapped,
-    DetachSent,
-    DetachRcvd,
-    Discarding,
+    Opening,
+    Opened,
+    Closing,
+    Closed,
 }
 
 #[derive(Debug)]
 pub struct Session {
     pub local_channel: ChannelId,
+    end_condition: Option<ErrorCondition>,
     remote_channel: Option<ChannelId>,
     handle_max: u32,
     state: SessionState,
@@ -98,6 +89,7 @@ pub struct Link {
     name: String,
     handle: HandleId,
     opened: bool,
+    closed: bool,
     pub role: LinkRole,
     source: Option<Source>,
     target: Option<Target>,
@@ -213,7 +205,6 @@ impl ConnectionHandle {
             sessions: HashMap::new(),
             remote_channel_map: HashMap::new(),
             close_condition: None,
-            sasl: None,
         }
     }
 
@@ -242,13 +233,14 @@ impl ConnectionHandle {
     fn session_internal(self: &mut Self, channel_id: Option<ChannelId>) -> &mut Session {
         let chan = self.allocate_channel().unwrap();
         let s = Session {
+            end_condition: None,
             remote_channel: channel_id,
             local_channel: chan,
             handle_max: std::u32::MAX,
             opened: false,
             closed: false,
             next_outgoing_id: 0,
-            state: SessionState::Unmapped,
+            state: SessionState::Opening,
             links: HashMap::new(),
         };
         self.sessions.insert(chan, s);
@@ -268,15 +260,17 @@ impl ConnectionHandle {
         Ok(before != event_buffer.len())
     }
 
-    fn skip_sasl(self: &Self) -> bool {
-        self.sasl.is_none() || self.sasl.as_ref().unwrap().is_done()
-    }
-
     fn do_work(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
         match self.state {
             ConnectionState::Opening => {
                 if self.opened {
-                    self.local_open(event_buffer);
+                    let mut open = Open::new(self.container_id.as_str());
+                    open.hostname = Some(self.hostname.clone());
+                    open.channel_max = Some(self.channel_max);
+                    open.idle_timeout = Some(self.idle_timeout.as_millis() as u32);
+
+                    self.connection.open(open.clone())?;
+                    event_buffer.push(Event::LocalOpen(self.id, open));
                     self.state = ConnectionState::Opened;
                 }
             }
@@ -284,15 +278,20 @@ impl ConnectionHandle {
                 if self.closed {
                     self.state = ConnectionState::Closing;
                 } else {
-                    self.process_work(event_buffer)?;
-                    self.keepalive(event_buffer)?;
+                    self.process_connection(event_buffer)?;
+                    self.keepalive()?;
                 }
             }
             ConnectionState::Closing => {
                 if self.closed {
-                    self.local_close(event_buffer);
-                    self.state = ConnectionState::Closed;
+                    self.connection.close(Close {
+                        error: self.close_condition.clone(),
+                    })?;
+
+                    let condition = self.close_condition.clone();
+                    event_buffer.push(Event::LocalClose(self.id, condition));
                 }
+                self.state = ConnectionState::Closed;
             }
             ConnectionState::Closed => return Ok(()),
         }
@@ -306,86 +305,15 @@ impl ConnectionHandle {
         Ok(())
     }
 
-    fn update_connection_info(self: &mut Self, open: &Open) {
-        self.remote_container_id = open.container_id.clone();
-        self.remote_idle_timeout = Duration::from_millis(open.idle_timeout.unwrap_or(0) as u64);
-        self.remote_channel_max = open.channel_max.unwrap_or(65535);
-    }
-
     // Process work to be performed on sub endpoints
-    fn process_work(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
-        for (_channel_id, session) in self.sessions.iter_mut() {
-            match session.state {
-                SessionState::Unmapped => {
-                    if session.opened {
-                        Self::local_begin(&mut self.connection, session, self.id, event_buffer);
-                        session.state = SessionState::BeginSent;
-                    }
-                }
-                SessionState::BeginRcvd => {
-                    if session.opened {
-                        Self::local_begin(&mut self.connection, session, self.id, event_buffer);
-                        session.state = SessionState::Mapped;
-                    }
-                }
-                SessionState::BeginSent | SessionState::Mapped => {
-                    // Check for local sessions opened
-                    for (_name, link) in session.links.iter_mut() {
-                        match link.state {
-                            LinkState::Unmapped => {
-                                if link.opened {
-                                    trace!(
-                                        "Session local_channel: {:?}. Remote channel: {:?}",
-                                        session.local_channel,
-                                        session.remote_channel,
-                                    );
-                                    Self::local_attach(
-                                        &mut self.connection,
-                                        link,
-                                        session.local_channel,
-                                        self.id,
-                                        event_buffer,
-                                    );
-                                    link.state = LinkState::AttachSent;
-                                }
-                            }
-                            LinkState::AttachSent | LinkState::Mapped => {
-                                let handle = link.handle;
-                                if link.role == LinkRole::Sender {
-                                    for delivery in link.tx.drain(..) {
-                                        let delivery_id = session.next_outgoing_id;
-                                        session.next_outgoing_id += 1;
-                                        Self::transfer(
-                                            &mut self.connection,
-                                            handle,
-                                            delivery_id,
-                                            session.local_channel,
-                                            delivery,
-                                        )?;
-                                    }
-                                } else {
-                                    for amount in link.flow.drain(..) {
-                                        Self::flow(
-                                            &mut self.connection,
-                                            handle,
-                                            session.next_outgoing_id,
-                                            session.local_channel,
-                                            amount,
-                                        )?;
-                                    }
-                                }
-                            }
-                            _ => return Err(AmqpError::not_implemented()),
-                        }
-                    }
-                }
-                _ => return Err(AmqpError::not_implemented()),
-            }
+    fn process_connection(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
+        for (_, session) in self.sessions.iter_mut() {
+            session.process(self.id, &mut self.connection, event_buffer)?;
         }
         Ok(())
     }
 
-    fn keepalive(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
+    fn keepalive(self: &mut Self) -> Result<()> {
         // Sent out keepalives...
         let now = Instant::now();
 
@@ -397,7 +325,7 @@ impl ConnectionHandle {
                     condition: condition::RESOURCE_LIMIT_EXCEEDED.to_string(),
                     description: "local-idle-timeout expired".to_string(),
                 });
-                self.local_close(event_buffer);
+                self.closed = true;
             }
         }
         Ok(())
@@ -424,10 +352,22 @@ impl ConnectionHandle {
         event_buffer: &mut EventBuffer,
     ) -> Result<()> {
         match performative {
-            // TODO: Handle sessions, links etc...
+            Performative::Open(open) => {
+                if self.state != ConnectionState::Opening || self.state != ConnectionState::Opened {
+                    return Err(AmqpError::framing_error());
+                }
+                self.remote_container_id = open.container_id.clone();
+                self.remote_idle_timeout =
+                    Duration::from_millis(open.idle_timeout.unwrap_or(0) as u64);
+                self.remote_channel_max = open.channel_max.unwrap_or(65535);
+                event_buffer.push(Event::RemoteOpen(self.id, open.clone()));
+                Ok(())
+            }
             Performative::Begin(begin) => {
+                if self.state != ConnectionState::Opened {
+                    return Err(AmqpError::framing_error());
+                }
                 let id = self.id;
-
                 // Response to locally initiated, use direct lookup
                 let session = if let Some(remote_channel) = begin.remote_channel {
                     self.remote_channel_map.insert(channel_id, remote_channel);
@@ -448,18 +388,14 @@ impl ConnectionHandle {
                 // let local_channel = session.local_channel;
                 event_buffer.push(Event::RemoteBegin(id, session.local_channel, begin.clone()));
                 match session.state {
-                    SessionState::BeginSent => {
-                        session.state = SessionState::Mapped;
-                        Ok(())
-                    }
-                    SessionState::Unmapped => {
-                        session.state = SessionState::BeginRcvd;
-                        Ok(())
-                    }
-                    _ => Err(AmqpError::framing_error()),
+                    SessionState::Closed => Err(AmqpError::framing_error()),
+                    _ => Ok(()),
                 }
             }
             Performative::Attach(attach) => {
+                if self.state != ConnectionState::Opened {
+                    return Err(AmqpError::framing_error());
+                }
                 trace!(
                     "Remote ATTACH to channel {:?}. Map: {:?}",
                     channel_id,
@@ -471,9 +407,8 @@ impl ConnectionHandle {
                     match session.links.get_mut(&attach.handle) {
                         None => Err(AmqpError::internal_error()),
                         Some(link) => match link.state {
-                            LinkState::Unmapped => Err(AmqpError::framing_error()),
-                            LinkState::AttachSent => {
-                                link.state = LinkState::Mapped;
+                            LinkState::Closed => Err(AmqpError::framing_error()),
+                            _ => {
                                 event_buffer.push(Event::RemoteAttach(
                                     self.id,
                                     session.local_channel,
@@ -482,8 +417,6 @@ impl ConnectionHandle {
                                 ));
                                 return Ok(());
                             }
-
-                            _ => Err(AmqpError::framing_error()),
                         },
                     }
                 } else {
@@ -491,6 +424,9 @@ impl ConnectionHandle {
                 }
             }
             Performative::Flow(flow) => {
+                if self.state != ConnectionState::Opened {
+                    return Err(AmqpError::framing_error());
+                }
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
                 if let Some(local_channel) = local_channel_opt {
                     let session = self.sessions.get_mut(&local_channel).unwrap();
@@ -506,6 +442,9 @@ impl ConnectionHandle {
                 Ok(())
             }
             Performative::Transfer(transfer) => {
+                if self.state != ConnectionState::Opened {
+                    return Err(AmqpError::framing_error());
+                }
                 let mut input = payload.unwrap();
                 let message = Message::decode(&mut input)?;
                 let delivery = Delivery {
@@ -524,6 +463,9 @@ impl ConnectionHandle {
                 Ok(())
             }
             Performative::Disposition(disposition) => {
+                if self.state != ConnectionState::Opened {
+                    return Err(AmqpError::framing_error());
+                }
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
                 if let Some(local_channel) = local_channel_opt {
                     let session = self.sessions.get_mut(&local_channel).unwrap();
@@ -536,6 +478,9 @@ impl ConnectionHandle {
                 Ok(())
             }
             Performative::Detach(detach) => {
+                if self.state != ConnectionState::Opened {
+                    return Err(AmqpError::framing_error());
+                }
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
                 // Lookup session and remove link
                 if let Some(local_channel) = local_channel_opt {
@@ -550,6 +495,9 @@ impl ConnectionHandle {
                 }
             }
             Performative::End(end) => {
+                if self.state != ConnectionState::Opened {
+                    return Err(AmqpError::framing_error());
+                }
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
                 if let Some(local_channel) = local_channel_opt {
                     self.sessions.remove(&local_channel);
@@ -566,149 +514,13 @@ impl ConnectionHandle {
                     let id = self.id;
                     event_buffer.push(Event::RemoteClose(id, close.clone()));
                     self.sessions.clear();
-                    self.state = ConnectionState::Closing;
+                    if self.state != ConnectionState::Closed {
+                        self.state = ConnectionState::Closing;
+                    }
                 }
                 Ok(())
             }
-            _ => Err(AmqpError::framing_error()),
         }
-    }
-
-    fn local_open(self: &mut Self, event_buffer: &mut EventBuffer) {
-        let mut args = Open::new(self.container_id.as_str());
-        args.hostname = Some(self.hostname.clone());
-        args.channel_max = Some(self.channel_max);
-        args.idle_timeout = Some(self.idle_timeout.as_millis() as u32);
-
-        self.connection.open(args.clone());
-        event_buffer.push(Event::LocalOpen(self.id, args));
-    }
-
-    fn local_close(self: &mut Self, event_buffer: &mut EventBuffer) {
-        self.connection.close(Close {
-            error: self.close_condition.clone(),
-        });
-
-        let condition = self.close_condition.clone();
-        event_buffer.push(Event::LocalClose(self.id, condition));
-    }
-
-    fn local_begin(
-        connection: &mut Connection,
-        session: &Session,
-        connection_id: ConnectionId,
-        event_buffer: &mut EventBuffer,
-    ) {
-        let begin = Begin {
-            remote_channel: session.remote_channel,
-            next_outgoing_id: 0,
-            incoming_window: 10,
-            outgoing_window: 10,
-            handle_max: None,
-            offered_capabilities: None,
-            desired_capabilities: None,
-            properties: None,
-        };
-        connection.begin(session.local_channel, begin.clone());
-        event_buffer.push(Event::LocalBegin(
-            connection_id,
-            session.local_channel,
-            begin,
-        ));
-    }
-
-    fn local_attach(
-        connection: &mut Connection,
-        link: &Link,
-        local_channel: ChannelId,
-        connection_id: ConnectionId,
-        event_buffer: &mut EventBuffer,
-    ) {
-        let attach = Attach {
-            name: link.name.clone(),
-            handle: link.handle as u32,
-            role: link.role,
-            snd_settle_mode: None,
-            rcv_settle_mode: None,
-            source: link.source.clone(),
-            target: link.target.clone(),
-            unsettled: None,
-            incomplete_unsettled: None,
-            initial_delivery_count: if link.role == LinkRole::Sender {
-                Some(0)
-            } else {
-                None
-            },
-            max_message_size: None,
-            offered_capabilities: None,
-            desired_capabilities: None,
-            properties: None,
-        };
-        connection.attach(local_channel, attach.clone());
-
-        event_buffer.push(Event::LocalAttach(
-            connection_id,
-            local_channel,
-            link.handle,
-            attach,
-        ));
-    }
-
-    fn transfer(
-        connection: &mut Connection,
-        handle: HandleId,
-        delivery_id: u32,
-        local_channel: ChannelId,
-        delivery: Delivery,
-    ) -> Result<()> {
-        trace!("TX MESSAGE: {:?}", delivery.message);
-        let mut msgbuf = Vec::new();
-        delivery.message.encode(&mut msgbuf)?;
-
-        connection.transfer(
-            local_channel,
-            Transfer {
-                handle: handle,
-                delivery_id: Some(delivery_id),
-                delivery_tag: Some(delivery.tag),
-                message_format: Some(0),
-                settled: Some(false),
-                more: Some(false),
-                rcv_settle_mode: None,
-                state: None,
-                resume: None,
-                aborted: None,
-                batchable: None,
-            },
-            Some(msgbuf),
-        );
-        Ok(())
-    }
-
-    fn flow(
-        connection: &mut Connection,
-        handle: HandleId,
-        next_outgoing_id: u32,
-        local_channel: ChannelId,
-        amount: u32,
-    ) -> Result<()> {
-        connection.flow(
-            local_channel,
-            Flow {
-                next_incoming_id: None,
-                incoming_window: std::i32::MAX as u32,
-                next_outgoing_id: next_outgoing_id,
-                outgoing_window: std::i32::MAX as u32,
-                handle: Some(handle as u32),
-                delivery_count: None,
-                link_credit: Some(amount),
-                available: None,
-                drain: None,
-                echo: None,
-                properties: None,
-            },
-        );
-        Ok(())
     }
 }
 
@@ -741,7 +553,7 @@ impl Session {
                 handle: id,
                 next_message_id: 0,
                 role: LinkRole::Sender,
-                state: LinkState::Unmapped,
+                state: LinkState::Opening,
                 source: Some(Source {
                     address: None,
                     durable: None,
@@ -765,6 +577,7 @@ impl Session {
                     capabilities: None,
                 }),
                 opened: false,
+                closed: false,
                 tx: Vec::new(),
                 flow: Vec::new(),
             },
@@ -782,7 +595,7 @@ impl Session {
                 handle: id,
                 next_message_id: 0,
                 role: LinkRole::Receiver,
-                state: LinkState::Unmapped,
+                state: LinkState::Opening,
                 source: Some(Source {
                     address: address.map(|s| s.to_string()),
                     durable: None,
@@ -806,11 +619,62 @@ impl Session {
                     capabilities: None,
                 }),
                 opened: false,
+                closed: false,
                 tx: Vec::new(),
                 flow: Vec::new(),
             },
         );
         self.links.get_mut(&id).unwrap()
+    }
+
+    fn process(
+        self: &mut Self,
+        connection_id: ConnectionId,
+        connection: &mut Connection,
+        event_buffer: &mut EventBuffer,
+    ) -> Result<()> {
+        match self.state {
+            SessionState::Opening => {
+                if self.opened {
+                    let begin = Begin {
+                        remote_channel: self.remote_channel,
+                        next_outgoing_id: 0,
+                        incoming_window: 10,
+                        outgoing_window: 10,
+                        handle_max: None,
+                        offered_capabilities: None,
+                        desired_capabilities: None,
+                        properties: None,
+                    };
+                    connection.begin(self.local_channel, begin.clone())?;
+                    event_buffer.push(Event::LocalBegin(connection_id, self.local_channel, begin));
+                    self.state = SessionState::Opened;
+                }
+                Ok(())
+            }
+            SessionState::Opened => {
+                if self.closed {
+                    let end = End {
+                        error: self.end_condition.clone(),
+                    };
+                    connection.end(self.local_channel, end.clone())?;
+                    event_buffer.push(Event::LocalEnd(connection_id, self.local_channel, end));
+                    self.state = SessionState::Closing;
+                } else {
+                    for (_, link) in self.links.iter_mut() {
+                        self.next_outgoing_id += link.process(
+                            connection_id,
+                            connection,
+                            self.local_channel,
+                            self.next_outgoing_id,
+                            event_buffer,
+                        )?;
+                    }
+                }
+                Ok(())
+            }
+            SessionState::Closing | SessionState::Closed => Err(AmqpError::not_implemented()),
+        }
     }
 }
 
@@ -851,5 +715,108 @@ impl Link {
             remotely_settled: false,
             settled: false,
         });
+    }
+
+    fn process(
+        self: &mut Self,
+        connection_id: ConnectionId,
+        connection: &mut Connection,
+        local_channel: ChannelId,
+        next_outgoing_id: u32,
+        event_buffer: &mut EventBuffer,
+    ) -> Result<u32> {
+        match self.state {
+            LinkState::Opening => {
+                if self.opened {
+                    let attach = Attach {
+                        name: self.name.clone(),
+                        handle: self.handle as u32,
+                        role: self.role,
+                        snd_settle_mode: None,
+                        rcv_settle_mode: None,
+                        source: self.source.clone(),
+                        target: self.target.clone(),
+                        unsettled: None,
+                        incomplete_unsettled: None,
+                        initial_delivery_count: if self.role == LinkRole::Sender {
+                            Some(0)
+                        } else {
+                            None
+                        },
+                        max_message_size: None,
+                        offered_capabilities: None,
+                        desired_capabilities: None,
+                        properties: None,
+                    };
+                    connection.attach(local_channel, attach.clone())?;
+
+                    event_buffer.push(Event::LocalAttach(
+                        connection_id,
+                        local_channel,
+                        self.handle,
+                        attach,
+                    ));
+                    self.state = LinkState::Opened;
+                }
+                Ok(next_outgoing_id)
+            }
+            LinkState::Opened => {
+                if self.closed {
+                    Err(AmqpError::not_implemented())
+                } else {
+                    if self.role == LinkRole::Sender {
+                        let mut next_id = next_outgoing_id;
+                        for delivery in self.tx.drain(..) {
+                            let delivery_id = next_id;
+                            next_id += 1;
+
+                            trace!("TX MESSAGE: {:?}", delivery.message);
+                            let mut msgbuf = Vec::new();
+                            delivery.message.encode(&mut msgbuf)?;
+
+                            connection.transfer(
+                                local_channel,
+                                Transfer {
+                                    handle: self.handle,
+                                    delivery_id: Some(delivery_id),
+                                    delivery_tag: Some(delivery.tag),
+                                    message_format: Some(0),
+                                    settled: Some(false),
+                                    more: Some(false),
+                                    rcv_settle_mode: None,
+                                    state: None,
+                                    resume: None,
+                                    aborted: None,
+                                    batchable: None,
+                                },
+                                Some(msgbuf),
+                            )?;
+                        }
+                        Ok(next_id)
+                    } else {
+                        for amount in self.flow.drain(..) {
+                            connection.flow(
+                                local_channel,
+                                Flow {
+                                    next_incoming_id: None,
+                                    incoming_window: std::i32::MAX as u32,
+                                    next_outgoing_id: next_outgoing_id,
+                                    outgoing_window: std::i32::MAX as u32,
+                                    handle: Some(self.handle as u32),
+                                    delivery_count: None,
+                                    link_credit: Some(amount),
+                                    available: None,
+                                    drain: None,
+                                    echo: None,
+                                    properties: None,
+                                },
+                            )?;
+                        }
+                        Ok(next_outgoing_id)
+                    }
+                }
+            }
+            LinkState::Closing | LinkState::Closed => Err(AmqpError::not_implemented()),
+        }
     }
 }
