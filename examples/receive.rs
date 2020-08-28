@@ -3,15 +3,22 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+use dove::client::*;
 use dove::conn::*;
 use dove::driver::*;
 use dove::message::*;
 use dove::sasl::*;
-use dove::types::*;
 use std::env;
+use std::sync::mpsc::channel;
+use std::sync::mpsc::Sender;
+
+struct App {
+    address: String,
+    done: Sender<bool>,
+}
 
 /**
- * Example client that receives a single message from an AMQP endpoint.
+ * Example client that sends a single message to an AMQP endpoint.
  */
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -26,49 +33,30 @@ fn main() {
 
     let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
 
-    let connection = connect(&host, port, opts).expect("Error opening connection");
+    let (out, done) = channel::<bool>();
 
-    // For multiplexing connections
-    let mut driver = ConnectionDriver::new();
-    driver.register(1, connection);
-
-    let mut done = false;
-
-    let mut event_buffer = EventBuffer::new();
-    while !done {
-        match driver.poll(&mut event_buffer) {
-            Ok(_) => {
-                for event in event_buffer.drain(..) {
-                    match event {
-                        Event::ConnectionInit(cid) => {
-                            let conn = driver.connection(cid).unwrap();
-                            conn.open();
-
-                            let session = conn.create_session();
-                            session.open();
-
-                            let receiver = session.create_receiver(Some(address));
-                            receiver.open();
-                            receiver.flow(1);
-                        }
-                        Event::Delivery(cid, _, _, delivery) => {
-                            if let MessageBody::AmqpValue(Value::String(s)) = delivery.message.body
-                            {
-                                println!("Received message: {:?}", s);
-                                let conn = driver.connection(cid).unwrap();
-                                conn.close(None);
-                            }
-                        }
-                        Event::RemoteClose(_, _) => {
-                            done = true;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Err(e) => {
-                println!("Got error: {:?}", e);
-            }
+    impl EventHandler for App {
+        fn connected(&self, conn: &mut ConnectionHandle) {
+            conn.open();
+            let session = conn.create_session();
+            session.open();
+            let receiver = session.create_receiver(Some(self.address.as_str()));
+            receiver.open();
+            receiver.flow(1);
         }
-    }
+        fn delivery(&self, _: &mut Link, message: &Message) {
+            println!("Received: {:?}", message.body);
+            self.done.send(true).expect("Error signalling done");
+        }
+    };
+
+    let client = Client::new(Box::new(App {
+        address: address.to_string(),
+        done: out,
+    }));
+    client
+        .connect(&host, port, opts)
+        .expect("Error opening connection");
+
+    done.recv().unwrap();
 }

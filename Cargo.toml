@@ -17,6 +17,10 @@ name = "example_send_minimal"
 path = "examples/send_minimal.rs"
 
 [[bin]]
+name = "example_driver"
+path = "examples/driver.rs"
+
+[[bin]]
 name = "example_send"
 path = "examples/send.rs"
 
