@@ -8,6 +8,7 @@
 use log::trace;
 use rand::Rng;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::time::Duration;
 use std::time::Instant;
 use std::vec::Vec;
@@ -97,7 +98,9 @@ pub struct Link {
     target: Option<Target>,
     state: LinkState,
     next_message_id: u64,
-    tx: Vec<Delivery>,
+    deliveries: Vec<Delivery>,
+    dispositions: Vec<DeliveryDisposition>,
+    unacked: HashSet<Vec<u8>>,
     flow: Vec<u32>,
 }
 
@@ -108,6 +111,14 @@ pub struct Delivery {
     settled: bool,
     state: Option<DeliveryState>,
     tag: Vec<u8>,
+    id: u32,
+}
+
+#[derive(Debug)]
+pub struct DeliveryDisposition {
+    id: u32,
+    settled: bool,
+    state: DeliveryState,
 }
 
 pub type EventBuffer = Vec<Event>;
@@ -458,6 +469,7 @@ impl ConnectionHandle {
                 let delivery = Delivery {
                     state: transfer.state.clone(),
                     tag: transfer.delivery_tag.clone().unwrap(),
+                    id: transfer.delivery_id.unwrap(),
                     remotely_settled: transfer.settled.unwrap_or(false),
                     settled: false,
                     message: message,
@@ -591,7 +603,9 @@ impl Session {
                 }),
                 opened: false,
                 closed: false,
-                tx: Vec::new(),
+                deliveries: Vec::new(),
+                dispositions: Vec::new(),
+                unacked: HashSet::new(),
                 flow: Vec::new(),
             },
         );
@@ -633,7 +647,9 @@ impl Session {
                 }),
                 opened: false,
                 closed: false,
-                tx: Vec::new(),
+                deliveries: Vec::new(),
+                dispositions: Vec::new(),
+                unacked: HashSet::new(),
                 flow: Vec::new(),
             },
         );
@@ -721,12 +737,24 @@ impl Link {
 
         let delivery_tag = rand::thread_rng().gen::<[u8; 16]>();
 
-        self.tx.push(Delivery {
+        let delivery = Delivery {
             message: message,
+            id: 0, // Set by transfer
             tag: delivery_tag.to_vec(),
             state: None,
             remotely_settled: false,
             settled: false,
+        };
+
+        self.unacked.insert(delivery_tag.to_vec());
+        self.deliveries.push(delivery);
+    }
+
+    pub fn settle(self: &mut Self, delivery: &Delivery, settled: bool, state: DeliveryState) {
+        self.dispositions.push(DeliveryDisposition {
+            id: delivery.id,
+            settled: settled,
+            state: state,
         });
     }
 
@@ -779,7 +807,7 @@ impl Link {
                 } else {
                     if self.role == LinkRole::Sender {
                         let mut next_id = next_outgoing_id;
-                        for delivery in self.tx.drain(..) {
+                        for delivery in self.deliveries.drain(..) {
                             let delivery_id = next_id;
                             next_id += 1;
 
@@ -807,6 +835,19 @@ impl Link {
                         }
                         Ok(next_id)
                     } else {
+                        for disposition in self.dispositions.drain(..) {
+                            connection.disposition(
+                                local_channel,
+                                Disposition {
+                                    role: self.role,
+                                    first: disposition.id,
+                                    last: None,
+                                    settled: Some(disposition.settled),
+                                    state: Some(disposition.state),
+                                    batchable: None,
+                                },
+                            )?;
+                        }
                         for amount in self.flow.drain(..) {
                             connection.flow(
                                 local_channel,

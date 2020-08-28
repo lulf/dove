@@ -69,12 +69,12 @@ fn client() {
                                 sent = true;
                             }
                         }
-                        Event::Delivery(cid, _, _, delivery) => {
+                        Event::Delivery(cid, chan, handle, delivery) => {
                             println!("Received message: {:?}", delivery.message.body);
                             let conn = driver.connection(cid).unwrap();
-                            // let session = conn.get_session(chan).unwrap();
-                            // let link = session.get_link(handle).unwrap();
-                            // link.settle(delivery, DeliveryState::Accepted);
+                            let session = conn.get_session(chan).unwrap();
+                            let link = session.get_link(handle).unwrap();
+                            link.settle(&delivery, true, DeliveryState::Accepted);
                             conn.close(None);
                         }
                         Event::Disposition(_, _, disposition) => {
