@@ -85,6 +85,7 @@ pub struct Session {
     closed: bool,
     links: HashMap<HandleId, Link>,
     next_outgoing_id: u32,
+    unacked: HashSet<u32>,
 }
 
 #[derive(Debug)]
@@ -100,7 +101,6 @@ pub struct Link {
     next_message_id: u64,
     deliveries: Vec<Delivery>,
     dispositions: Vec<DeliveryDisposition>,
-    unacked: HashSet<Vec<u8>>,
     flow: Vec<u32>,
 }
 
@@ -255,6 +255,7 @@ impl ConnectionHandle {
             next_outgoing_id: 0,
             state: SessionState::Opening,
             links: HashMap::new(),
+            unacked: HashSet::new(),
         };
         self.sessions.insert(chan, s);
         channel_id.map(|c| self.remote_channel_map.insert(c, chan));
@@ -489,6 +490,10 @@ impl ConnectionHandle {
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
                 if let Some(local_channel) = local_channel_opt {
                     let session = self.sessions.get_mut(&local_channel).unwrap();
+                    let last = disposition.last.unwrap_or(disposition.first);
+                    for id in disposition.first..=last {
+                        session.unacked.remove(&id);
+                    }
                     event_buffer.push(Event::Disposition(
                         self.id,
                         session.local_channel,
@@ -605,7 +610,6 @@ impl Session {
                 closed: false,
                 deliveries: Vec::new(),
                 dispositions: Vec::new(),
-                unacked: HashSet::new(),
                 flow: Vec::new(),
             },
         );
@@ -649,7 +653,6 @@ impl Session {
                 closed: false,
                 deliveries: Vec::new(),
                 dispositions: Vec::new(),
-                unacked: HashSet::new(),
                 flow: Vec::new(),
             },
         );
@@ -694,6 +697,7 @@ impl Session {
                         self.next_outgoing_id = link.process(
                             connection_id,
                             connection,
+                            &mut self.unacked,
                             self.local_channel,
                             self.next_outgoing_id,
                             event_buffer,
@@ -746,7 +750,6 @@ impl Link {
             settled: false,
         };
 
-        self.unacked.insert(delivery_tag.to_vec());
         self.deliveries.push(delivery);
     }
 
@@ -762,6 +765,7 @@ impl Link {
         self: &mut Self,
         connection_id: ConnectionId,
         connection: &mut Connection,
+        unacked: &mut HashSet<u32>,
         local_channel: ChannelId,
         next_outgoing_id: u32,
         event_buffer: &mut EventBuffer,
@@ -815,6 +819,7 @@ impl Link {
                             let mut msgbuf = Vec::new();
                             delivery.message.encode(&mut msgbuf)?;
 
+                            unacked.insert(delivery_id);
                             connection.transfer(
                                 local_channel,
                                 Transfer {

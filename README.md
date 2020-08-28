@@ -13,7 +13,7 @@ Dove exposes a low level API that enables multiplexing of multiple connections a
 
 ## TODO
 
-* Support message acknowledgements for receiver and acknowledge state keeping for sender.
+* Better handling of unsettled and rejected delivery states.
 * TLS/SSL support
 * Improve SASL support (missing SCRAM* support)
 * Complete implementation of encoding+decoding for all AMQP 1.0 types.
