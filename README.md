@@ -22,7 +22,8 @@ The goal is to create a higher level API based on this to make it easier to writ
 
 * Cleaning up APIs (which parts should be private/public).
 * Cleaning up crate/module structure.
-* Experiment with Rust async
+* Use tokio-rs/mio IO library instead of current polling.
+* Experiment with Rust async and write a good API.
 * TLS/SSL support
 * Improve SASL support (missing SCRAM* support)
 * Complete implementation of encoding+decoding for all AMQP 1.0 types.
