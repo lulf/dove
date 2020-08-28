@@ -6,8 +6,9 @@
 //! The conn module contains basic primitives for establishing and accepting AMQP connections and performing the initial handshake. Once handshake is complete, the connection can be used to send and receive frames.
 
 use log::trace;
-use std::net::TcpListener;
-use std::net::TcpStream;
+use mio::net::TcpListener;
+use mio::net::TcpStream;
+use std::net::ToSocketAddrs;
 use std::time::Duration;
 use std::time::Instant;
 use std::vec::Vec;
@@ -77,7 +78,8 @@ const AMQP_10_HEADER: ProtocolHeader = ProtocolHeader::AMQP(Version(1, 0, 0));
 const SASL_10_HEADER: ProtocolHeader = ProtocolHeader::SASL(Version(1, 0, 0));
 
 pub fn connect(host: &str, port: u16, opts: ConnectionOptions) -> Result<Connection> {
-    let stream = TcpStream::connect(format!("{}:{}", host, port))?;
+    let mut addrs = format!("{}:{}", host, port).to_socket_addrs().unwrap();
+    let stream = TcpStream::connect(addrs.next().unwrap())?;
     let transport: Transport = Transport::new(stream, 1024)?;
 
     let mut connection = Connection::new(host, transport);
@@ -102,7 +104,8 @@ pub struct Listener {
 }
 
 pub fn listen(host: &str, port: u16, _opts: ListenOptions) -> Result<Listener> {
-    let listener = TcpListener::bind(format!("{}:{}", host, port))?;
+    let addr = format!("{}:{}", host, port).parse().unwrap();
+    let listener = TcpListener::bind(addr)?;
     Ok(Listener {
         listener: listener,
         sasl_mechanisms: None,

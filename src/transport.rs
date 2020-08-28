@@ -4,11 +4,11 @@
  */
 
 use log::trace;
+use mio::net::TcpStream;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
 use std::net::Shutdown;
-use std::net::TcpStream;
 use std::time::Instant;
 use std::vec::Vec;
 
@@ -129,7 +129,6 @@ pub struct Transport {
 
 impl Transport {
     pub fn new(stream: TcpStream, max_frame_size: usize) -> Result<Transport> {
-        stream.set_nonblocking(true)?;
         Ok(Transport {
             stream: stream,
             incoming: ReadBuffer::new(max_frame_size),

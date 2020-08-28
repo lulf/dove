@@ -9,6 +9,7 @@ use crate::driver::*;
 use crate::error::*;
 use crate::framing::*;
 use crate::message::*;
+use std::{thread, time};
 
 pub struct Client {
     handler: Box<dyn EventHandler + Send>,
@@ -38,7 +39,7 @@ impl Client {
 
         let mut driver = ConnectionDriver::new();
         driver.register(1, connection);
-        std::thread::spawn(move || loop {
+        thread::spawn(move || loop {
             let mut event_buffer = EventBuffer::new();
             match driver.poll(&mut event_buffer) {
                 Err(e) => {
@@ -99,6 +100,7 @@ impl Client {
                     }
                 }
             }
+            thread::sleep(time::Duration::from_millis(10));
         });
         Ok(())
     }

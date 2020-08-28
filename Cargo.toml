@@ -30,6 +30,7 @@ path = "examples/receive.rs"
 
 [dependencies]
 byteorder = "1.3.2"
+mio = { version = "0.7", features = ["tcp", "os-poll"] }
 uuid = { version = "0.7.4", features = ["v4"] }
 rand = "0.7.3"
 log = "0.4.11"
