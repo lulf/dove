@@ -5,23 +5,21 @@
 
 extern crate dove;
 
-use dove::core::*;
+use dove::conn::*;
+use dove::driver::*;
 use dove::framing::*;
 use dove::sasl::*;
 
 #[test]
 fn client() {
-    let mut opts = ConnectionOptions::new("ce8c4a3e-96b3-11e9-9bfd-c85b7644b4a4");
-    //opts.username = Some("test".to_string());
-    //opts.password = Some("test".to_string());
-    //opts.sasl_mechanism = Some(SaslMechanism::Plain);
-    opts.sasl_mechanism = Some(SaslMechanism::Anonymous);
+    let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
+    //    let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Plain).username("test").password("test");
 
-    let connection = connect(2, "localhost", 5672, opts).expect("Error opening connection");
+    let connection = connect("localhost", 5672, opts).expect("Error opening connection");
 
     let mut driver = ConnectionDriver::new();
 
-    driver.register(connection);
+    driver.register(2, connection);
 
     let mut event_buffer = EventBuffer::new();
     let mut sent = false;
@@ -71,12 +69,12 @@ fn client() {
                                 sent = true;
                             }
                         }
-                        Event::Delivery(cid, chan, handle, delivery) => {
+                        Event::Delivery(cid, _, _, delivery) => {
                             println!("Received message: {:?}", delivery.message.body);
                             let conn = driver.connection(cid).unwrap();
-                            let session = conn.get_session(chan).unwrap();
-                            let link = session.get_link(handle).unwrap();
-                            link.settle(delivery, DeliveryState::Accepted);
+                            // let session = conn.get_session(chan).unwrap();
+                            // let link = session.get_link(handle).unwrap();
+                            // link.settle(delivery, DeliveryState::Accepted);
                             conn.close(None);
                         }
                         Event::Disposition(_, _, disposition) => {

@@ -59,6 +59,7 @@ pub struct Connection {
     state: ConnectionState,
     transport: Transport,
     tx_frames: Vec<Frame>,
+    header_sent: bool,
 }
 
 pub type ChannelId = u16;
@@ -127,6 +128,7 @@ impl Connection {
             state: ConnectionState::Start,
             sasl: None,
             tx_frames: Vec::new(),
+            header_sent: false,
         }
     }
 
@@ -261,10 +263,13 @@ impl Connection {
     pub fn process(self: &mut Self, frames: &mut Vec<Frame>) -> Result<()> {
         match self.state {
             ConnectionState::Start => {
-                if self.skip_sasl() {
-                    self.transport.write_protocol_header(&AMQP_10_HEADER)?;
-                } else {
-                    self.transport.write_protocol_header(&SASL_10_HEADER)?;
+                if !self.header_sent {
+                    if self.skip_sasl() {
+                        self.transport.write_protocol_header(&AMQP_10_HEADER)?;
+                    } else {
+                        self.transport.write_protocol_header(&SASL_10_HEADER)?;
+                    }
+                    self.header_sent = true;
                 }
                 let header = self.transport.read_protocol_header()?;
                 if let Some(header) = header {
@@ -304,18 +309,19 @@ impl Connection {
             }
             ConnectionState::Sasl => {
                 let sasl = self.sasl.as_mut().unwrap();
-                sasl.perform_handshake(&mut self.transport)?;
                 match sasl.state {
                     SaslState::Success => {
+                        self.header_sent = false;
                         self.state = ConnectionState::Start;
                     }
                     SaslState::Failed => {
                         self.transport.close()?;
                         self.state = ConnectionState::Closed;
                     }
-                    _ => {}
+                    SaslState::InProgress => {
+                        sasl.perform_handshake(&mut self.transport)?;
+                    }
                 }
-                self.flush()?;
             }
             ConnectionState::Opened => {
                 self.flush()?;

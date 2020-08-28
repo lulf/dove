@@ -44,9 +44,11 @@ pub struct ConnectionHandle {
 
 #[derive(Debug, PartialEq, Eq)]
 enum ConnectionState {
+    Start,
     Opening,
     Opened,
     Closing,
+    CloseSent,
     Closed,
 }
 
@@ -199,7 +201,7 @@ impl ConnectionHandle {
             remote_container_id: String::new(),
             remote_channel_max: 0,
             remote_idle_timeout: Duration::from_millis(0),
-            state: ConnectionState::Opening,
+            state: ConnectionState::Start,
             opened: false,
             closed: false,
             sessions: HashMap::new(),
@@ -262,6 +264,10 @@ impl ConnectionHandle {
 
     fn do_work(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
         match self.state {
+            ConnectionState::Start => {
+                event_buffer.push(Event::ConnectionInit(self.id));
+                self.state = ConnectionState::Opening;
+            }
             ConnectionState::Opening => {
                 if self.opened {
                     let mut open = Open::new(self.container_id.as_str());
@@ -291,9 +297,10 @@ impl ConnectionHandle {
                     let condition = self.close_condition.clone();
                     event_buffer.push(Event::LocalClose(self.id, condition));
                 }
-                self.state = ConnectionState::Closed;
+                self.state = ConnectionState::CloseSent;
             }
-            ConnectionState::Closed => return Ok(()),
+            ConnectionState::CloseSent => {}
+            _ => return Ok(()),
         }
 
         // Process connection with new input
@@ -351,9 +358,10 @@ impl ConnectionHandle {
         payload: Option<Vec<u8>>,
         event_buffer: &mut EventBuffer,
     ) -> Result<()> {
+        trace!("State: {:?}. Performative: {:?}", self.state, performative);
         match performative {
             Performative::Open(open) => {
-                if self.state != ConnectionState::Opening || self.state != ConnectionState::Opened {
+                if self.state != ConnectionState::Opening && self.state != ConnectionState::Opened {
                     return Err(AmqpError::framing_error());
                 }
                 self.remote_container_id = open.container_id.clone();
@@ -364,7 +372,7 @@ impl ConnectionHandle {
                 Ok(())
             }
             Performative::Begin(begin) => {
-                if self.state != ConnectionState::Opened {
+                if self.state == ConnectionState::Opening || self.state == ConnectionState::Closed {
                     return Err(AmqpError::framing_error());
                 }
                 let id = self.id;
@@ -393,7 +401,7 @@ impl ConnectionHandle {
                 }
             }
             Performative::Attach(attach) => {
-                if self.state != ConnectionState::Opened {
+                if self.state == ConnectionState::Opening || self.state == ConnectionState::Closed {
                     return Err(AmqpError::framing_error());
                 }
                 trace!(
@@ -424,7 +432,7 @@ impl ConnectionHandle {
                 }
             }
             Performative::Flow(flow) => {
-                if self.state != ConnectionState::Opened {
+                if self.state == ConnectionState::Opening || self.state == ConnectionState::Closed {
                     return Err(AmqpError::framing_error());
                 }
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
@@ -442,7 +450,7 @@ impl ConnectionHandle {
                 Ok(())
             }
             Performative::Transfer(transfer) => {
-                if self.state != ConnectionState::Opened {
+                if self.state == ConnectionState::Opening || self.state == ConnectionState::Closed {
                     return Err(AmqpError::framing_error());
                 }
                 let mut input = payload.unwrap();
@@ -463,7 +471,7 @@ impl ConnectionHandle {
                 Ok(())
             }
             Performative::Disposition(disposition) => {
-                if self.state != ConnectionState::Opened {
+                if self.state == ConnectionState::Opening || self.state == ConnectionState::Closed {
                     return Err(AmqpError::framing_error());
                 }
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
@@ -478,7 +486,7 @@ impl ConnectionHandle {
                 Ok(())
             }
             Performative::Detach(detach) => {
-                if self.state != ConnectionState::Opened {
+                if self.state == ConnectionState::Opening || self.state == ConnectionState::Closed {
                     return Err(AmqpError::framing_error());
                 }
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
@@ -495,7 +503,7 @@ impl ConnectionHandle {
                 }
             }
             Performative::End(end) => {
-                if self.state != ConnectionState::Opened {
+                if self.state == ConnectionState::Opening || self.state == ConnectionState::Closed {
                     return Err(AmqpError::framing_error());
                 }
                 let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
@@ -510,11 +518,16 @@ impl ConnectionHandle {
                 }
             }
             Performative::Close(close) => {
+                if self.state == ConnectionState::Closed {
+                    return Err(AmqpError::framing_error());
+                }
                 if channel_id == 0 {
                     let id = self.id;
                     event_buffer.push(Event::RemoteClose(id, close.clone()));
                     self.sessions.clear();
-                    if self.state != ConnectionState::Closed {
+                    if self.state == ConnectionState::CloseSent {
+                        self.state = ConnectionState::Closed;
+                    } else if self.state != ConnectionState::Closed {
                         self.state = ConnectionState::Closing;
                     }
                 }
@@ -662,7 +675,7 @@ impl Session {
                     self.state = SessionState::Closing;
                 } else {
                     for (_, link) in self.links.iter_mut() {
-                        self.next_outgoing_id += link.process(
+                        self.next_outgoing_id = link.process(
                             connection_id,
                             connection,
                             self.local_channel,

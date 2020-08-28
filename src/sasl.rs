@@ -3,7 +3,6 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
-use log::trace;
 use std::str::FromStr;
 
 use crate::error::*;
@@ -92,10 +91,9 @@ impl Sasl {
                 let frame = transport.read_frame()?;
                 match frame {
                     Frame::SASL(SaslFrame::SaslMechanisms(mechs)) => {
-                        trace!(
+                        println!(
                             "Got mechs {:?}, we want: {:?}!",
-                            mechs,
-                            sasl_client.mechanism
+                            mechs, sasl_client.mechanism
                         );
                         let mut found = false;
                         for supported_mech in mechs.mechanisms.iter() {
@@ -131,13 +129,14 @@ impl Sasl {
                         }
                     }
                     Frame::SASL(SaslFrame::SaslOutcome(outcome)) => {
+                        println!("Sasl outcome {:?}", outcome);
                         if outcome.code == 0 {
                             self.state = SaslState::Success;
                         } else {
                             self.state = SaslState::Failed;
                         }
                     }
-                    _ => trace!("Got frame {:?}", frame),
+                    _ => println!("Got frame {:?}", frame),
                 }
             }
             SaslRole::Server(_) => {}
