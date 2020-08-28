@@ -6,8 +6,8 @@
 use dove::conn::*;
 use dove::framing::*;
 use dove::message::*;
-use dove::types::*;
 use dove::sasl::*;
+use dove::types::*;
 use std::env;
 
 /**
@@ -29,68 +29,58 @@ fn main() {
     let mut connection = connect(&host, port, opts).expect("Error opening connection");
 
     connection.open(Open::new("example-send-minimal")).unwrap();
-    connection.begin(0, Begin::new(0, std::u32::MAX, std::u32::MAX)).unwrap();
-    connection.attach(0, Attach {
-        name: address.to_string(),
-        handle: 0,
-        role: LinkRole::Sender,
-        target: Some(Target {
-            address: Some(address.to_string()),
-            durable: None,
-            expiry_policy: None,
-            timeout: None,
-            dynamic: Some(false),
-            dynamic_node_properties: None,
-            capabilities: None,
-        }),
-        initial_delivery_count: Some(0),
-        unsettled: None,
-        incomplete_unsettled: None,
-        snd_settle_mode: None,
-        rcv_settle_mode: None,
-        source: None,
-        max_message_size: None,
-        offered_capabilities: None,
-        desired_capabilities: None,
-        properties: None,
-    }).unwrap();
+    connection
+        .begin(0, Begin::new(0, std::u32::MAX, std::u32::MAX))
+        .unwrap();
+    connection
+        .attach(
+            0,
+            Attach::new(address, 0, LinkRole::Sender)
+                .target(Target::new().address(address))
+                .initial_delivery_count(0),
+        )
+        .unwrap();
 
     let mut buffer = Vec::new();
     message.encode(&mut buffer).unwrap();
 
-    loop {
+    let mut done = false;
+    while !done {
         let mut received = Vec::new();
-        connection.process(&mut received);
-        for frame in received.drain(..) {
-            println!("Process: {:?}", frame);
-            match frame {
-                Frame::AMQP(AmqpFrame{
-                    channel,
-                    performative,
-                    payload
-                }) => 
-                match performative {
-                    Some(Performative::Flow(_)) => {
-                        connection.transfer(0, Transfer {
-                            handle: 0,
-                            delivery_id: Some(0),
-                            delivery_tag: Some(vec![1]),
-                            settled: Some(true),
-                            aborted: None,
-                            batchable: None,
-                            message_format: None,
-                            rcv_settle_mode: None,
-                            resume: None,
-                            more: None,
-                            state: None,
+        let result = connection.process(&mut received);
+        match result {
+            Ok(_) => {
+                for frame in received.drain(..) {
+                    match frame {
+                        Frame::AMQP(AmqpFrame {
+                            channel: _,
+                            performative,
+                            payload: _,
+                        }) => match performative {
+                            Some(Performative::Flow(_)) => {
+                                connection
+                                    .transfer(
+                                        0,
+                                        Transfer::new(0)
+                                            .delivery_id(0)
+                                            .delivery_tag(&[1])
+                                            .settled(true),
+                                        Some(buffer.clone()),
+                                    )
+                                    .unwrap();
+                                connection.close(Close { error: None }).unwrap();
+                            }
+                            Some(Performative::Close(_)) => {
+                                done = true;
+                            }
+                            _ => {}
+                        },
 
-                        }, Some(buffer.clone())).unwrap();
-                        connection.close(Close{error: None}).unwrap();
+                        _ => {}
                     }
                 }
-                }
-                _ => {}
             }
+            _ => {}
         }
     }
 }

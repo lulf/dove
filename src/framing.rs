@@ -495,11 +495,11 @@ impl Encoder for End {
 }
 
 impl Attach {
-    pub fn decode(mut decoder: FrameDecoder) -> Result<Attach> {
-        let mut attach = Attach {
-            name: String::new(),
-            handle: 0,
-            role: LinkRole::Sender,
+    pub fn new(name: &str, handle: u32, role: LinkRole) -> Attach {
+        Attach {
+            name: name.to_string(),
+            handle: handle,
+            role: role,
             snd_settle_mode: None,
             rcv_settle_mode: None,
             source: None,
@@ -511,7 +511,26 @@ impl Attach {
             offered_capabilities: None,
             desired_capabilities: None,
             properties: None,
-        };
+        }
+    }
+
+    pub fn source(mut self, source: Source) -> Self {
+        self.source = Some(source);
+        self
+    }
+
+    pub fn target(mut self, target: Target) -> Self {
+        self.target = Some(target);
+        self
+    }
+
+    pub fn initial_delivery_count(mut self, initial_delivery_count: u32) -> Self {
+        self.initial_delivery_count = Some(initial_delivery_count);
+        self
+    }
+
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Attach> {
+        let mut attach = Attach::new("", 0, LinkRole::Sender);
         decoder.decode_required(&mut attach.name)?;
         decoder.decode_required(&mut attach.handle)?;
         decoder.decode_required(&mut attach.role)?;
@@ -624,9 +643,9 @@ impl Encoder for Flow {
 }
 
 impl Transfer {
-    pub fn decode(mut decoder: FrameDecoder) -> Result<Transfer> {
-        let mut transfer = Transfer {
-            handle: 0,
+    pub fn new(handle: u32) -> Transfer {
+        Transfer {
+            handle: handle,
             delivery_id: None,
             delivery_tag: None,
             message_format: None,
@@ -637,7 +656,26 @@ impl Transfer {
             resume: Some(false),
             aborted: Some(false),
             batchable: Some(false),
-        };
+        }
+    }
+
+    pub fn delivery_id(mut self, delivery_id: u32) -> Self {
+        self.delivery_id = Some(delivery_id);
+        self
+    }
+
+    pub fn delivery_tag(mut self, delivery_tag: &[u8]) -> Self {
+        self.delivery_tag = Some(delivery_tag.to_vec());
+        self
+    }
+
+    pub fn settled(mut self, settled: bool) -> Self {
+        self.settled = Some(settled);
+        self
+    }
+
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Transfer> {
+        let mut transfer = Transfer::new(0);
         decoder.decode_required(&mut transfer.handle)?;
         decoder.decode_optional(&mut transfer.delivery_id)?;
         decoder.decode_optional(&mut transfer.delivery_tag)?;
@@ -757,8 +795,8 @@ impl Encoder for Source {
 }
 
 impl Target {
-    pub fn decode(mut decoder: FrameDecoder) -> Result<Target> {
-        let mut target = Target {
+    pub fn new() -> Target {
+        Target {
             address: None,
             durable: None,
             expiry_policy: None,
@@ -766,7 +804,16 @@ impl Target {
             dynamic: None,
             dynamic_node_properties: None,
             capabilities: None,
-        };
+        }
+    }
+
+    pub fn address(mut self, address: &str) -> Self {
+        self.address = Some(address.to_string());
+        self
+    }
+
+    pub fn decode(mut decoder: FrameDecoder) -> Result<Target> {
+        let mut target = Target::new();
         decoder.decode_optional(&mut target.address)?;
         decoder.decode_optional(&mut target.durable)?;
         decoder.decode_optional(&mut target.expiry_policy)?;
