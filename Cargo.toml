@@ -13,6 +13,10 @@ name = "dove"
 src = "src/lib.rs"
 
 [[bin]]
+name = "example_send_minimal"
+path = "examples/send_minimal.rs"
+
+[[bin]]
 name = "example_send"
 path = "examples/send.rs"
 
