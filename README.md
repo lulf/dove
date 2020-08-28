@@ -7,20 +7,28 @@ Dove aims to be an AMQP 1.0 implementation with the following properties:
 * Low footprint - efficient memory usage and pay only for what you use.
 * Portable - minimize the number of dependencies and use portable APIs.
 
-The library supports only the basics right now: Establishing connections, creating sessions, links and sending and receiving message, except that message acknowledgements are not handled yet :) Most AMQP 1.0 types have been implemented, and conversion for many Rust native types exists. Support for SASL ANONYMOUS and PLAIN.
+The library supports only the basics right now: Establishing connections, creating sessions, links and sending and receiving message. Most AMQP 1.0 types have been implemented, and conversion for many Rust native types exists. Support for SASL ANONYMOUS and PLAIN.
 
-Dove exposes a low level API that enables multiplexing of multiple connections and processing events for those connections. The goal is to create a higher level API based on this to make it easier to write AMQP clients.
+Dove exposes three different APIs:
+
+* A connection API that allows you to send and receive frames defined as rust types. This could be
+  useful for embedded systems.
+* A driver API that enables multiplexing of multiple connections and processing events for those connections.
+* A client reactor-like API with an event handler.
+
+The goal is to create a higher level API based on this to make it easier to write AMQP clients.
 
 ## TODO
 
-* Better handling of unsettled and rejected delivery states.
+* Cleaning up APIs (which parts should be private/public).
+* Cleaning up crate/module structure.
+* Experiment with Rust async
 * TLS/SSL support
 * Improve SASL support (missing SCRAM* support)
 * Complete implementation of encoding+decoding for all AMQP 1.0 types.
 * Improve test coverage.
 * A higher level API for messaging clients to improve ease of use
 * Compile to WASM.
-* Figure out public vs private APIs.
 
 ## Examples
 
