@@ -13,8 +13,8 @@ name = "dove"
 src = "src/lib.rs"
 
 [[bin]]
-name = "example_send_minimal"
-path = "examples/send_minimal.rs"
+name = "example_send_framing"
+path = "examples/send_framing.rs"
 
 [[bin]]
 name = "example_driver"

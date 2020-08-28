@@ -18,7 +18,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 5 {
-        println!("Usage: ./example_send localhost 5672 myqueue 'Hello, world'");
+        println!("Usage: ./example_send_framing localhost 5672 myqueue 'Hello, world'");
         std::process::exit(1);
     }
     let host = &args[1];
