@@ -3,7 +3,8 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
-use dove::core::*;
+use dove::conn::*;
+use dove::driver::*;
 use dove::framing::*;
 use dove::sasl::*;
 use std::env;
@@ -23,14 +24,12 @@ fn main() {
     let address = &args[3];
     let message = &args[4];
 
-    let mut opts = ConnectionOptions::new("example-send");
-    opts.sasl_mechanism = Some(SaslMechanism::Anonymous);
-
-    let connection = connect(1, &host, port, opts).expect("Error opening connection");
+    let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
+    let connection = connect(&host, port, opts).expect("Error opening connection");
 
     // For multiplexing connections
     let mut driver = ConnectionDriver::new();
-    driver.register(connection);
+    driver.register(1, connection);
 
     let mut done = false;
 
