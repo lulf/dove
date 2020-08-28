@@ -37,4 +37,5 @@ Client examples can be found in the [examples/](https://github.com/lulf/dove/tre
 * framing - API for frame types and encoding/decoding of frames
 * transport - API for the underlying transport/network
 * sasl - SASL handling
-* core - Low level API for writing AMQP clients
+* conn - Low level API for sending and recieving frames on a connection
+* driver - Low level API for multiplexing events from multiple connections
