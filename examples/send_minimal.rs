@@ -11,7 +11,8 @@ use dove::types::*;
 use std::env;
 
 /**
- * Example client that sends a single message to an AMQP endpoint with minimal dependencies.
+ * Example client that sends a single message to an AMQP endpoint with minimal dependencies and sending
+ * and receiving frames directly on a connection.
  */
 fn main() {
     let args: Vec<String> = env::args().collect();
