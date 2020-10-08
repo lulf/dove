@@ -16,3 +16,4 @@ services:
 
 before_install:
   - docker run -d -p 5672:5672 -e ARTEMIS_USERNAME=test -e ARTEMIS_PASSWORD=test -t docker.io/vromero/activemq-artemis:2-latest
+  - sleep 20 # Allow some time to start
