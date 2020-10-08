@@ -5,16 +5,19 @@
 
 //! The client module contains a simple client API for sending and receiving messages.
 use crate::conn::*;
-use crate::driver::*;
+// use crate::driver::*;
 use crate::error::*;
-use crate::framing::*;
-use crate::message::*;
-use std::{thread, time};
+// use crate::framing::*;
+// use crate::message::*;
+// use std::{thread, time};
 
-pub struct Client {
-    handler: Box<dyn EventHandler + Send>,
+pub struct Client {}
+
+pub struct Connection {
+    // handle: ConnectionHandle,
 }
 
+/*
 pub trait EventHandler {
     fn connected(&self, _: &mut ConnectionDriver) {}
     fn delivery(&self, _: &mut Link, _: &Message) {}
@@ -28,18 +31,24 @@ pub trait EventHandler {
     fn detach(&self, _: &mut Link) {}
     fn error(&self, _: AmqpError) {}
 }
+*/
 
 impl Client {
-    pub fn new(handler: Box<dyn EventHandler + Send>) -> Client {
-        Client { handler: handler }
+    pub fn new() -> Client {
+        Client {}
     }
 
-    pub fn connect(self, host: &str, port: u16, opts: ConnectionOptions) -> Result<()> {
-        let connection = crate::conn::connect(host, port, opts)?;
+    pub async fn connect(
+        self,
+        _host: &str,
+        _port: u16,
+        _opts: ConnectionOptions,
+    ) -> Result<Connection> {
+        //        let handle = crate::conn::connect(host, port, opts);
+        return Ok(Connection {});
 
         /*
         let mut driver = ConnectionDriver::new(connection);
-        driver.register(1, connection)?;
         thread::spawn(move || loop {
             let mut event_buffer = EventBuffer::new();
             match driver.poll(&mut event_buffer, None) {
@@ -107,3 +116,27 @@ impl Client {
         Ok(())
     }
 }
+
+impl Connection {
+    pub async fn new_session(&self) -> Result<Session> {
+        return Ok(Session {});
+    }
+}
+
+pub struct Session {}
+
+impl Session {
+    pub async fn new_sender(&self, _addr: &str) -> Result<Sender> {
+        return Ok(Sender {});
+    }
+}
+
+pub struct Sender {}
+
+impl Sender {
+    pub async fn send(&self, _data: &str) -> Result<Disposition> {
+        return Ok(Disposition {});
+    }
+}
+
+pub struct Disposition {}
