@@ -5,18 +5,9 @@
 
 use dove::client::*;
 use dove::conn::*;
-use dove::driver::*;
-use dove::framing::*;
 use dove::sasl::*;
+use futures::executor::block_on;
 use std::env;
-use std::sync::mpsc::channel;
-use std::sync::mpsc::Sender;
-
-struct App {
-    address: String,
-    message: String,
-    done: Sender<bool>,
-}
 
 /**
  * Example client that sends a single message to an AMQP endpoint.
@@ -35,32 +26,26 @@ fn main() {
 
     let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
 
-    let (out, done) = channel::<bool>();
+    // Client handle represents an AMQP 1.0 container.
+    let client = Client::new();
 
-    impl EventHandler for App {
-        fn connected(&self, conn: &mut ConnectionHandle) {
-            conn.open();
-            let session = conn.create_session();
-            session.open();
-            let sender = session.create_sender(Some(self.address.as_str()));
-            sender.open();
-        }
-        fn flow(&self, link: &mut Link) {
-            link.send(self.message.as_str());
-        }
-        fn disposition(&self, _: &Disposition) {
-            self.done.send(true).expect("Error signalling done");
-        }
-    };
+    // connect creates the TCP connection and sends OPEN frame.
+    block_on(async {
+        let connection = client
+            .connect(&host, port, opts)
+            .await
+            .expect("connection not created");
 
-    let client = Client::new(Box::new(App {
-        address: address.to_string(),
-        message: message.to_string(),
-        done: out,
-    }));
-    client
-        .connect(&host, port, opts)
-        .expect("Error opening connection");
+        // new_session creates the AMQP session.
+        let session = connection.new_session().await.expect("session not created");
 
-    done.recv().unwrap();
+        // new_sender creates the AMQP sender link.
+        let sender = session
+            .new_sender(address)
+            .await
+            .expect("sender not created");
+
+        //  Send message and get delivery.
+        let delivery = sender.send(message).await.expect("delivery not received");
+    });
 }
