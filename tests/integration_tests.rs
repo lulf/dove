@@ -12,10 +12,13 @@ use dove::sasl::*;
 
 #[test]
 fn client() {
-    let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
-    //    let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Plain).username("test").password("test");
+    //let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
+    let opts = ConnectionOptions::new()
+        .sasl_mechanism(SaslMechanism::Plain)
+        .username("test")
+        .password("test");
 
-    let connection = connect("localhost", 5672, opts).expect("Error opening connection");
+    let connection = connect("127.0.0.1", 5672, opts).expect("Error opening connection");
 
     let mut driver = ConnectionDriver::new();
 
