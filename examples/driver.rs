@@ -28,15 +28,17 @@ fn main() {
     let connection = connect(&host, port, opts).expect("Error opening connection");
 
     // For multiplexing connections
-    let mut driver = ConnectionDriver::new();
-    driver.register(1, connection);
+    let mut driver = ConnectionDriver::new().expect("error creating driver");
+    driver
+        .register(1, connection)
+        .expect("error registering connection with driver");
 
     let mut done = false;
     let mut sent = false;
     let mut event_buffer = EventBuffer::new();
 
     while !done {
-        match driver.poll(&mut event_buffer) {
+        match driver.poll(&mut event_buffer, None) {
             Ok(_) => {
                 for event in event_buffer.drain(..) {
                     match event {

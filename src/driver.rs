@@ -6,6 +6,7 @@
 //! The driver module contains a event-based connection driver that drives the connection state machine of one or more connections.
 
 use log::trace;
+use mio::{Events, Interest, Poll, Token};
 use rand::Rng;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -22,6 +23,8 @@ use crate::types::*;
 #[derive(Debug)]
 pub struct ConnectionDriver {
     connections: HashMap<ConnectionId, ConnectionHandle>,
+    poll: Poll,
+    events: Events,
 }
 
 #[derive(Debug)]
@@ -151,10 +154,12 @@ pub enum Event {
 }
 
 impl ConnectionDriver {
-    pub fn new() -> ConnectionDriver {
-        ConnectionDriver {
+    pub fn new() -> Result<ConnectionDriver> {
+        Ok(ConnectionDriver {
             connections: HashMap::new(),
-        }
+            poll: Poll::new()?,
+            events: Events::with_capacity(1024),
+        })
     }
 
     /// Register a new connection to be managed by this driver.
@@ -163,9 +168,16 @@ impl ConnectionDriver {
     /// let connection = connect("localhost:5672")?;
     /// let driver = ConnectionDriver::new();
     /// let handle = driver.register(connection);
-    pub fn register(self: &mut Self, handle: ConnectionId, connection: Connection) {
-        self.connections
-            .insert(handle, ConnectionHandle::new(handle, connection));
+    pub fn register(self: &mut Self, id: ConnectionId, connection: Connection) -> Result<()> {
+        let mut handle = ConnectionHandle::new(id, connection);
+        let t = Token(id);
+        self.poll.registry().register(
+            &mut handle.connection,
+            t,
+            Interest::READABLE | Interest::WRITABLE,
+        )?;
+        self.connections.insert(id, handle);
+        Ok(())
     }
 
     pub fn connection(self: &mut Self, handle: ConnectionId) -> Option<&mut ConnectionHandle> {
@@ -173,9 +185,16 @@ impl ConnectionDriver {
     }
 
     // Poll for events on one of the handles registered with this driver and push the events to the provided buffer.
-    pub fn poll(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
-        for (_id, conn) in self.connections.iter_mut() {
-            let found = conn.poll(event_buffer);
+    pub fn poll(
+        self: &mut Self,
+        event_buffer: &mut EventBuffer,
+        timeout: Option<Duration>,
+    ) -> Result<()> {
+        self.poll.poll(&mut self.events, timeout)?;
+        for event in &self.events {
+            let Token(cid) = event.token();
+            let conn = self.connections.get_mut(&cid).unwrap();
+            let found = conn.poll_events(event_buffer);
             match found {
                 Err(AmqpError::IoError(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(e) => return Err(e),
@@ -267,7 +286,7 @@ impl ConnectionHandle {
         self.close_condition = condition;
     }
 
-    fn poll(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<bool> {
+    fn poll_events(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<bool> {
         let before = event_buffer.len();
         self.do_work(event_buffer)?;
 

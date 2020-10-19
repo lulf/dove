@@ -13,8 +13,7 @@ The library supports only the basics right now: Establishing connections, creati
 
 Dove exposes three different APIs:
 
-* A connection API that allows you to send and receive frames defined as rust types. This could be
-  useful for embedded systems.
+* A connection API that allows you to send and receive frames defined as rust types.
 * A driver API that enables multiplexing of multiple connections and processing events for those connections.
 * A client reactor-like API with an event handler.
 
@@ -31,6 +30,7 @@ The goal is to create a higher level API based on this to make it easier to writ
 * Complete implementation of encoding+decoding for all AMQP 1.0 types.
 * Improve test coverage.
 * A higher level API for messaging clients to improve ease of use
+* Make transport layer pluggable (for embedded use cases where mio is not possible).
 * Compile to WASM.
 
 ## Examples

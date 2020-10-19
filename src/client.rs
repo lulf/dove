@@ -37,11 +37,11 @@ impl Client {
     pub fn connect(self, host: &str, port: u16, opts: ConnectionOptions) -> Result<()> {
         let connection = crate::conn::connect(host, port, opts)?;
 
-        let mut driver = ConnectionDriver::new();
-        driver.register(1, connection);
+        let mut driver = ConnectionDriver::new()?;
+        driver.register(1, connection)?;
         thread::spawn(move || loop {
             let mut event_buffer = EventBuffer::new();
-            match driver.poll(&mut event_buffer) {
+            match driver.poll(&mut event_buffer, None) {
                 Err(e) => {
                     self.handler.error(e);
                 }

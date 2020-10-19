@@ -4,7 +4,9 @@
  */
 
 use log::trace;
+use mio::event::Source;
 use mio::net::TcpStream;
+use mio::{Interest, Registry, Token};
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
@@ -216,6 +218,30 @@ impl Transport {
 
     pub fn last_sent(self: &Self) -> Instant {
         self.last_sent
+    }
+}
+
+impl Source for Transport {
+    fn register(
+        &mut self,
+        registry: &Registry,
+        token: Token,
+        interests: Interest,
+    ) -> std::io::Result<()> {
+        self.stream.register(registry, token, interests)
+    }
+
+    fn reregister(
+        &mut self,
+        registry: &Registry,
+        token: Token,
+        interests: Interest,
+    ) -> std::io::Result<()> {
+        self.stream.reregister(registry, token, interests)
+    }
+
+    fn deregister(&mut self, registry: &Registry) -> std::io::Result<()> {
+        self.stream.deregister(registry)
     }
 }
 

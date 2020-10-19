@@ -6,8 +6,10 @@
 //! The conn module contains basic primitives for establishing and accepting AMQP connections and performing the initial handshake. Once handshake is complete, the connection can be used to send and receive frames.
 
 use log::trace;
+use mio::event::Source;
 use mio::net::TcpListener;
 use mio::net::TcpStream;
+use mio::{Interest, Registry, Token};
 use std::net::ToSocketAddrs;
 use std::time::Duration;
 use std::time::Instant;
@@ -338,5 +340,29 @@ impl Connection {
             }
         }
         Ok(())
+    }
+}
+
+impl Source for Connection {
+    fn register(
+        &mut self,
+        registry: &Registry,
+        token: Token,
+        interests: Interest,
+    ) -> std::io::Result<()> {
+        self.transport.register(registry, token, interests)
+    }
+
+    fn reregister(
+        &mut self,
+        registry: &Registry,
+        token: Token,
+        interests: Interest,
+    ) -> std::io::Result<()> {
+        self.transport.reregister(registry, token, interests)
+    }
+
+    fn deregister(&mut self, registry: &Registry) -> std::io::Result<()> {
+        self.transport.deregister(registry)
     }
 }

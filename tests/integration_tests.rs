@@ -20,16 +20,18 @@ fn client() {
 
     let connection = connect("127.0.0.1", 5672, opts).expect("Error opening connection");
 
-    let mut driver = ConnectionDriver::new();
+    let mut driver = ConnectionDriver::new().unwrap();
 
-    driver.register(2, connection);
+    driver
+        .register(2, connection)
+        .expect("error registering connection");
 
     let mut event_buffer = EventBuffer::new();
     let mut sent = false;
     let mut done = false;
 
     while !done {
-        match driver.poll(&mut event_buffer) {
+        match driver.poll(&mut event_buffer, None) {
             Ok(_) => {
                 for event in event_buffer.drain(..) {
                     match event {
