@@ -27,6 +27,7 @@ fn main() {
     let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
     let connection = connect(&host, port, opts).expect("Error opening connection");
 
+    /*
     // For multiplexing connections
     let mut driver = ConnectionDriver::new().expect("error creating driver");
     driver
@@ -97,4 +98,5 @@ fn main() {
             }
         }
     }
+    */
 }

@@ -6,7 +6,8 @@
 //! The driver module contains a event-based connection driver that drives the connection state machine of one or more connections.
 
 use log::trace;
-use mio::{Events, Interest, Poll, Token};
+use mio::event;
+use mio::{Interest, Registry, Token};
 use rand::Rng;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -22,13 +23,6 @@ use crate::types::*;
 
 #[derive(Debug)]
 pub struct ConnectionDriver {
-    connections: HashMap<ConnectionId, ConnectionHandle>,
-    poll: Poll,
-    events: Events,
-}
-
-#[derive(Debug)]
-pub struct ConnectionHandle {
     pub id: ConnectionId,
     pub container_id: String,
     pub hostname: String,
@@ -153,58 +147,6 @@ pub enum Event {
     Delivery(ConnectionId, ChannelId, HandleId, Delivery),
 }
 
-impl ConnectionDriver {
-    pub fn new() -> Result<ConnectionDriver> {
-        Ok(ConnectionDriver {
-            connections: HashMap::new(),
-            poll: Poll::new()?,
-            events: Events::with_capacity(1024),
-        })
-    }
-
-    /// Register a new connection to be managed by this driver.
-    /// # Examples
-    /// use dove::core::ConnectionDriver
-    /// let connection = connect("localhost:5672")?;
-    /// let driver = ConnectionDriver::new();
-    /// let handle = driver.register(connection);
-    pub fn register(self: &mut Self, id: ConnectionId, connection: Connection) -> Result<()> {
-        let mut handle = ConnectionHandle::new(id, connection);
-        let t = Token(id);
-        self.poll.registry().register(
-            &mut handle.connection,
-            t,
-            Interest::READABLE | Interest::WRITABLE,
-        )?;
-        self.connections.insert(id, handle);
-        Ok(())
-    }
-
-    pub fn connection(self: &mut Self, handle: ConnectionId) -> Option<&mut ConnectionHandle> {
-        self.connections.get_mut(&handle)
-    }
-
-    // Poll for events on one of the handles registered with this driver and push the events to the provided buffer.
-    pub fn poll(
-        self: &mut Self,
-        event_buffer: &mut EventBuffer,
-        timeout: Option<Duration>,
-    ) -> Result<()> {
-        self.poll.poll(&mut self.events, timeout)?;
-        for event in &self.events {
-            let Token(cid) = event.token();
-            let conn = self.connections.get_mut(&cid).unwrap();
-            let found = conn.poll_events(event_buffer);
-            match found {
-                Err(AmqpError::IoError(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(e) => return Err(e),
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-}
-
 fn unwrap_frame(frame: Frame) -> Result<(ChannelId, Option<Performative>, Option<Vec<u8>>)> {
     match frame {
         Frame::AMQP(AmqpFrame {
@@ -218,10 +160,10 @@ fn unwrap_frame(frame: Frame) -> Result<(ChannelId, Option<Performative>, Option
     }
 }
 
-impl ConnectionHandle {
-    pub fn new(id: ConnectionId, connection: Connection) -> ConnectionHandle {
+impl ConnectionDriver {
+    pub fn new(id: ConnectionId, connection: Connection) -> ConnectionDriver {
         let hostname = connection.hostname.clone();
-        ConnectionHandle {
+        ConnectionDriver {
             id: id,
             container_id: "dove".to_string(),
             hostname: hostname,
@@ -286,14 +228,20 @@ impl ConnectionHandle {
         self.close_condition = condition;
     }
 
-    fn poll_events(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<bool> {
-        let before = event_buffer.len();
-        self.do_work(event_buffer)?;
-
-        Ok(before != event_buffer.len())
+    /**
+     * Do work on this connection until progress cannot be made.
+     */
+    pub fn do_work(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
+        let output_result = self.process_output(event_buffer);
+        let input_result = self.process_input(event_buffer);
+        match (output_result, input_result) {
+            (Err(e), _) => Err(e),
+            (_, Err(e)) => Err(e),
+            _ => Ok(()),
+        }
     }
 
-    fn do_work(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
+    fn process_output(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
         match self.state {
             ConnectionState::Start => {
                 event_buffer.push(Event::ConnectionInit(self.id));
@@ -333,7 +281,10 @@ impl ConnectionHandle {
             ConnectionState::CloseSent => {}
             _ => return Ok(()),
         }
+        Ok(())
+    }
 
+    fn process_input(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
         // Process connection with new input
         let mut rx_frames = Vec::new();
         self.connection.process(&mut rx_frames)?;
@@ -896,5 +847,29 @@ impl Link {
             }
             LinkState::Closing | LinkState::Closed => Err(AmqpError::not_implemented()),
         }
+    }
+}
+
+impl event::Source for ConnectionDriver {
+    fn register(
+        &mut self,
+        registry: &Registry,
+        token: Token,
+        interests: Interest,
+    ) -> std::io::Result<()> {
+        self.connection.register(registry, token, interests)
+    }
+
+    fn reregister(
+        &mut self,
+        registry: &Registry,
+        token: Token,
+        interests: Interest,
+    ) -> std::io::Result<()> {
+        self.connection.reregister(registry, token, interests)
+    }
+
+    fn deregister(&mut self, registry: &Registry) -> std::io::Result<()> {
+        self.connection.deregister(registry)
     }
 }

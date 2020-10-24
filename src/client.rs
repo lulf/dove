@@ -16,12 +16,12 @@ pub struct Client {
 }
 
 pub trait EventHandler {
-    fn connected(&self, _: &mut ConnectionHandle) {}
+    fn connected(&self, _: &mut ConnectionDriver) {}
     fn delivery(&self, _: &mut Link, _: &Message) {}
-    fn open(&self, _: &mut ConnectionHandle) {}
+    fn open(&self, _: &mut ConnectionDriver) {}
     fn flow(&self, _: &mut Link) {}
     fn disposition(&self, _: &Disposition) {}
-    fn close(&self, _: &mut ConnectionHandle) {}
+    fn close(&self, _: &mut ConnectionDriver) {}
     fn begin(&self, _: &mut Session) {}
     fn end(&self, _: &mut Session) {}
     fn attach(&self, _: &mut Link) {}
@@ -37,7 +37,8 @@ impl Client {
     pub fn connect(self, host: &str, port: u16, opts: ConnectionOptions) -> Result<()> {
         let connection = crate::conn::connect(host, port, opts)?;
 
-        let mut driver = ConnectionDriver::new()?;
+        /*
+        let mut driver = ConnectionDriver::new(connection);
         driver.register(1, connection)?;
         thread::spawn(move || loop {
             let mut event_buffer = EventBuffer::new();
@@ -102,6 +103,7 @@ impl Client {
             }
             thread::sleep(time::Duration::from_millis(10));
         });
+        */
         Ok(())
     }
 }
