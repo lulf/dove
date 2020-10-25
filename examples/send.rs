@@ -48,5 +48,5 @@ fn main() {
 
         //  Send message and get delivery.
         let delivery = sender.send(message).await.expect("delivery not received");
-    });
+    });*/
 }

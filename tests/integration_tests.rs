@@ -5,11 +5,13 @@
 
 extern crate dove;
 
+use dove::client::*;
 use dove::conn::*;
 use dove::driver::*;
 use dove::error::*;
 use dove::framing::*;
 use dove::sasl::*;
+use futures::executor::block_on;
 use mio::{Events, Interest, Poll, Registry, Token};
 use std::time::Duration;
 
@@ -128,6 +130,52 @@ fn client() {
             }
         }
     }
+}
+
+#[test]
+fn client_async() {
+    // Client handle represents an AMQP 1.0 container.
+    let client = Client::new();
+
+    let host = "127.0.0.1";
+    let port = 5672;
+
+    // connect creates the TCP connection and sends OPEN frame.
+    block_on(async {
+        let opts = ConnectionOptions::new()
+            .sasl_mechanism(SaslMechanism::Plain)
+            .username("test")
+            .password("test");
+        let connection = client
+            .connect(host, port, opts)
+            .await
+            .expect("connection not created");
+
+        // new_session creates the AMQP session.
+        let session = connection.new_session().await.expect("session not created");
+
+        // new_sender creates the AMQP sender link.
+        let sender = session
+            .new_sender("myqueue")
+            .await
+            .expect("sender not created");
+
+        //  Send message and get disposition.
+        let disposition = sender
+            .send("Hello, World")
+            .await
+            .expect("disposition not received");
+
+        let receiver = session
+            .new_receiver("myqueue")
+            .await
+            .expect("receiver not created");
+
+        let delivery = receiver.receive().await.expect("unable to receive message");
+
+        let message = delivery.message().expect("unable to decode message");
+        assert!(message == "Hello, World");
+    });
 }
 
 //#[test]

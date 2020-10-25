@@ -40,11 +40,11 @@ impl Client {
 
     pub async fn connect(
         self,
-        _host: &str,
-        _port: u16,
-        _opts: ConnectionOptions,
+        host: &str,
+        port: u16,
+        opts: ConnectionOptions,
     ) -> Result<Connection> {
-        //        let handle = crate::conn::connect(host, port, opts);
+        let handle = crate::conn::connect(host, port, opts);
         return Ok(Connection {});
 
         /*
@@ -113,7 +113,6 @@ impl Client {
             thread::sleep(time::Duration::from_millis(10));
         });
         */
-        Ok(())
     }
 }
 
@@ -129,6 +128,9 @@ impl Session {
     pub async fn new_sender(&self, _addr: &str) -> Result<Sender> {
         return Ok(Sender {});
     }
+    pub async fn new_receiver(&self, _addr: &str) -> Result<Receiver> {
+        return Ok(Receiver {});
+    }
 }
 
 pub struct Sender {}
@@ -140,3 +142,19 @@ impl Sender {
 }
 
 pub struct Disposition {}
+
+pub struct Receiver {}
+
+impl Receiver {
+    pub async fn receive(&self) -> Result<Delivery> {
+        return Ok(Delivery {});
+    }
+}
+
+pub struct Delivery {}
+
+impl Delivery {
+    pub fn message(&self) -> Result<String> {
+        return Ok(String::new());
+    }
+}
