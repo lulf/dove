@@ -228,6 +228,10 @@ impl ConnectionDriver {
         self.close_condition = condition;
     }
 
+    pub fn token(self: &Self) -> Token {
+        Token(self.id)
+    }
+
     /**
      * Do work on this connection until progress cannot be made.
      */

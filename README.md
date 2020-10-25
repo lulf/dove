@@ -14,10 +14,8 @@ The library supports only the basics right now: Establishing connections, creati
 Dove exposes three different APIs:
 
 * A connection API that allows you to send and receive frames defined as rust types.
-* A driver API that enables multiplexing of multiple connections and processing events for those connections.
-* A client reactor-like API with an event handler.
-
-The goal is to create a higher level API based on this to make it easier to write AMQP clients.
+* A driver API that handles the processing logic of a connection and integrates with the tokio-rs MIO library.
+* (TODO) A simplified API for writing clients using async await.
 
 ## TODO
 

@@ -26,8 +26,8 @@ fn client() {
 
     let connection = connect("127.0.0.1", 5672, opts).expect("error opening connection");
     let mut driver = ConnectionDriver::new(1, connection);
+    let id = driver.token();
 
-    let id = Token(1);
     poll.registry()
         .register(&mut driver, id, Interest::READABLE | Interest::WRITABLE)
         .expect("error registering connection");
@@ -37,14 +37,12 @@ fn client() {
     let mut done = false;
 
     while !done {
-        println!("Polling for events...");
         poll.poll(&mut events, Some(Duration::from_secs(5)))
             .expect("error during poll");
         for event in &events {
-            println!("Processing events for {:?}", event.token());
             if event.token() == id {
+                // Do work until we get blocked
                 while !done {
-                    println!("Invoking driver to do work");
                     let result = driver.do_work(&mut event_buffer);
                     match result {
                         Err(AmqpError::IoError(ref e))
