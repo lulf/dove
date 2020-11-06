@@ -83,6 +83,18 @@ impl std::convert::From<io::Error> for AmqpError {
     }
 }
 
+impl std::convert::From<std::sync::mpsc::SendError<()>> for AmqpError {
+    fn from(error: std::sync::mpsc::SendError<()>) -> Self {
+        return AmqpError::Generic(error.to_string());
+    }
+}
+
+impl std::convert::From<std::sync::mpsc::RecvError> for AmqpError {
+    fn from(error: std::sync::mpsc::RecvError) -> Self {
+        return AmqpError::Generic(error.to_string());
+    }
+}
+
 impl std::convert::From<std::str::Utf8Error> for AmqpError {
     fn from(error: std::str::Utf8Error) -> Self {
         return AmqpError::Generic(error.to_string());

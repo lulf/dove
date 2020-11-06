@@ -13,8 +13,11 @@ use dove::framing::*;
 use dove::sasl::*;
 use futures::executor::block_on;
 use mio::{Events, Interest, Poll, Registry, Token};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::{thread, time};
 
+/*
 #[test]
 fn client() {
     //let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
@@ -131,28 +134,40 @@ fn client() {
         }
     }
 }
+*/
 
 #[test]
 fn client_async() {
     // Client handle represents an AMQP 1.0 container.
-    let client = Client::new();
-
-    let host = "127.0.0.1";
-    let port = 5672;
+    let mut handle = Arc::new(Client::new().expect("unable to create client"));
 
     // connect creates the TCP connection and sends OPEN frame.
     block_on(async {
+        let c = handle.clone();
+        thread::spawn(move || loop {
+            println!("Running main loop");
+            c.process();
+            println!("Done!");
+        });
+
+        println!("Going to connect");
+        let client = handle;
+        println!("Acquiring lock");
+
         let opts = ConnectionOptions::new()
             .sasl_mechanism(SaslMechanism::Plain)
             .username("test")
             .password("test");
+        let port: u16 = 5672;
         let connection = client
-            .connect(host, port, opts)
+            .connect("127.0.0.1", port, opts)
             .await
             .expect("connection not created");
+        println!("Connection created!");
 
         // new_session creates the AMQP session.
         let session = connection.new_session().await.expect("session not created");
+        println!("Session created!");
 
         // new_sender creates the AMQP sender link.
         let sender = session
