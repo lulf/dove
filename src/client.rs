@@ -7,26 +7,29 @@
 use crate::conn::*;
 use crate::driver::*;
 use crate::error::*;
+use mio::event;
 use mio::{Events, Interest, Poll, Registry, Token};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 // use crate::framing::*;
 // use crate::message::*;
+use std::marker::{Send, Sync};
 use std::sync::mpsc;
 use std::time::Duration;
 
 pub struct Client {
     poll: Mutex<Poll>,
+    incoming: Channel<Token>,
     connections: Mutex<HashMap<Token, Arc<Connection>>>,
 }
 
-pub struct Channel {
-    tx: Mutex<mpsc::Sender<()>>,
-    rx: Mutex<mpsc::Receiver<()>>,
+pub struct Channel<T> {
+    tx: Mutex<mpsc::Sender<T>>,
+    rx: Mutex<mpsc::Receiver<T>>,
 }
 
-impl Channel {
-    fn new() -> Channel {
+impl<T> Channel<T> {
+    fn new() -> Channel<T> {
         let (tx, rx) = mpsc::channel();
         return Channel {
             tx: Mutex::new(tx),
@@ -34,25 +37,32 @@ impl Channel {
         };
     }
 
-    fn notify(&self) -> Result<()> {
-        self.tx.lock().unwrap().send(())?;
+    fn send(&self, value: T) -> Result<()> {
+        self.tx.lock().unwrap().send(value)?;
         Ok(())
     }
 
-    fn wait(&self) -> Result<()> {
-        self.rx.lock().unwrap().recv()?;
-        Ok(())
+    fn try_recv(&self) -> Result<T> {
+        let r = self.rx.lock().unwrap().try_recv()?;
+        Ok(r)
+    }
+
+    fn recv(&self) -> Result<T> {
+        let r = self.rx.lock().unwrap().recv()?;
+        Ok(r)
     }
 }
 
 pub struct Connection {
+    id: Token,
     driver: Arc<Mutex<ConnectionDriver>>,
     sessions: Mutex<HashMap<ChannelId, Arc<Session>>>,
-    opened: Channel,
+    incoming: Channel<ChannelId>,
+    opened: Channel<()>,
 }
 
 pub struct Session {
-    opened: Channel,
+    opened: Channel<()>,
     channel: ChannelId,
 }
 
@@ -62,8 +72,10 @@ trait EventHandler {
 
 impl Client {
     pub fn new() -> Result<Client> {
+        let p = Poll::new()?;
         Ok(Client {
-            poll: Mutex::new(Poll::new()?),
+            incoming: Channel::new(),
+            poll: Mutex::new(p),
             connections: Mutex::new(HashMap::new()),
         })
     }
@@ -78,44 +90,89 @@ impl Client {
         println!("Connected!");
         let mut driver = ConnectionDriver::new(1, handle);
         let id = driver.token();
+
+        println!("Done registerting connection driver");
         driver.open();
 
-        let c = Connection {
+        let conn = Arc::new(Connection {
+            id: id,
             driver: Arc::new(Mutex::new(driver)),
             opened: Channel::new(),
+            incoming: Channel::new(),
             sessions: Mutex::new(HashMap::new()),
-        };
+        });
 
-        let conn = {
-            let mut m = self.connections.lock().unwrap();
-            m.insert(id, Arc::new(c));
-            m.get(&id).unwrap().clone()
-        };
-
-        println!("Locking driver for registration");
         {
-            self.poll.lock().unwrap().registry().register(
-                &mut driver,
-                id,
-                Interest::READABLE | Interest::WRITABLE,
-            )?;
+            let mut m = self.connections.lock().unwrap();
+            m.insert(id, conn.clone());
         }
+
+        self.incoming.send(id)?;
+
         println!("Waiting until opened...");
-        conn.opened.wait()?;
+        let _ = conn.opened.recv()?;
         return Ok(conn);
     }
 
     pub fn process(&self) -> Result<()> {
         let mut events = Events::with_capacity(1024);
+
+        let mut tokens = HashSet::new();
+
+        // Register new connections
+        loop {
+            let mut result = self.incoming.try_recv();
+            match result {
+                Err(_) => break,
+                Ok(id) => {
+                    println!("Got new incoming!");
+                    let mut m = self.connections.lock().unwrap();
+                    let conn = m.get_mut(&id).unwrap();
+                    let mut driver = conn.driver.lock().unwrap();
+                    self.poll.lock().unwrap().registry().register(
+                        &mut *driver,
+                        id,
+                        Interest::READABLE | Interest::WRITABLE,
+                    )?;
+                    tokens.insert(id);
+                }
+            }
+        }
+
+        // Check connections for events.
+        for (id, mut connection) in self.connections.lock().unwrap().iter_mut() {
+            loop {
+                let mut result = connection.incoming.try_recv();
+                match result {
+                    Err(_) => break,
+                    Ok(_) => {
+                        tokens.insert(*id);
+                    }
+                }
+            }
+        }
+
+        // Process connection that have had incoming events
+        for id in tokens.iter() {
+            let connection = {
+                let m = self.connections.lock().unwrap();
+                m.get(&id).map(|c| c.clone())
+            };
+            match connection {
+                Some(c) => c.process()?,
+                _ => {}
+            }
+        }
+
         {
-            println!("Calling poll");
             self.poll
                 .lock()
                 .unwrap()
-                .poll(&mut events, Some(Duration::from_secs(5)))?;
+                .poll(&mut events, Some(Duration::from_millis(100)))?;
         }
         for event in &events {
             let id = event.token();
+            println!("Got event for {:?}", id);
             let connection = {
                 let m = self.connections.lock().unwrap();
                 m.get(&id).map(|c| c.clone())
@@ -135,20 +192,22 @@ impl Connection {
         let mut event_buffer = EventBuffer::new();
         loop {
             let mut driver = self.driver.lock().unwrap();
+            println!("Processing connection");
             match driver.do_work(&mut event_buffer) {
                 Ok(_) => {
                     for event in event_buffer.drain(..) {
                         match event {
                             Event::RemoteOpen(_, _) => {
                                 println!("GOT REMOTE OPEN");
-                                self.opened.notify()?;
+                                self.opened.send(())?;
                             }
                             Event::RemoteBegin(_, chan, _) => {
+                                println!("GOT REMOTE BEGIN");
                                 let session = {
                                     let mut m = self.sessions.lock().unwrap();
                                     m.get_mut(&chan).unwrap().clone()
                                 };
-                                session.opened.notify()?;
+                                session.opened.send(())?;
                             }
                             _ => {
                                 println!("Got unhandled event: {:?}", event);
@@ -182,12 +241,16 @@ impl Connection {
             s.local_channel
         };
 
+        self.incoming.send(id)?;
+
         // Wait until it has been opened
         let mut s = {
             let mut m = self.sessions.lock().unwrap();
             m.get_mut(&id).unwrap().clone()
         };
-        s.opened.wait()?;
+        println!("Awaiting sessions to be opened");
+        let _ = s.opened.recv()?;
+        println!("SESSION OPENED");
         Ok(s)
     }
 }

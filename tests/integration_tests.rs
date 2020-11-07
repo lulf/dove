@@ -139,20 +139,16 @@ fn client() {
 #[test]
 fn client_async() {
     // Client handle represents an AMQP 1.0 container.
-    let mut handle = Arc::new(Client::new().expect("unable to create client"));
+    let client = Arc::new(Client::new().expect("unable to create client"));
 
     // connect creates the TCP connection and sends OPEN frame.
     block_on(async {
-        let c = handle.clone();
+        let c = client.clone();
         thread::spawn(move || loop {
-            println!("Running main loop");
             c.process();
-            println!("Done!");
         });
 
         println!("Going to connect");
-        let client = handle;
-        println!("Acquiring lock");
 
         let opts = ConnectionOptions::new()
             .sasl_mechanism(SaslMechanism::Plain)
