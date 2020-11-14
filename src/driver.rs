@@ -10,7 +10,6 @@ use mio::event;
 use mio::{Interest, Registry, Token};
 use rand::Rng;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::time::Duration;
 use std::time::Instant;
 use std::vec::Vec;
@@ -51,7 +50,7 @@ enum ConnectionState {
 }
 
 type ConnectionId = usize;
-type HandleId = u32;
+pub type HandleId = u32;
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -81,14 +80,14 @@ pub struct Session {
     opened: bool,
     closed: bool,
     links: HashMap<HandleId, Link>,
+    delivery_to_handle: HashMap<u32, HandleId>,
     next_outgoing_id: u32,
-    unacked: HashSet<u32>,
 }
 
 #[derive(Debug)]
 pub struct Link {
-    name: String,
-    handle: HandleId,
+    pub name: String,
+    pub handle: HandleId,
     opened: bool,
     closed: bool,
     pub role: LinkRole,
@@ -96,18 +95,21 @@ pub struct Link {
     target: Option<Target>,
     state: LinkState,
     next_message_id: u64,
-    deliveries: Vec<Delivery>,
     dispositions: Vec<DeliveryDisposition>,
     flow: Vec<u32>,
+    deliveries: Vec<Delivery>,
+    unsettled: HashMap<u32, Delivery>,
 }
 
-#[derive(Debug)]
+pub type DeliveryTag = Vec<u8>;
+
+#[derive(Debug, Clone)]
 pub struct Delivery {
     pub message: Message,
     remotely_settled: bool,
     settled: bool,
     state: Option<DeliveryState>,
-    tag: Vec<u8>,
+    pub tag: DeliveryTag,
     id: u32,
 }
 
@@ -143,7 +145,12 @@ pub enum Event {
     RemoteDetach(ConnectionId, ChannelId, HandleId, Detach),
 
     Flow(ConnectionId, ChannelId, HandleId, Flow),
-    Disposition(ConnectionId, ChannelId, Disposition),
+    Disposition(
+        ConnectionId,
+        ChannelId,
+        HashMap<DeliveryTag, HandleId>,
+        Disposition,
+    ),
     Delivery(ConnectionId, ChannelId, HandleId, Delivery),
 }
 
@@ -213,10 +220,10 @@ impl ConnectionDriver {
             handle_max: std::u32::MAX,
             opened: false,
             closed: false,
+            delivery_to_handle: HashMap::new(),
             next_outgoing_id: 0,
             state: SessionState::Opening,
             links: HashMap::new(),
-            unacked: HashSet::new(),
         };
         self.sessions.insert(chan, s);
         channel_id.map(|c| self.remote_channel_map.insert(c, chan));
@@ -465,12 +472,20 @@ impl ConnectionDriver {
                 if let Some(local_channel) = local_channel_opt {
                     let session = self.sessions.get_mut(&local_channel).unwrap();
                     let last = disposition.last.unwrap_or(disposition.first);
+                    let mut tags = HashMap::new();
                     for id in disposition.first..=last {
-                        session.unacked.remove(&id);
+                        let handle = session.delivery_to_handle.get(&id).unwrap();
+                        let link = session.links.get_mut(&handle).unwrap();
+                        if link.role == disposition.role {
+                            if let Some(d) = link.unsettled.remove(&id) {
+                                tags.insert(d.tag, *handle);
+                            }
+                        }
                     }
                     event_buffer.push(Event::Disposition(
                         self.id,
                         session.local_channel,
+                        tags,
                         disposition.clone(),
                     ));
                 }
@@ -584,6 +599,7 @@ impl Session {
                 closed: false,
                 deliveries: Vec::new(),
                 dispositions: Vec::new(),
+                unsettled: HashMap::new(),
                 flow: Vec::new(),
             },
         );
@@ -627,6 +643,7 @@ impl Session {
                 closed: false,
                 deliveries: Vec::new(),
                 dispositions: Vec::new(),
+                unsettled: HashMap::new(),
                 flow: Vec::new(),
             },
         );
@@ -671,7 +688,7 @@ impl Session {
                         self.next_outgoing_id = link.process(
                             connection_id,
                             connection,
-                            &mut self.unacked,
+                            &mut self.delivery_to_handle,
                             self.local_channel,
                             self.next_outgoing_id,
                             event_buffer,
@@ -694,7 +711,7 @@ impl Link {
         self.flow.push(credits);
     }
 
-    pub fn send(self: &mut Self, data: &str) {
+    pub fn send(self: &mut Self, data: &str) -> Result<Delivery> {
         let mut message = Message::amqp_value(Value::String(data.to_string()));
         message.properties = Some(MessageProperties {
             message_id: Some(Value::Ulong(self.next_message_id + 1)),
@@ -724,7 +741,8 @@ impl Link {
             settled: false,
         };
 
-        self.deliveries.push(delivery);
+        self.deliveries.push(delivery.clone());
+        Ok(delivery)
     }
 
     pub fn settle(self: &mut Self, delivery: &Delivery, settled: bool, state: DeliveryState) {
@@ -739,7 +757,7 @@ impl Link {
         self: &mut Self,
         connection_id: ConnectionId,
         connection: &mut Connection,
-        unacked: &mut HashSet<u32>,
+        delivery_to_handle: &mut HashMap<u32, HandleId>,
         local_channel: ChannelId,
         next_outgoing_id: u32,
         event_buffer: &mut EventBuffer,
@@ -785,21 +803,25 @@ impl Link {
                 } else {
                     if self.role == LinkRole::Sender {
                         let mut next_id = next_outgoing_id;
-                        for delivery in self.deliveries.drain(..) {
+                        for mut delivery in self.deliveries.drain(..) {
                             let delivery_id = next_id;
                             next_id += 1;
 
                             trace!("TX MESSAGE: {:?}", delivery.message);
                             let mut msgbuf = Vec::new();
                             delivery.message.encode(&mut msgbuf)?;
+                            let tag = delivery.tag.clone();
 
-                            unacked.insert(delivery_id);
+                            delivery.id = delivery_id;
+                            delivery_to_handle.insert(delivery_id, self.handle);
+                            self.unsettled.insert(delivery_id, delivery);
+
                             connection.transfer(
                                 local_channel,
                                 Transfer {
                                     handle: self.handle,
                                     delivery_id: Some(delivery_id),
-                                    delivery_tag: Some(delivery.tag),
+                                    delivery_tag: Some(tag),
                                     message_format: Some(0),
                                     settled: Some(false),
                                     more: Some(false),

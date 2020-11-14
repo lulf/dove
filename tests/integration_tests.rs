@@ -162,7 +162,10 @@ fn client_async() {
         println!("Connection created!");
 
         // new_session creates the AMQP session.
-        let session = connection.new_session().await.expect("session not created");
+        let session = connection
+            .new_session(None)
+            .await
+            .expect("session not created");
         println!("Session created!");
 
         // new_sender creates the AMQP sender link.

@@ -66,6 +66,7 @@ pub struct Connection {
 }
 
 pub type ChannelId = u16;
+pub type HandleId = u32;
 
 #[derive(Debug)]
 enum ConnectionState {
@@ -258,9 +259,14 @@ impl Connection {
 
     // Write outgoing frames
     pub fn flush(self: &mut Self) -> Result<()> {
-        for frame in self.tx_frames.drain(..) {
-            trace!("TX {:?}", frame);
-            self.transport.write_frame(&frame)?;
+        match self.state {
+            ConnectionState::Opened | ConnectionState::Closed => {
+                for frame in self.tx_frames.drain(..) {
+                    println!("TX {:?}", frame);
+                    self.transport.write_frame(&frame)?;
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -329,7 +335,6 @@ impl Connection {
                 }
             }
             ConnectionState::Opened => {
-                self.flush()?;
                 frames.push(self.transport.read_frame()?);
             }
             ConnectionState::Closed => {
