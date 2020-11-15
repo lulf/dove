@@ -7,7 +7,7 @@
 use crate::conn;
 use crate::conn::{ChannelId, ConnectionOptions};
 use crate::error::*;
-use crate::framing::{AmqpFrame, Close, Frame, Open, Performative};
+use crate::framing::{AmqpFrame, Close, Frame, LinkRole, Open, Performative};
 use log::trace;
 // use mio::event;
 use mio::{Events, Interest, Poll, Token};
@@ -17,6 +17,9 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+pub type DeliveryTag = Vec<u8>;
+type HandleId = u32;
+
 pub struct Client {
     container_id: String,
     poll: Mutex<Poll>,
@@ -24,40 +27,8 @@ pub struct Client {
     connections: Mutex<HashMap<Token, Arc<ConnectionInner>>>,
 }
 
-pub struct Channel<T> {
-    tx: Mutex<mpsc::Sender<T>>,
-    rx: Mutex<mpsc::Receiver<T>>,
-}
-
-pub type DeliveryTag = Vec<u8>;
-
-impl<T> Channel<T> {
-    fn new() -> Channel<T> {
-        let (tx, rx) = mpsc::channel();
-        return Channel {
-            tx: Mutex::new(tx),
-            rx: Mutex::new(rx),
-        };
-    }
-
-    fn send(&self, value: T) -> Result<()> {
-        self.tx.lock().unwrap().send(value)?;
-        Ok(())
-    }
-
-    fn try_recv(&self) -> Result<T> {
-        let r = self.rx.lock().unwrap().try_recv()?;
-        Ok(r)
-    }
-
-    fn recv(&self) -> Result<T> {
-        let r = self.rx.lock().unwrap().recv()?;
-        Ok(r)
-    }
-}
-
 pub struct Connection {
-    inner: Arc<ConnectionInner>,
+    connection: Arc<ConnectionInner>,
 
     pub container_id: String,
     pub hostname: String,
@@ -73,7 +44,7 @@ struct ConnectionInner {
     channel_max: u16,
     idle_timeout: Duration,
     driver: Mutex<conn::Connection>,
-    sessions: Mutex<HashMap<ChannelId, Arc<Session>>>,
+    sessions: Mutex<HashMap<ChannelId, Arc<SessionInner>>>,
 
     // Frames received on this connection
     rx: Channel<Performative>,
@@ -82,21 +53,45 @@ struct ConnectionInner {
 }
 
 pub struct Session {
+    connection: Arc<ConnectionInner>,
+    session: Arc<SessionInner>,
+}
+
+struct SessionInner {
+    // Frames received on this session
+    rx: Channel<Performative>,
+    links: Mutex<HashMap<HandleId, Arc<LinkInner>>>,
     //   driver: Arc<Mutex<conn::Connection>>,
-/*    channel: ChannelId,
-driver: Arc<Mutex<conn::Connection>>,
-opened: Channel<()>,
+    /*    channel: ChannelId,
+    driver: Arc<Mutex<conn::Connection>>,
+    opened: Channel<()>,
 
-end_condition: Option<ErrorCondition>,
-remote_channel: Option<ChannelId>,
-handle_max: u32,
-delivery_to_handle: HashMap<u32, HandleId>,
-next_outgoing_id: u32,
+    end_condition: Option<ErrorCondition>,
+    remote_channel: Option<ChannelId>,
+    handle_max: u32,
+    delivery_to_handle: HashMap<u32, HandleId>,
+    next_outgoing_id: u32,
 
-opts: SessionOpts,
-incoming: Channel<HandleId>,
-links: Mutex<HashMap<HandleId, Arc<Link>>>,
-*/}
+    opts: SessionOpts,
+    incoming: Channel<HandleId>,
+    */
+}
+
+pub struct Link {
+    connection: Arc<ConnectionInner>,
+    link: Arc<LinkInner>,
+    /*
+    driver: Arc<Mutex<conn::Connection>>,
+    channel: ChannelId,
+    handle: HandleId,
+    opened: Channel<()>,
+    */
+}
+
+struct LinkInner {
+    rx: Channel<Performative>,
+    deliveries: Mutex<HashMap<DeliveryTag, Arc<Channel<Disposition>>>>,
+}
 
 pub struct SessionOpts {
     pub max_frame_size: u32,
@@ -148,12 +143,12 @@ impl Client {
 
         println!("Waiting until opened...");
         loop {
-            let frame = conn.rx.recv()?;
+            let frame = conn.recv().await?;
             match frame {
                 Performative::Open(o) => {
                     // Populate remote properties
                     return Ok(Connection {
-                        inner: conn.clone(),
+                        connection: conn.clone(),
                         container_id: self.container_id.clone(),
                         hostname: host.to_string(),
                         channel_max: std::u16::MAX,
@@ -262,60 +257,94 @@ impl ConnectionInner {
     }
 
     fn process(&self) -> Result<()> {
-        let mut driver = self.driver.lock().unwrap();
-
         // Read frames until we're blocked
         let mut rx_frames = Vec::new();
-        loop {
-            let result = driver.process(&mut rx_frames);
-            match result {
-                Ok(_) => {}
-                // This means that we should poll again to await further I/O action for this driver.
-                Err(AmqpError::IoError(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    break;
-                }
-                Err(e) => {
-                    return Err(e);
+        {
+            let mut driver = self.driver.lock().unwrap();
+            loop {
+                let result = driver.process(&mut rx_frames);
+                match result {
+                    Ok(_) => {}
+                    // This means that we should poll again to await further I/O action for this driver.
+                    Err(AmqpError::IoError(ref e))
+                        if e.kind() == std::io::ErrorKind::WouldBlock =>
+                    {
+                        break;
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
                 }
             }
         }
 
         println!("Got {:?} frames", rx_frames.len());
 
+        self.dispatch(rx_frames)
+    }
+
+    fn dispatch(&self, mut frames: Vec<Frame>) -> Result<()> {
         // Process received frames.
-        for frame in rx_frames.drain(..) {
+        for frame in frames.drain(..) {
             if let Frame::AMQP(AmqpFrame {
-                channel: _,
+                channel,
                 performative,
-                payload: _,
+                payload,
             }) = frame
             {
-                println!("Got AMQP frame: {:?}", performative);
-                self.rx.send(performative.unwrap())?;
+                if channel == 0 {
+                    println!("Got AMQP frame: {:?}", performative);
+                    self.rx.send(performative.unwrap())?;
+                } else {
+                    match performative.unwrap() {
+                        Performative::Begin(begin) => {
+                            let mut m = self.sessions.lock().unwrap();
+                            m.get_mut(&channel)
+                                .map(|s| s.rx.send(Performative::Begin(begin)));
+                        }
+                        Performative::End(end) => {
+                            let mut m = self.sessions.lock().unwrap();
+                            m.get_mut(&channel)
+                                .map(|s| s.rx.send(Performative::End(end)));
+                        }
+                        p => {
+                            let session = {
+                                let mut m = self.sessions.lock().unwrap();
+                                m.get_mut(&channel).map(|s| s.clone())
+                            };
+
+                            match session {
+                                Some(s) => {
+                                    s.dispatch(p, payload)?;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
             }
         }
         Ok(())
     }
-}
 
-impl Connection {
     fn allocate_session(
         self: &Self,
-        _remote_channel_id: Option<ChannelId>,
-    ) -> Option<Arc<Session>> {
-        let mut m = self.inner.sessions.lock().unwrap();
+        remote_channel_id: Option<ChannelId>,
+    ) -> Option<Arc<SessionInner>> {
+        let mut m = self.sessions.lock().unwrap();
         for i in 0..self.channel_max {
             let chan = i as ChannelId;
             if !m.contains_key(&chan) {
-                let session = Arc::new(Session {
-       //             driver: self.inner.clone(),
+                let session = Arc::new(SessionInner {
+                    rx: Channel::new(),
+                    links: Mutex::new(HashMap::new()),
+                    //             driver: self.inner.clone(),
                     /*
                     remote_channel: remote_channel_id,
                     local_channel: chan,
                     handle_max: std::u32::MAX,
                     delivery_to_handle: HashMap::new(),
                     next_outgoing_id: 0,
-                    links: Mutex::new(HashMap::new()),
 
                     opts: None,
                     incoming: Channel::new(),
@@ -323,61 +352,84 @@ impl Connection {
                     */
                 });
                 m.insert(chan, session.clone());
+                remote_channel_id.map(|c| self.remote_channel_map.lock().unwrap().insert(c, chan));
                 return Some(session);
             }
         }
         None
     }
 
-    pub async fn new_session(&self, _opts: Option<SessionOpts>) -> Result<Arc<Session>> {
+    pub async fn new_session(&self, _opts: Option<SessionOpts>) -> Result<Arc<SessionInner>> {
         Ok(self.allocate_session(None).unwrap())
+    }
 
-        // self.sessions.insert(chan, s);
-        // channel_id.map(|c| self.remote_channel_map.insert(c, chan));
-        //self.sessions.get_mut(&chan).unwrap()
-        /*
-        let id = {
-            let mut driver = self.driver.lock().unwrap();
-            let s = driver.create_session();
-            s.open();
-            self.sessions.lock().unwrap().insert(
-                s.local_channel,
-                Arc::new(Session {
-                    driver: self.driver.clone(),
-                    opts: opts.unwrap_or(SessionOpts {
-                        max_frame_size: std::u32::MAX,
-                    }),
-                    incoming: Channel::new(),
-                    links: Mutex::new(HashMap::new()),
-                    opened: Channel::new(),
-                }),
-            );
-            s.local_channel
-        };
-            */
+    pub async fn recv(&self) -> Result<Performative> {
+        self.rx.recv()
+    }
+}
 
-        /*
-        self.incoming.send(id)?;
+impl Connection {
+    pub async fn new_session(&self, opts: Option<SessionOpts>) -> Result<Session> {
+        let s = self.connection.new_session(opts).await?;
 
-        // Wait until it has been opened
-        let s = {
-            let mut m = self.sessions.lock().unwrap();
-            m.get_mut(&id).unwrap().clone()
-        };
-        println!("Awaiting sessions to be opened");
-        let _ = s.opened.recv()?;
-        println!("SESSION OPENED");
-        Ok(s)*/
+        println!("Waiting until begin...");
+        loop {
+            let frame = self.connection.recv().await?;
+            match frame {
+                Performative::Begin(b) => {
+                    // Populate remote properties
+                    return Ok(Session {
+                        connection: self.connection.clone(),
+                        session: s,
+                    });
+                }
+                _ => {
+                    // Push it back into the queue
+                    // TODO: Prevent reordering
+                    self.connection.rx.send(frame)?;
+                }
+            }
+        }
+    }
+}
+
+impl SessionInner {
+    pub fn dispatch(&self, performative: Performative, payload: Option<Vec<u8>>) -> Result<()> {
+        match performative {
+            Performative::Attach(attach) => {}
+            Performative::Detach(detach) => {}
+            Performative::Transfer(transfer) => {}
+            Performative::Disposition(disposition) => {}
+            Performative::Flow(flow) => {}
+            _ => {
+                println!("Unexpected performative for session: {:?}", performative);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn new_link(&self, addr: &str, role: LinkRole) -> Result<Arc<LinkInner>> {
+        let link = Arc::new(LinkInner {
+            rx: Channel::new(),
+            deliveries: Mutex::new(HashMap::new()),
+        });
+        // TODO: Increment id
+        self.links.lock().unwrap().insert(0, link.clone());
+        Ok(link)
     }
 }
 
 impl Session {
-    pub async fn new_sender(&self, addr: &str) -> Result<Arc<Link>> {
-        self.new_link(addr, true).await
+    pub async fn new_sender(&self, addr: &str) -> Result<Link> {
+        self.new_link(addr, LinkRole::Sender).await
     }
 
-    async fn new_link(&self, _addr: &str, _sender: bool) -> Result<Arc<Link>> {
-        Ok(Arc::new(Link {}))
+    async fn new_link(&self, addr: &str, role: LinkRole) -> Result<Link> {
+        let link = self.session.new_link(addr, role)?;
+        Ok(Link {
+            connection: self.connection.clone(),
+            link: link,
+        })
         /*
         let address = Some(addr.to_string());
             let link = Link {
@@ -431,19 +483,10 @@ impl Session {
         */
     }
 
-    pub async fn new_receiver(&self, addr: &str) -> Result<Arc<Link>> {
-        self.new_link(addr, false).await
+    pub async fn new_receiver(&self, addr: &str) -> Result<Link> {
+        self.new_link(addr, LinkRole::Receiver).await
     }
 }
-
-pub struct Link {
-    /*
-driver: Arc<Mutex<conn::Connection>>,
-channel: ChannelId,
-handle: HandleId,
-opened: Channel<()>,
-deliveries: Mutex<HashMap<DeliveryTag, Arc<Channel<Disposition>>>>,
-*/}
 
 impl Link {
     pub async fn send(&self, _data: &str) -> Result<Disposition> {
@@ -479,5 +522,35 @@ pub struct Delivery {}
 impl Delivery {
     pub fn message(&self) -> Result<String> {
         return Ok(String::new());
+    }
+}
+
+pub struct Channel<T> {
+    tx: Mutex<mpsc::Sender<T>>,
+    rx: Mutex<mpsc::Receiver<T>>,
+}
+
+impl<T> Channel<T> {
+    fn new() -> Channel<T> {
+        let (tx, rx) = mpsc::channel();
+        return Channel {
+            tx: Mutex::new(tx),
+            rx: Mutex::new(rx),
+        };
+    }
+
+    fn send(&self, value: T) -> Result<()> {
+        self.tx.lock().unwrap().send(value)?;
+        Ok(())
+    }
+
+    fn try_recv(&self) -> Result<T> {
+        let r = self.rx.lock().unwrap().try_recv()?;
+        Ok(r)
+    }
+
+    fn recv(&self) -> Result<T> {
+        let r = self.rx.lock().unwrap().recv()?;
+        Ok(r)
     }
 }
