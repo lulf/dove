@@ -98,6 +98,7 @@ pub struct Link {
 
 struct LinkInner {
     handle: u32,
+    driver: Arc<Mutex<conn::Connection>>,
     rx: Channel<Performative>,
     deliveries: Mutex<HashMap<DeliveryTag, Arc<Channel<Disposition>>>>,
 }
@@ -442,6 +443,7 @@ impl SessionInner {
         println!("Creating new link!");
         let handle = self.handle_generator.fetch_add(1, Ordering::SeqCst);
         let link = Arc::new(LinkInner {
+            driver: self.driver.clone(),
             handle: handle,
             rx: Channel::new(),
             deliveries: Mutex::new(HashMap::new()),
@@ -525,57 +527,6 @@ impl Session {
                 }
             }
         }
-        /*
-        let address = Some(addr.to_string());
-            let link = Link {
-                name: addr.to_string(),
-                handle: 1,
-                next_message_id: 0,
-                role: LinkRole::Sender,
-                source: Some(Source {
-                    address: None,
-                    durable: None,
-                    expiry_policy: None,
-                    timeout: None,
-                    dynamic: None,
-                    dynamic_node_properties: None,
-                    default_outcome: None,
-                    distribution_mode: None,
-                    filter: None,
-                    outcomes: None,
-                    capabilities: None,
-                }),
-                target: Some(Target {
-                    address: address.map(|s| s.to_string()),
-                    durable: None,
-                    expiry_policy: None,
-                    timeout: None,
-                    dynamic: Some(false),
-                    dynamic_node_properties: None,
-                    capabilities: None,
-                }),
-                deliveries: Vec::new(),
-                dispositions: Vec::new(),
-                unsettled: HashMap::new(),
-                flow: Vec::new(),
-            };
-        let id = {
-            let mut driver = self.driver.lock().unwrap();
-
-        );
-
-        self.incoming.send(id)?;
-
-        // Wait until it has been opened
-        let s = {
-            let mut m = self.links.lock().unwrap();
-            m.get_mut(&id).unwrap().clone()
-        };
-        println!("Awaiting link to be opened");
-        let _ = s.opened.recv()?;
-        println!("LINK OPENED");
-        Ok(s)
-        */
     }
 
     pub async fn new_receiver(&self, addr: &str) -> Result<Link> {
