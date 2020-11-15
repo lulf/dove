@@ -7,13 +7,16 @@
 use crate::conn;
 use crate::conn::{ChannelId, ConnectionOptions};
 use crate::error::*;
-use crate::framing::{AmqpFrame, Close, Frame, LinkRole, Open, Performative};
+use crate::framing::{
+    AmqpFrame, Attach, Begin, Close, Frame, LinkRole, Open, Performative, Source, Target,
+};
 use log::trace;
 // use mio::event;
 use mio::{Events, Interest, Poll, Token};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 // use crate::message::*;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -25,6 +28,7 @@ pub struct Client {
     poll: Mutex<Poll>,
     incoming: Channel<Token>,
     connections: Mutex<HashMap<Token, Arc<ConnectionInner>>>,
+    token_generator: AtomicU32,
 }
 
 pub struct Connection {
@@ -43,7 +47,7 @@ pub struct Connection {
 struct ConnectionInner {
     channel_max: u16,
     idle_timeout: Duration,
-    driver: Mutex<conn::Connection>,
+    driver: Arc<Mutex<conn::Connection>>,
     sessions: Mutex<HashMap<ChannelId, Arc<SessionInner>>>,
 
     // Frames received on this connection
@@ -59,8 +63,11 @@ pub struct Session {
 
 struct SessionInner {
     // Frames received on this session
+    driver: Arc<Mutex<conn::Connection>>,
+    local_channel: ChannelId,
     rx: Channel<Performative>,
     links: Mutex<HashMap<HandleId, Arc<LinkInner>>>,
+    handle_generator: AtomicU32,
     //   driver: Arc<Mutex<conn::Connection>>,
     /*    channel: ChannelId,
     driver: Arc<Mutex<conn::Connection>>,
@@ -78,6 +85,7 @@ struct SessionInner {
 }
 
 pub struct Link {
+    handle: u32,
     connection: Arc<ConnectionInner>,
     link: Arc<LinkInner>,
     /*
@@ -89,6 +97,7 @@ pub struct Link {
 }
 
 struct LinkInner {
+    handle: u32,
     rx: Channel<Performative>,
     deliveries: Mutex<HashMap<DeliveryTag, Arc<Channel<Disposition>>>>,
 }
@@ -105,6 +114,7 @@ impl Client {
             incoming: Channel::new(),
             poll: Mutex::new(p),
             connections: Mutex::new(HashMap::new()),
+            token_generator: AtomicU32::new(0),
         })
     }
 
@@ -124,7 +134,7 @@ impl Client {
         driver.open(open)?;
 
         let conn = Arc::new(ConnectionInner {
-            driver: Mutex::new(driver),
+            driver: Arc::new(Mutex::new(driver)),
             rx: Channel::new(),
             sessions: Mutex::new(HashMap::new()),
             remote_channel_map: Mutex::new(HashMap::new()),
@@ -134,7 +144,7 @@ impl Client {
         });
 
         // TODO: Increment
-        let id = Token(1);
+        let id = Token(self.token_generator.fetch_add(1, Ordering::SeqCst) as usize);
         {
             let mut m = self.connections.lock().unwrap();
             m.insert(id, conn.clone());
@@ -143,7 +153,7 @@ impl Client {
 
         println!("Waiting until opened...");
         loop {
-            let frame = conn.recv().await?;
+            let frame = conn.rx.recv()?;
             match frame {
                 Performative::Open(o) => {
                     // Populate remote properties
@@ -292,33 +302,34 @@ impl ConnectionInner {
                 payload,
             }) = frame
             {
-                if channel == 0 {
-                    println!("Got AMQP frame: {:?}", performative);
-                    self.rx.send(performative.unwrap())?;
-                } else {
-                    match performative.unwrap() {
-                        Performative::Begin(begin) => {
+                println!("Got AMQP frame: {:?}", performative);
+                let performative = performative.unwrap();
+                match performative {
+                    Performative::Open(ref open) => {
+                        self.rx.send(performative)?;
+                    }
+                    Performative::Close(ref close) => {
+                        self.rx.send(performative)?;
+                    }
+                    Performative::Begin(ref begin) => {
+                        let mut m = self.sessions.lock().unwrap();
+                        m.get_mut(&channel).map(|s| s.rx.send(performative));
+                    }
+                    Performative::End(ref end) => {
+                        let mut m = self.sessions.lock().unwrap();
+                        m.get_mut(&channel).map(|s| s.rx.send(performative));
+                    }
+                    p => {
+                        let session = {
                             let mut m = self.sessions.lock().unwrap();
-                            m.get_mut(&channel)
-                                .map(|s| s.rx.send(Performative::Begin(begin)));
-                        }
-                        Performative::End(end) => {
-                            let mut m = self.sessions.lock().unwrap();
-                            m.get_mut(&channel)
-                                .map(|s| s.rx.send(Performative::End(end)));
-                        }
-                        p => {
-                            let session = {
-                                let mut m = self.sessions.lock().unwrap();
-                                m.get_mut(&channel).map(|s| s.clone())
-                            };
+                            m.get_mut(&channel).map(|s| s.clone())
+                        };
 
-                            match session {
-                                Some(s) => {
-                                    s.dispatch(p, payload)?;
-                                }
-                                _ => {}
+                        match session {
+                            Some(s) => {
+                                s.dispatch(p, payload)?;
                             }
+                            _ => {}
                         }
                     }
                 }
@@ -336,8 +347,11 @@ impl ConnectionInner {
             let chan = i as ChannelId;
             if !m.contains_key(&chan) {
                 let session = Arc::new(SessionInner {
+                    driver: self.driver.clone(),
+                    local_channel: chan,
                     rx: Channel::new(),
                     links: Mutex::new(HashMap::new()),
+                    handle_generator: AtomicU32::new(0),
                     //             driver: self.inner.clone(),
                     /*
                     remote_channel: remote_channel_id,
@@ -360,11 +374,23 @@ impl ConnectionInner {
     }
 
     pub async fn new_session(&self, _opts: Option<SessionOpts>) -> Result<Arc<SessionInner>> {
-        Ok(self.allocate_session(None).unwrap())
-    }
+        let session = self.allocate_session(None).unwrap();
+        let begin = Begin {
+            remote_channel: None,
+            next_outgoing_id: 0,
+            incoming_window: 10,
+            outgoing_window: 10,
+            handle_max: None,
+            offered_capabilities: None,
+            desired_capabilities: None,
+            properties: None,
+        };
+        self.driver
+            .lock()
+            .unwrap()
+            .begin(session.local_channel, begin)?;
 
-    pub async fn recv(&self) -> Result<Performative> {
-        self.rx.recv()
+        Ok(session)
     }
 }
 
@@ -374,7 +400,7 @@ impl Connection {
 
         println!("Waiting until begin...");
         loop {
-            let frame = self.connection.recv().await?;
+            let frame = s.rx.recv()?;
             match frame {
                 Performative::Begin(b) => {
                     // Populate remote properties
@@ -386,7 +412,7 @@ impl Connection {
                 _ => {
                     // Push it back into the queue
                     // TODO: Prevent reordering
-                    self.connection.rx.send(frame)?;
+                    s.rx.send(frame)?;
                 }
             }
         }
@@ -396,8 +422,12 @@ impl Connection {
 impl SessionInner {
     pub fn dispatch(&self, performative: Performative, payload: Option<Vec<u8>>) -> Result<()> {
         match performative {
-            Performative::Attach(attach) => {}
-            Performative::Detach(detach) => {}
+            Performative::Attach(ref attach) => {
+                self.rx.send(performative)?;
+            }
+            Performative::Detach(ref detach) => {
+                self.rx.send(performative)?;
+            }
             Performative::Transfer(transfer) => {}
             Performative::Disposition(disposition) => {}
             Performative::Flow(flow) => {}
@@ -409,12 +439,62 @@ impl SessionInner {
     }
 
     pub fn new_link(&self, addr: &str, role: LinkRole) -> Result<Arc<LinkInner>> {
+        println!("Creating new link!");
+        let handle = self.handle_generator.fetch_add(1, Ordering::SeqCst);
         let link = Arc::new(LinkInner {
+            handle: handle,
             rx: Channel::new(),
             deliveries: Mutex::new(HashMap::new()),
         });
         // TODO: Increment id
-        self.links.lock().unwrap().insert(0, link.clone());
+        let mut m = self.links.lock().unwrap();
+        m.insert(handle, link.clone());
+
+        // Send attach frame
+        let attach = Attach {
+            name: addr.to_string(),
+            handle: handle as u32,
+            role: role,
+            snd_settle_mode: None,
+            rcv_settle_mode: None,
+            source: Some(Source {
+                address: Some(addr.to_string()),
+                durable: None,
+                expiry_policy: None,
+                timeout: None,
+                dynamic: Some(false),
+                dynamic_node_properties: None,
+                default_outcome: None,
+                distribution_mode: None,
+                filter: None,
+                outcomes: None,
+                capabilities: None,
+            }),
+            target: Some(Target {
+                address: Some(addr.to_string()),
+                durable: None,
+                expiry_policy: None,
+                timeout: None,
+                dynamic: Some(false),
+                dynamic_node_properties: None,
+                capabilities: None,
+            }),
+            unsettled: None,
+            incomplete_unsettled: None,
+            initial_delivery_count: if role == LinkRole::Sender {
+                Some(0)
+            } else {
+                None
+            },
+            max_message_size: None,
+            offered_capabilities: None,
+            desired_capabilities: None,
+            properties: None,
+        };
+        self.driver
+            .lock()
+            .unwrap()
+            .attach(self.local_channel, attach)?;
         Ok(link)
     }
 }
@@ -426,10 +506,25 @@ impl Session {
 
     async fn new_link(&self, addr: &str, role: LinkRole) -> Result<Link> {
         let link = self.session.new_link(addr, role)?;
-        Ok(Link {
-            connection: self.connection.clone(),
-            link: link,
-        })
+        println!("Created link, waiting for attach frame");
+        loop {
+            let frame = self.session.rx.recv()?;
+            match frame {
+                Performative::Attach(a) => {
+                    // Populate remote properties
+                    return Ok(Link {
+                        handle: link.handle,
+                        connection: self.connection.clone(),
+                        link: link,
+                    });
+                }
+                _ => {
+                    // Push it back into the queue
+                    // TODO: Prevent reordering
+                    self.session.rx.send(frame)?;
+                }
+            }
+        }
         /*
         let address = Some(addr.to_string());
             let link = Link {

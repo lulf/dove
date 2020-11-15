@@ -174,6 +174,8 @@ fn client_async() {
             .await
             .expect("sender not created");
 
+        println!("Sender created!");
+
         //  Send message and get disposition.
         let disposition = sender
             .send("Hello, World")
@@ -184,6 +186,8 @@ fn client_async() {
             .new_receiver("myqueue")
             .await
             .expect("receiver not created");
+
+        println!("Receiver created!");
 
         let delivery = receiver.receive().await.expect("unable to receive message");
 
