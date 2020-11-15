@@ -10,7 +10,9 @@ use dove::conn::*;
 use dove::driver::*;
 use dove::error::*;
 use dove::framing::*;
+use dove::message::MessageBody;
 use dove::sasl::*;
+use dove::types::Value;
 use futures::executor::block_on;
 use mio::{Events, Interest, Poll, Registry, Token};
 use std::sync::{Arc, Mutex};
@@ -191,8 +193,11 @@ fn client_async() {
 
         let delivery = receiver.receive().await.expect("unable to receive message");
 
-        let message = delivery.message().expect("unable to decode message");
-        assert!(message == "Hello, World");
+        if let MessageBody::AmqpValue(Value::String(ref s)) = delivery.message().body {
+            assert!(s == "Hello, World");
+        } else {
+            assert!(false);
+        }
     });
 }
 
