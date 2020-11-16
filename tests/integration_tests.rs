@@ -189,6 +189,8 @@ fn client_async() {
             .await
             .expect("receiver not created");
 
+        receiver.flow(10).await.expect("error sending flow");
+
         println!("Receiver created!");
 
         let delivery = receiver.receive().await.expect("unable to receive message");

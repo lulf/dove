@@ -74,6 +74,7 @@ struct SessionInner {
     handle_generator: AtomicU32,
     did_generator: Arc<AtomicU32>,
     did_to_link: Arc<Mutex<HashMap<u32, HandleId>>>,
+    did_incoming_id: Arc<AtomicU32>,
     //   driver: Arc<Mutex<conn::Connection>>,
     /*    channel: ChannelId,
     driver: Arc<Mutex<conn::Connection>>,
@@ -123,8 +124,11 @@ struct LinkInner {
     driver: Arc<Mutex<conn::Connection>>,
     rx: Channel<AmqpFrame>,
     did_generator: Arc<AtomicU32>,
+    did_incoming_id: Arc<AtomicU32>,
     did_to_link: Arc<Mutex<HashMap<u32, HandleId>>>,
     unsettled: Mutex<HashMap<DeliveryTag, Arc<DeliveryInner>>>,
+    credit: AtomicU32,
+    available: AtomicU32,
 }
 
 pub struct Disposition {
@@ -388,6 +392,7 @@ impl ConnectionInner {
                     rx: Channel::new(),
                     links: Mutex::new(HashMap::new()),
                     handle_generator: AtomicU32::new(0),
+                    did_incoming_id: Arc::new(AtomicU32::new(0)),
                     did_generator: Arc::new(AtomicU32::new(0)),
                     did_to_link: Arc::new(Mutex::new(HashMap::new())),
                     //             driver: self.inner.clone(),
@@ -466,7 +471,28 @@ impl SessionInner {
             Some(Performative::Detach(ref _detach)) => {
                 self.rx.send(frame)?;
             }
-            Some(Performative::Transfer(_transfer)) => {}
+            Some(Performative::Transfer(ref transfer)) => {
+                let link = {
+                    let mut m = self.links.lock().unwrap();
+                    m.get_mut(&transfer.handle).unwrap().clone()
+                };
+
+                if link
+                    .available
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+                        if x <= 0 {
+                            Some(0)
+                        } else {
+                            Some(x - 1)
+                        }
+                    })
+                    == Ok(0)
+                {
+                    // TODO: Modified temporary?
+                } else {
+                    link.rx.send(frame)?;
+                }
+            }
             Some(Performative::Disposition(ref disposition)) => {
                 println!("Received disposition: {:?}", disposition);
                 let last = disposition.last.unwrap_or(disposition.first);
@@ -482,8 +508,17 @@ impl SessionInner {
                     }
                 }
             }
-            Some(Performative::Flow(ref _flow)) => {
+            Some(Performative::Flow(ref flow)) => {
                 println!("Received flow!");
+                if let Some(handle) = flow.handle {
+                    let link = {
+                        let mut m = self.links.lock().unwrap();
+                        m.get_mut(&handle).unwrap().clone()
+                    };
+                    if let Some(credit) = flow.link_credit {
+                        link.credit.store(credit, Ordering::SeqCst);
+                    }
+                }
             }
             _ => {
                 println!("Unexpected performative for session: {:?}", frame);
@@ -504,6 +539,9 @@ impl SessionInner {
             unsettled: Mutex::new(HashMap::new()),
             did_generator: self.did_generator.clone(),
             did_to_link: self.did_to_link.clone(),
+            did_incoming_id: self.did_incoming_id.clone(),
+            credit: AtomicU32::new(0),
+            available: AtomicU32::new(0),
         });
         // TODO: Increment id
         let mut m = self.links.lock().unwrap();
@@ -590,26 +628,6 @@ impl Session {
             let frame = self.session.rx.recv()?;
             match frame.performative {
                 Some(Performative::Attach(_a)) => {
-                    // Send initial flow
-                    let flow = Flow {
-                        next_incoming_id: None,
-                        incoming_window: std::i32::MAX as u32,
-                        next_outgoing_id: self.session.did_generator.load(Ordering::SeqCst),
-                        outgoing_window: std::i32::MAX as u32,
-                        handle: Some(link.handle as u32),
-                        delivery_count: None,
-                        link_credit: Some(10),
-                        available: None,
-                        drain: None,
-                        echo: None,
-                        properties: None,
-                    };
-                    self.session
-                        .driver
-                        .lock()
-                        .unwrap()
-                        .flow(self.session.local_channel, flow)?;
-
                     // Populate remote properties
                     return Ok(Receiver {
                         handle: link.handle,
@@ -630,6 +648,23 @@ impl Session {
 
 impl LinkInner {
     pub async fn send(&self, message: Message, settled: bool) -> Result<Arc<DeliveryInner>> {
+        if self
+            .credit
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+                if x <= 0 {
+                    Some(0)
+                } else {
+                    Some(x - 1)
+                }
+            })
+            == Ok(0)
+        {
+            return Err(AmqpError::amqp_error(
+                "not enough credits to send message",
+                None,
+            ));
+        }
+
         let delivery_tag = rand::thread_rng().gen::<[u8; 16]>().to_vec();
         let delivery_id = self.did_generator.fetch_add(1, Ordering::SeqCst);
         let delivery = Arc::new(DeliveryInner {
@@ -676,6 +711,27 @@ impl LinkInner {
             .transfer(self.channel, transfer, Some(msgbuf))?;
 
         Ok(delivery)
+    }
+
+    pub async fn flow(&self, credit: u32) -> Result<()> {
+        self.credit.store(credit, Ordering::SeqCst);
+        self.available.store(credit, Ordering::SeqCst);
+        let flow = Flow {
+            next_incoming_id: Some(self.did_incoming_id.load(Ordering::SeqCst)),
+            incoming_window: std::i32::MAX as u32,
+            next_outgoing_id: self.did_generator.load(Ordering::SeqCst),
+            outgoing_window: std::i32::MAX as u32,
+            handle: Some(self.handle as u32),
+            delivery_count: None,
+            link_credit: Some(credit),
+            available: None,
+            drain: None,
+            echo: None,
+            properties: None,
+        };
+        self.driver.lock().unwrap().flow(self.channel, flow)?;
+
+        Ok(())
     }
 }
 
@@ -729,6 +785,10 @@ impl Sender {
 }
 
 impl Receiver {
+    pub async fn flow(&self, credit: u32) -> Result<()> {
+        self.link.flow(credit).await
+    }
+
     pub async fn receive(&self) -> Result<Delivery> {
         loop {
             let frame = self.link.rx.recv()?;
