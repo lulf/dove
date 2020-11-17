@@ -37,6 +37,13 @@ fn client() {
             .expect("session not created");
         println!("Session created!");
 
+        let receiver = session
+            .new_receiver("myqueue")
+            .await
+            .expect("receiver not created");
+
+        println!("Receiver created!");
+
         // new_sender creates the AMQP sender link.
         let sender = session
             .new_sender("myqueue")
@@ -52,14 +59,7 @@ fn client() {
             .await
             .expect("disposition not received");
 
-        let receiver = session
-            .new_receiver("myqueue")
-            .await
-            .expect("receiver not created");
-
         receiver.flow(10).await.expect("error sending flow");
-
-        println!("Receiver created!");
 
         let delivery = receiver.receive().await.expect("unable to receive message");
 
