@@ -3,26 +3,15 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
-use dove::client::*;
-use dove::conn::*;
-use dove::driver::*;
-use dove::message::*;
-use dove::sasl::*;
+use dove::container::*;
+use futures::executor::block_on;
 use std::env;
-use std::sync::mpsc::channel;
-use std::sync::mpsc::Sender;
-
-struct App {
-    address: String,
-    done: Sender<bool>,
-}
 
 /**
- * Example client that sends a single message to an AMQP endpoint.
+ * Example client that receives a single message to an AMQP endpoint.
  */
 fn main() {
     let args: Vec<String> = env::args().collect();
-
     if args.len() < 4 {
         println!("Usage: ./example_receive localhost 5672 myqueue");
         std::process::exit(1);
@@ -33,30 +22,35 @@ fn main() {
 
     let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
 
-    let (out, done) = channel::<bool>();
+    let container = Container::new()
+        .expect("unable to create container")
+        .start();
 
-    impl EventHandler for App {
-        fn connected(&self, conn: &mut ConnectionHandle) {
-            conn.open();
-            let session = conn.create_session();
-            session.open();
-            let receiver = session.create_receiver(Some(self.address.as_str()));
-            receiver.open();
-            receiver.flow(1);
-        }
-        fn delivery(&self, _: &mut Link, message: &Message) {
-            println!("Received: {:?}", message.body);
-            self.done.send(true).expect("Error signalling done");
-        }
-    };
+    // connect creates the TCP connection and sends OPEN frame.
+    block_on(async {
+        println!("Going to connect");
+        let connection = container
+            .connect(host, port, opts)
+            .await
+            .expect("connection not created");
+        println!("Connection created!");
 
-    let client = Client::new(Box::new(App {
-        address: address.to_string(),
-        done: out,
-    }));
-    client
-        .connect(&host, port, opts)
-        .expect("Error opening connection");
+        // new_session creates the AMQP session.
+        let session = connection
+            .new_session(None)
+            .await
+            .expect("session not created");
+        println!("Session created!");
 
-    done.recv().unwrap();
+        let receiver = session
+            .new_receiver(address)
+            .await
+            .expect("receiver not created");
+
+        receiver.flow(10).await.expect("error sending flow");
+
+        let delivery = receiver.receive().await.expect("unable to receive message");
+
+        println!("Received: {:?}", delivery.message().body);
+    });
 }

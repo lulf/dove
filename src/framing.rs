@@ -141,14 +141,14 @@ impl TryFromValue for SaslMechanism {
 impl TryFromValueVec for SaslMechanism {}
 
 /** AMQP frame types. */
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AmqpFrame {
     pub channel: u16,
     pub performative: Option<Performative>,
     pub payload: Option<Vec<u8>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Performative {
     Open(Open),
     Close(Close),

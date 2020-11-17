@@ -6,8 +6,10 @@
 //! The conn module contains basic primitives for establishing and accepting AMQP connections and performing the initial handshake. Once handshake is complete, the connection can be used to send and receive frames.
 
 use log::trace;
+use mio::event::Source;
 use mio::net::TcpListener;
 use mio::net::TcpStream;
+use mio::{Interest, Registry, Token};
 use std::net::ToSocketAddrs;
 use std::time::Duration;
 use std::time::Instant;
@@ -64,6 +66,7 @@ pub struct Connection {
 }
 
 pub type ChannelId = u16;
+pub type HandleId = u32;
 
 #[derive(Debug)]
 enum ConnectionState {
@@ -250,15 +253,24 @@ impl Connection {
         Ok(())
     }
 
+    pub fn shutdown(self: &mut Self) -> Result<()> {
+        self.transport.close()
+    }
+
     fn skip_sasl(self: &Self) -> bool {
         self.sasl.is_none() || self.sasl.as_ref().unwrap().is_done()
     }
 
     // Write outgoing frames
     pub fn flush(self: &mut Self) -> Result<()> {
-        for frame in self.tx_frames.drain(..) {
-            trace!("TX {:?}", frame);
-            self.transport.write_frame(&frame)?;
+        match self.state {
+            ConnectionState::Opened | ConnectionState::Closed => {
+                for frame in self.tx_frames.drain(..) {
+                    trace!("TX {:?}", frame);
+                    self.transport.write_frame(&frame)?;
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -327,7 +339,6 @@ impl Connection {
                 }
             }
             ConnectionState::Opened => {
-                self.flush()?;
                 frames.push(self.transport.read_frame()?);
             }
             ConnectionState::Closed => {
@@ -338,5 +349,29 @@ impl Connection {
             }
         }
         Ok(())
+    }
+}
+
+impl Source for Connection {
+    fn register(
+        &mut self,
+        registry: &Registry,
+        token: Token,
+        interests: Interest,
+    ) -> std::io::Result<()> {
+        self.transport.register(registry, token, interests)
+    }
+
+    fn reregister(
+        &mut self,
+        registry: &Registry,
+        token: Token,
+        interests: Interest,
+    ) -> std::io::Result<()> {
+        self.transport.reregister(registry, token, interests)
+    }
+
+    fn deregister(&mut self, registry: &Registry) -> std::io::Result<()> {
+        self.transport.deregister(registry)
     }
 }

@@ -17,10 +17,6 @@ name = "example_send_framing"
 path = "examples/send_framing.rs"
 
 [[bin]]
-name = "example_driver"
-path = "examples/driver.rs"
-
-[[bin]]
 name = "example_send"
 path = "examples/send.rs"
 
@@ -34,3 +30,4 @@ mio = { version = "0.7", features = ["tcp", "os-poll"] }
 uuid = { version = "0.7.4", features = ["v4"] }
 rand = "0.7.3"
 log = "0.4.11"
+futures = "0.3.6"

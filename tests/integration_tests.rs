@@ -3,115 +3,78 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
-extern crate dove;
+use dove::container::*;
+use dove::message::MessageBody;
 
-use dove::conn::*;
-use dove::driver::*;
-use dove::framing::*;
-use dove::sasl::*;
+use futures::executor::block_on;
 
 #[test]
 fn client() {
-    //let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
-    let opts = ConnectionOptions::new()
-        .sasl_mechanism(SaslMechanism::Plain)
-        .username("test")
-        .password("test");
+    // Container represents an AMQP 1.0 container.
+    let container = Container::new()
+        .expect("unable to create container")
+        .start();
 
-    let connection = connect("127.0.0.1", 5672, opts).expect("Error opening connection");
+    // connect creates the TCP connection and sends OPEN frame.
+    block_on(async {
+        println!("Going to connect");
 
-    let mut driver = ConnectionDriver::new();
+        let opts = ConnectionOptions::new()
+            .sasl_mechanism(SaslMechanism::Plain)
+            .username("test")
+            .password("test");
+        let port: u16 = 5672;
+        let connection = container
+            .connect("127.0.0.1", port, opts)
+            .await
+            .expect("connection not created");
+        println!("Connection created!");
 
-    driver.register(2, connection);
+        // new_session creates the AMQP session.
+        let session = connection
+            .new_session(None)
+            .await
+            .expect("session not created");
+        println!("Session created!");
 
-    let mut event_buffer = EventBuffer::new();
-    let mut sent = false;
-    let mut done = false;
+        let receiver = session
+            .new_receiver("myqueue")
+            .await
+            .expect("receiver not created");
 
-    while !done {
-        match driver.poll(&mut event_buffer) {
-            Ok(_) => {
-                for event in event_buffer.drain(..) {
-                    match event {
-                        Event::ConnectionInit(cid) => {
-                            println!("Opening connection!");
-                            let conn = driver.connection(cid).unwrap();
-                            conn.open();
-                        }
-                        Event::RemoteOpen(cid, _) => {
-                            println!("Remote opened!");
-                            let conn = driver.connection(cid).unwrap();
-                            let session = conn.create_session();
-                            session.open();
-                        }
-                        Event::RemoteBegin(cid, chan, _) => {
-                            println!("Remote begin");
-                            let conn = driver.connection(cid).unwrap();
-                            let session = conn.get_session(chan).unwrap();
-                            let receiver = session.create_receiver(Some("a"));
-                            receiver.open();
-                        }
-                        Event::RemoteAttach(cid, chan, handle, _) => {
-                            let conn = driver.connection(cid).unwrap();
-                            let session = conn.get_session(chan).unwrap();
-                            let link = session.get_link(handle).unwrap();
-                            if link.role == LinkRole::Receiver {
-                                link.flow(10);
-                                let sender = session.create_sender(Some("a"));
-                                sender.open();
-                            }
-                        }
-                        Event::Flow(cid, chan, handle, flow) => {
-                            println!("Received flow ({:?} credits)", flow.link_credit);
-                            let conn = driver.connection(cid).unwrap();
-                            let session = conn.get_session(chan).unwrap();
-                            let link = session.get_link(handle).unwrap();
-                            if link.role == LinkRole::Sender && !sent {
-                                println!("Sending message!");
-                                link.send("Hello, World");
-                                sent = true;
-                            }
-                        }
-                        Event::Delivery(cid, chan, handle, delivery) => {
-                            println!("Received message: {:?}", delivery.message.body);
-                            let conn = driver.connection(cid).unwrap();
-                            let session = conn.get_session(chan).unwrap();
-                            let link = session.get_link(handle).unwrap();
-                            link.settle(&delivery, true, DeliveryState::Accepted);
-                            conn.close(None);
-                        }
-                        Event::Disposition(_, _, disposition) => {
-                            if let Some(settled) = disposition.settled {
-                                if let Some(state) = disposition.state {
-                                    if settled && state == DeliveryState::Accepted {
-                                        println!("Message delivered!");
-                                    } else {
-                                        println!("Error delivering message!");
-                                    }
-                                }
-                            }
-                        }
-                        Event::RemoteClose(cid, close) => {
-                            let conn = driver.connection(cid).unwrap();
-                            println!(
-                                "Received close from peer ({:?}), closing connection!",
-                                close
-                            );
-                            conn.close(None);
-                            done = true;
-                        }
-                        e => {
-                            println!("Unhandled event: {:#?}", e);
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                println!("Got error: {:?}", e);
-                assert!(false);
-            }
+        println!("Receiver created!");
+
+        // new_sender creates the AMQP sender link.
+        let sender = session
+            .new_sender("myqueue")
+            .await
+            .expect("sender not created");
+
+        println!("Sender created!");
+
+        //  Send message and get disposition.
+        let message = Message::amqp_value(Value::String("Hello, World".to_string()));
+        let _ = sender
+            .send(message)
+            .await
+            .expect("disposition not received");
+
+        receiver.flow(10).await.expect("error sending flow");
+
+        let delivery = receiver.receive().await.expect("unable to receive message");
+
+        if let MessageBody::AmqpValue(Value::String(ref s)) = delivery.message().body {
+            assert!(s == "Hello, World");
+        } else {
+            assert!(false);
         }
-    }
+
+        // Manual disposition. If not sent, disposition settled + Accepted will be sent on delivery teardown
+        delivery
+            .disposition(true, DeliveryState::Accepted)
+            .await
+            .expect("unable to send disposition");
+    });
 }
 
 //#[test]
