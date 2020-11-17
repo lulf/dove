@@ -7,6 +7,7 @@
 use crate::conn;
 use crate::conn::{ChannelId, ConnectionOptions};
 use crate::error::*;
+use crate::framing;
 use crate::framing::{
     AmqpFrame, Attach, Begin, Close, DeliveryState, Flow, Frame, LinkRole, Open, Performative,
     Source, Target, Transfer,
@@ -145,6 +146,11 @@ pub struct DeliveryInner {
     id: u32,
 }
 
+pub struct Delivery {
+    link: Arc<LinkInner>,
+    delivery: Arc<DeliveryInner>,
+}
+
 pub struct SessionOpts {
     pub max_frame_size: u32,
 }
@@ -159,6 +165,13 @@ impl Client {
             connections: Mutex::new(HashMap::new()),
             token_generator: AtomicU32::new(0),
         })
+    }
+
+    pub fn close(&self) -> Result<()> {
+        for (id, connection) in self.connections.lock().unwrap().iter_mut() {
+            connection.close(None)?;
+        }
+        Ok(())
     }
 
     pub async fn connect(
@@ -289,6 +302,12 @@ impl Client {
     }
 }
 
+impl Drop for Client {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 impl ConnectionInner {
     fn keepalive(&self, connection: &mut conn::Connection) -> Result<()> {
         // Sent out keepalives...
@@ -307,6 +326,13 @@ impl ConnectionInner {
             }
         }
         Ok(())
+    }
+
+    fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
+        let mut driver = self.driver.lock().unwrap();
+        driver.close(Close { error: error });
+        driver.flush()?;
+        driver.shutdown()
     }
 
     fn process(&self) -> Result<()> {
@@ -459,6 +485,16 @@ impl Connection {
                 }
             }
         }
+    }
+
+    pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
+        self.connection.close(error)
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.close(None);
     }
 }
 
@@ -805,7 +841,10 @@ impl Receiver {
                         settled: false,
                         message: message,
                     });
-                    return Ok(Delivery { delivery: delivery });
+                    return Ok(Delivery {
+                        link: self.link.clone(),
+                        delivery: delivery,
+                    });
                 }
                 _ => {
                     // TODO: Prevent reordering
@@ -816,13 +855,27 @@ impl Receiver {
     }
 }
 
-pub struct Delivery {
-    delivery: Arc<DeliveryInner>,
-}
-
 impl Delivery {
     pub fn message(&self) -> &Message {
         return &self.delivery.message;
+    }
+
+    pub async fn disposition(&self, settled: bool, state: DeliveryState) -> Result<()> {
+        let disposition = framing::Disposition {
+            role: self.link.role,
+            first: self.delivery.id,
+            last: None,
+            settled: Some(settled),
+            state: Some(state),
+            batchable: None,
+        };
+
+        self.link
+            .driver
+            .lock()
+            .unwrap()
+            .disposition(self.link.channel, disposition)?;
+        Ok(())
     }
 }
 

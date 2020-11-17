@@ -14,15 +14,13 @@ The library supports only the basics right now: Establishing connections, creati
 Dove exposes three different APIs:
 
 * A connection API that allows you to send and receive frames defined as rust types.
-* A driver API that handles the processing logic of a connection and integrates with the tokio-rs MIO library.
-* (TODO) A simplified API for writing clients using async await.
+* A driver API that handles the processing logic of a connection and integrates with the tokio-rs MIO library. This is used by the client and server APIs.
+* A client API for writing clients using async rust.
 
 ## TODO
 
 * Cleaning up APIs (which parts should be private/public).
 * Cleaning up crate/module structure.
-* Use tokio-rs/mio IO library for polling rather our own polling.
-* Experiment with Rust async and write a good API.
 * TLS/SSL support
 * Improve SASL support (missing SCRAM* support)
 * Complete implementation of encoding+decoding for all AMQP 1.0 types.
@@ -48,3 +46,4 @@ Client examples can be found in the [examples/](https://github.com/lulf/dove/tre
 * sasl - SASL handling
 * conn - Low level API for sending and recieving frames on a connection
 * driver - Low level API for multiplexing events from multiple connections
+* client - API for writing clients.

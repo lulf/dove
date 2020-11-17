@@ -200,6 +200,12 @@ fn client_async() {
         } else {
             assert!(false);
         }
+
+        // Manual disposition. If not sent, disposition settled + Accepted will be sent on delivery teardown
+        delivery
+            .disposition(true, DeliveryState::Accepted)
+            .await
+            .expect("unable to send disposition");
     });
 }
 

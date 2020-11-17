@@ -253,6 +253,10 @@ impl Connection {
         Ok(())
     }
 
+    pub fn shutdown(self: &mut Self) -> Result<()> {
+        self.transport.close()
+    }
+
     fn skip_sasl(self: &Self) -> bool {
         self.sasl.is_none() || self.sasl.as_ref().unwrap().is_done()
     }
