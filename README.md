@@ -11,21 +11,18 @@ Dove aims to be an AMQP 1.0 implementation with the following properties:
 
 The library supports only the basics right now: Establishing connections, creating sessions, links and sending and receiving message. Most AMQP 1.0 types have been implemented, and conversion for many Rust native types exists. Support for SASL ANONYMOUS and PLAIN.
 
-Dove exposes three different APIs:
+Dove exposes two different APIs:
 
-* A connection API that allows you to send and receive frames defined as rust types.
-* A driver API that handles the processing logic of a connection and integrates with the tokio-rs MIO library. This is used by the client and server APIs.
-* A client API for writing clients using async rust.
+* A low level connection API that allows you to send and receive frames defined as rust types.
+* An API for writing messaging applications using async rust.
 
 ## TODO
 
-* Cleaning up APIs (which parts should be private/public).
 * Cleaning up crate/module structure.
 * TLS/SSL support
 * Improve SASL support (missing SCRAM* support)
 * Complete implementation of encoding+decoding for all AMQP 1.0 types.
 * Improve test coverage.
-* A higher level API for messaging clients to improve ease of use
 * Make transport layer pluggable (for embedded use cases where mio is not possible).
 * Compile to WASM.
 
@@ -43,7 +40,8 @@ Client examples can be found in the [examples/](https://github.com/lulf/dove/tre
 * error - AMQP error types and error handling data types
 * framing - API for frame types and encoding/decoding of frames
 * transport - API for the underlying transport/network
+* message - API for working with messages
 * sasl - SASL handling
 * conn - Low level API for sending and recieving frames on a connection
-* driver - Low level API for multiplexing events from multiple connections
-* client - API for writing clients.
+* driver - Functionality for handling most control logic.
+* container - API for writing applications

@@ -112,3 +112,9 @@ impl std::convert::From<std::string::FromUtf8Error> for AmqpError {
         return AmqpError::Generic(error.to_string());
     }
 }
+
+impl std::convert::From<std::boxed::Box<dyn std::any::Any + std::marker::Send>> for AmqpError {
+    fn from(_error: std::boxed::Box<dyn std::any::Any + std::marker::Send>) -> Self {
+        return AmqpError::Generic("thread error".to_string());
+    }
+}

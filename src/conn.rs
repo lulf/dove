@@ -266,7 +266,7 @@ impl Connection {
         match self.state {
             ConnectionState::Opened | ConnectionState::Closed => {
                 for frame in self.tx_frames.drain(..) {
-                    println!("TX {:?}", frame);
+                    trace!("TX {:?}", frame);
                     self.transport.write_frame(&frame)?;
                 }
             }

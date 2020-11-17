@@ -3,899 +3,568 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
-//! The driver module contains a event-based connection driver that drives the connection state machine of one or more connections.
-
+use crate::conn;
+use crate::conn::ChannelId;
+use crate::error::*;
+use crate::framing::{
+    AmqpFrame, Attach, Begin, Close, DeliveryState, Detach, End, Flow, Frame, LinkRole,
+    Performative, Source, Target, Transfer,
+};
+use crate::message::Message;
 use log::trace;
-use mio::event;
-use mio::{Interest, Registry, Token};
+use mio::{Interest, Poll, Token};
 use rand::Rng;
 use std::collections::HashMap;
-use std::time::Duration;
-use std::time::Instant;
-use std::vec::Vec;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use crate::conn::*;
-use crate::error::*;
-use crate::framing::*;
-use crate::message::*;
-use crate::types::*;
-
-#[derive(Debug)]
-pub struct ConnectionDriver {
-    pub id: ConnectionId,
-    pub container_id: String,
-    pub hostname: String,
-    pub channel_max: u16,
-    pub idle_timeout: Duration,
-    pub remote_idle_timeout: Duration,
-    pub remote_container_id: String,
-    pub remote_channel_max: u16,
-    connection: Connection,
-    state: ConnectionState,
-    opened: bool,
-    closed: bool,
-    close_condition: Option<ErrorCondition>,
-    sessions: HashMap<ChannelId, Session>,
-    remote_channel_map: HashMap<ChannelId, ChannelId>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum ConnectionState {
-    Start,
-    Opening,
-    Opened,
-    Closing,
-    CloseSent,
-    Closed,
-}
-
-type ConnectionId = usize;
+pub type DeliveryTag = Vec<u8>;
 pub type HandleId = u32;
 
-#[allow(dead_code)]
-#[derive(Debug)]
-enum SessionState {
-    Opening,
-    Opened,
-    Closing,
-    Closed,
+pub struct ConnectionDriver {
+    channel_max: u16,
+    idle_timeout: Duration,
+    driver: Arc<Mutex<conn::Connection>>,
+    sessions: Mutex<HashMap<ChannelId, Arc<SessionDriver>>>,
+
+    // Frames received on this connection
+    rx: Channel<AmqpFrame>,
+    remote_channel_map: Mutex<HashMap<ChannelId, ChannelId>>,
+    remote_idle_timeout: Duration,
 }
 
-#[allow(dead_code)]
-#[derive(Debug)]
-enum LinkState {
-    Opening,
-    Opened,
-    Closing,
-    Closed,
-}
+pub struct SessionDriver {
+    // Frames received on this session
+    driver: Arc<Mutex<conn::Connection>>,
+    local_channel: ChannelId,
+    rx: Channel<AmqpFrame>,
+    links: Mutex<HashMap<HandleId, Arc<LinkDriver>>>,
+    handle_generator: AtomicU32,
+    did_generator: Arc<AtomicU32>,
+    did_to_link: Arc<Mutex<HashMap<u32, HandleId>>>,
+    did_incoming_id: Arc<AtomicU32>,
+    //   driver: Arc<Mutex<conn::Connection>>,
+    /*    channel: ChannelId,
+    driver: Arc<Mutex<conn::Connection>>,
+    opened: Channel<()>,
 
-#[derive(Debug)]
-pub struct Session {
-    pub local_channel: ChannelId,
     end_condition: Option<ErrorCondition>,
     remote_channel: Option<ChannelId>,
     handle_max: u32,
-    state: SessionState,
-    opened: bool,
-    closed: bool,
-    links: HashMap<HandleId, Link>,
     delivery_to_handle: HashMap<u32, HandleId>,
     next_outgoing_id: u32,
+
+    opts: SessionOpts,
+    incoming: Channel<HandleId>,
+    */
 }
 
-#[derive(Debug)]
-pub struct Link {
-    pub name: String,
-    pub handle: HandleId,
-    opened: bool,
-    closed: bool,
+pub struct LinkDriver {
+    pub handle: u32,
     pub role: LinkRole,
-    source: Option<Source>,
-    target: Option<Target>,
-    state: LinkState,
-    next_message_id: u64,
-    dispositions: Vec<DeliveryDisposition>,
-    flow: Vec<u32>,
-    deliveries: Vec<Delivery>,
-    unsettled: HashMap<u32, Delivery>,
+    pub channel: ChannelId,
+    driver: Arc<Mutex<conn::Connection>>,
+    rx: Channel<AmqpFrame>,
+    did_generator: Arc<AtomicU32>,
+    did_incoming_id: Arc<AtomicU32>,
+    did_to_link: Arc<Mutex<HashMap<u32, HandleId>>>,
+    unsettled: Mutex<HashMap<DeliveryTag, Arc<DeliveryDriver>>>,
+    credit: AtomicU32,
+    available: AtomicU32,
 }
 
-pub type DeliveryTag = Vec<u8>;
-
-#[derive(Debug, Clone)]
-pub struct Delivery {
+pub struct DeliveryDriver {
     pub message: Message,
-    remotely_settled: bool,
-    settled: bool,
-    state: Option<DeliveryState>,
+    pub remotely_settled: bool,
+    pub settled: bool,
+    pub state: Option<DeliveryState>,
     pub tag: DeliveryTag,
-    id: u32,
+    pub id: u32,
 }
 
-#[derive(Debug)]
-pub struct DeliveryDisposition {
-    id: u32,
-    settled: bool,
-    state: DeliveryState,
-}
-
-pub type EventBuffer = Vec<Event>;
-
-#[derive(Debug)]
-pub enum Event {
-    ConnectionInit(ConnectionId),
-
-    RemoteOpen(ConnectionId, Open),
-    LocalOpen(ConnectionId, Open),
-
-    RemoteClose(ConnectionId, Close),
-    LocalClose(ConnectionId, Option<ErrorCondition>),
-
-    SessionInit(ConnectionId, ChannelId),
-    LocalBegin(ConnectionId, ChannelId, Begin),
-    LocalEnd(ConnectionId, ChannelId, End),
-    RemoteBegin(ConnectionId, ChannelId, Begin),
-    RemoteEnd(ConnectionId, ChannelId, End),
-
-    LocalAttach(ConnectionId, ChannelId, HandleId, Attach),
-    RemoteAttach(ConnectionId, ChannelId, HandleId, Attach),
-
-    LocalDetach(ConnectionId, ChannelId, HandleId, Detach),
-    RemoteDetach(ConnectionId, ChannelId, HandleId, Detach),
-
-    Flow(ConnectionId, ChannelId, HandleId, Flow),
-    Disposition(
-        ConnectionId,
-        ChannelId,
-        HashMap<DeliveryTag, HandleId>,
-        Disposition,
-    ),
-    Delivery(ConnectionId, ChannelId, HandleId, Delivery),
-}
-
-fn unwrap_frame(frame: Frame) -> Result<(ChannelId, Option<Performative>, Option<Vec<u8>>)> {
-    match frame {
-        Frame::AMQP(AmqpFrame {
-            channel,
-            performative,
-            payload,
-        }) => {
-            return Ok((channel as ChannelId, performative, payload));
-        }
-        _ => return Err(AmqpError::framing_error()),
-    }
+pub struct SessionOpts {
+    pub max_frame_size: u32,
 }
 
 impl ConnectionDriver {
-    pub fn new(id: ConnectionId, connection: Connection) -> ConnectionDriver {
-        let hostname = connection.hostname.clone();
+    pub fn new(conn: conn::Connection) -> ConnectionDriver {
         ConnectionDriver {
-            id: id,
-            container_id: "dove".to_string(),
-            hostname: hostname,
-            connection: connection,
-            idle_timeout: Duration::from_millis(5000),
+            driver: Arc::new(Mutex::new(conn)),
+            rx: Channel::new(),
+            sessions: Mutex::new(HashMap::new()),
+            remote_channel_map: Mutex::new(HashMap::new()),
+            idle_timeout: Duration::from_secs(5),
+            remote_idle_timeout: Duration::from_secs(0),
             channel_max: std::u16::MAX,
-            remote_container_id: String::new(),
-            remote_channel_max: 0,
-            remote_idle_timeout: Duration::from_millis(0),
-            state: ConnectionState::Start,
-            opened: false,
-            closed: false,
-            sessions: HashMap::new(),
-            remote_channel_map: HashMap::new(),
-            close_condition: None,
         }
     }
 
-    pub fn open(self: &mut Self) {
-        self.opened = true;
-    }
-
-    fn allocate_channel(self: &mut Self) -> Option<ChannelId> {
-        for i in 0..self.channel_max {
-            let chan = i as ChannelId;
-            if !self.sessions.contains_key(&chan) {
-                return Some(chan);
-            }
-        }
-        None
-    }
-
-    pub fn create_session(self: &mut Self) -> &mut Session {
-        self.session_internal(None)
-    }
-
-    pub fn get_session(self: &mut Self, channel_id: ChannelId) -> Option<&mut Session> {
-        self.sessions.get_mut(&channel_id)
-    }
-
-    fn session_internal(self: &mut Self, channel_id: Option<ChannelId>) -> &mut Session {
-        let chan = self.allocate_channel().unwrap();
-        let s = Session {
-            end_condition: None,
-            remote_channel: channel_id,
-            local_channel: chan,
-            handle_max: std::u32::MAX,
-            opened: false,
-            closed: false,
-            delivery_to_handle: HashMap::new(),
-            next_outgoing_id: 0,
-            state: SessionState::Opening,
-            links: HashMap::new(),
-        };
-        self.sessions.insert(chan, s);
-        channel_id.map(|c| self.remote_channel_map.insert(c, chan));
-        self.sessions.get_mut(&chan).unwrap()
-    }
-
-    pub fn close(self: &mut Self, condition: Option<ErrorCondition>) {
-        self.closed = true;
-        self.close_condition = condition;
-    }
-
-    pub fn token(self: &Self) -> Token {
-        Token(self.id)
-    }
-
-    /**
-     * Do work on this connection until progress cannot be made.
-     */
-    pub fn do_work(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
-        let output_result = self.process_output(event_buffer);
-        let input_result = self.process_input(event_buffer);
-        match (output_result, input_result) {
-            (Err(e), _) => Err(e),
-            (_, Err(e)) => Err(e),
-            _ => Ok(()),
-        }
-    }
-
-    fn process_output(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
-        match self.state {
-            ConnectionState::Start => {
-                event_buffer.push(Event::ConnectionInit(self.id));
-                self.state = ConnectionState::Opening;
-            }
-            ConnectionState::Opening => {
-                if self.opened {
-                    let mut open = Open::new(self.container_id.as_str());
-                    open.hostname = Some(self.hostname.clone());
-                    open.channel_max = Some(self.channel_max);
-                    open.idle_timeout = Some(self.idle_timeout.as_millis() as u32);
-
-                    self.connection.open(open.clone())?;
-                    event_buffer.push(Event::LocalOpen(self.id, open));
-                    self.state = ConnectionState::Opened;
-                }
-            }
-            ConnectionState::Opened => {
-                if self.closed {
-                    self.state = ConnectionState::Closing;
-                } else {
-                    self.process_connection(event_buffer)?;
-                    self.keepalive()?;
-                }
-            }
-            ConnectionState::Closing => {
-                if self.closed {
-                    self.connection.close(Close {
-                        error: self.close_condition.clone(),
-                    })?;
-
-                    let condition = self.close_condition.clone();
-                    event_buffer.push(Event::LocalClose(self.id, condition));
-                }
-                self.state = ConnectionState::CloseSent;
-            }
-            ConnectionState::CloseSent => {}
-            _ => return Ok(()),
-        }
+    pub fn register(&self, id: Token, poll: &mut Poll) -> Result<()> {
+        let mut d = self.driver.lock().unwrap();
+        poll.registry()
+            .register(&mut *d, id, Interest::READABLE | Interest::WRITABLE)?;
         Ok(())
     }
 
-    fn process_input(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
-        // Process connection with new input
-        let mut rx_frames = Vec::new();
-        self.connection.process(&mut rx_frames)?;
-        for frame in rx_frames.drain(..) {
-            self.process_frame(frame, event_buffer)?;
-        }
-        Ok(())
+    pub fn driver(&self) -> std::sync::MutexGuard<conn::Connection> {
+        self.driver.lock().unwrap()
     }
 
-    // Process work to be performed on sub endpoints
-    fn process_connection(self: &mut Self, event_buffer: &mut EventBuffer) -> Result<()> {
-        for (_, session) in self.sessions.iter_mut() {
-            session.process(self.id, &mut self.connection, event_buffer)?;
-        }
-        Ok(())
-    }
-
-    fn keepalive(self: &mut Self) -> Result<()> {
+    pub fn keepalive(&self, connection: &mut conn::Connection) -> Result<()> {
         // Sent out keepalives...
         let now = Instant::now();
 
-        let last_received = self.connection.keepalive(self.remote_idle_timeout, now)?;
+        let last_received = connection.keepalive(self.remote_idle_timeout, now)?;
         if self.idle_timeout.as_millis() > 0 {
             // Ensure our peer honors our keepalive
             if now - last_received > self.idle_timeout * 2 {
-                self.close_condition = Some(ErrorCondition {
-                    condition: condition::RESOURCE_LIMIT_EXCEEDED.to_string(),
-                    description: "local-idle-timeout expired".to_string(),
-                });
-                self.closed = true;
+                connection.close(Close {
+                    error: Some(ErrorCondition {
+                        condition: condition::RESOURCE_LIMIT_EXCEEDED.to_string(),
+                        description: "local-idle-timeout expired".to_string(),
+                    }),
+                })?;
             }
         }
         Ok(())
     }
 
-    // Dispatch frame to relevant endpoint
-    fn process_frame(self: &mut Self, frame: Frame, event_buffer: &mut EventBuffer) -> Result<()> {
-        let (channel_id, performative, payload) = unwrap_frame(frame)?;
-
-        if performative.is_none() {
-            return Ok(());
-        }
-
-        let performative = performative.unwrap();
-        self.process_frame_internal(channel_id, &performative, payload, event_buffer)
+    pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
+        let mut driver = self.driver.lock().unwrap();
+        driver.close(Close { error: error })?;
+        driver.flush()?;
+        driver.shutdown()
     }
 
-    // Handle frames for a connection
-    fn process_frame_internal(
-        self: &mut Self,
-        channel_id: ChannelId,
-        performative: &Performative,
-        payload: Option<Vec<u8>>,
-        event_buffer: &mut EventBuffer,
-    ) -> Result<()> {
-        trace!("State: {:?}. Performative: {:?}", self.state, performative);
-        match performative {
-            Performative::Open(open) => {
-                if self.state != ConnectionState::Opening && self.state != ConnectionState::Opened {
-                    return Err(AmqpError::framing_error());
-                }
-                self.remote_container_id = open.container_id.clone();
-                self.remote_idle_timeout =
-                    Duration::from_millis(open.idle_timeout.unwrap_or(0) as u64);
-                self.remote_channel_max = open.channel_max.unwrap_or(65535);
-                event_buffer.push(Event::RemoteOpen(self.id, open.clone()));
-                Ok(())
-            }
-            Performative::Begin(begin) => {
-                if self.state == ConnectionState::Opening || self.state == ConnectionState::Closed {
-                    return Err(AmqpError::framing_error());
-                }
-                let id = self.id;
-                // Response to locally initiated, use direct lookup
-                let session = if let Some(remote_channel) = begin.remote_channel {
-                    self.remote_channel_map.insert(channel_id, remote_channel);
-                    self.sessions.get_mut(&remote_channel).unwrap()
-                } else {
-                    // Create session with desired settings
-                    self.session_internal(Some(channel_id))
-                };
-
-                if let Some(handle_max) = begin.handle_max {
-                    session.handle_max = handle_max;
-                }
-
-                session.next_outgoing_id = begin.next_outgoing_id;
-
-                session.remote_channel = Some(channel_id);
-
-                // let local_channel = session.local_channel;
-                event_buffer.push(Event::RemoteBegin(id, session.local_channel, begin.clone()));
-                match session.state {
-                    SessionState::Closed => Err(AmqpError::framing_error()),
-                    _ => Ok(()),
-                }
-            }
-            Performative::Attach(attach) => {
-                if self.state == ConnectionState::Opening || self.state == ConnectionState::Closed {
-                    return Err(AmqpError::framing_error());
-                }
-                trace!(
-                    "Remote ATTACH to channel {:?}. Map: {:?}",
-                    channel_id,
-                    self.remote_channel_map
-                );
-                let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
-                if let Some(local_channel) = local_channel_opt {
-                    let session = self.sessions.get_mut(&local_channel).unwrap();
-                    match session.links.get_mut(&attach.handle) {
-                        None => Err(AmqpError::internal_error()),
-                        Some(link) => match link.state {
-                            LinkState::Closed => Err(AmqpError::framing_error()),
-                            _ => {
-                                event_buffer.push(Event::RemoteAttach(
-                                    self.id,
-                                    session.local_channel,
-                                    link.handle,
-                                    attach.clone(),
-                                ));
-                                return Ok(());
-                            }
-                        },
+    pub fn process(&self) -> Result<()> {
+        // Read frames until we're blocked
+        let mut rx_frames = Vec::new();
+        {
+            let mut driver = self.driver.lock().unwrap();
+            loop {
+                let result = driver.process(&mut rx_frames);
+                match result {
+                    Ok(_) => {}
+                    // This means that we should poll again to await further I/O action for this driver.
+                    Err(AmqpError::IoError(ref e))
+                        if e.kind() == std::io::ErrorKind::WouldBlock =>
+                    {
+                        break;
                     }
-                } else {
-                    Err(AmqpError::framing_error())
-                }
-            }
-            Performative::Flow(flow) => {
-                if self.state == ConnectionState::Opening || self.state == ConnectionState::Closed {
-                    return Err(AmqpError::framing_error());
-                }
-                let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
-                if let Some(local_channel) = local_channel_opt {
-                    let session = self.sessions.get_mut(&local_channel).unwrap();
-                    if let Some(handle) = flow.handle {
-                        event_buffer.push(Event::Flow(
-                            self.id,
-                            session.local_channel,
-                            handle,
-                            flow.clone(),
-                        ));
+                    Err(e) => {
+                        return Err(e);
                     }
                 }
-                Ok(())
             }
-            Performative::Transfer(transfer) => {
-                if self.state == ConnectionState::Opening || self.state == ConnectionState::Closed {
-                    return Err(AmqpError::framing_error());
-                }
-                let mut input = payload.unwrap();
-                let message = Message::decode(&mut input)?;
-                let delivery = Delivery {
-                    state: transfer.state.clone(),
-                    tag: transfer.delivery_tag.clone().unwrap(),
-                    id: transfer.delivery_id.unwrap(),
-                    remotely_settled: transfer.settled.unwrap_or(false),
-                    settled: false,
-                    message: message,
-                };
-                event_buffer.push(Event::Delivery(
-                    self.id,
-                    channel_id,
-                    transfer.handle,
-                    delivery,
-                ));
-                Ok(())
-            }
-            Performative::Disposition(disposition) => {
-                if self.state == ConnectionState::Opening || self.state == ConnectionState::Closed {
-                    return Err(AmqpError::framing_error());
-                }
-                let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
-                if let Some(local_channel) = local_channel_opt {
-                    let session = self.sessions.get_mut(&local_channel).unwrap();
-                    let last = disposition.last.unwrap_or(disposition.first);
-                    let mut tags = HashMap::new();
-                    for id in disposition.first..=last {
-                        let handle = session.delivery_to_handle.get(&id).unwrap();
-                        let link = session.links.get_mut(&handle).unwrap();
-                        if link.role == disposition.role {
-                            if let Some(d) = link.unsettled.remove(&id) {
-                                tags.insert(d.tag, *handle);
+        }
+
+        trace!("Got {:?} frames", rx_frames.len());
+
+        self.dispatch(rx_frames)
+    }
+
+    fn dispatch(&self, mut frames: Vec<Frame>) -> Result<()> {
+        // Process received frames.
+        for frame in frames.drain(..) {
+            if let Frame::AMQP(frame) = frame {
+                trace!("Got AMQP frame: {:?}", frame.performative);
+                if let Some(ref performative) = frame.performative {
+                    let channel = frame.channel;
+                    match performative {
+                        Performative::Open(ref _open) => {
+                            self.rx.send(frame)?;
+                        }
+                        Performative::Close(ref _close) => {
+                            self.rx.send(frame)?;
+                        }
+                        Performative::Begin(ref _begin) => {
+                            let mut m = self.sessions.lock().unwrap();
+                            m.get_mut(&channel).map(|s| s.rx.send(frame));
+                        }
+                        Performative::End(ref _end) => {
+                            let mut m = self.sessions.lock().unwrap();
+                            m.get_mut(&channel).map(|s| s.rx.send(frame));
+                        }
+                        _ => {
+                            let session = {
+                                let mut m = self.sessions.lock().unwrap();
+                                m.get_mut(&channel).map(|s| s.clone())
+                            };
+
+                            match session {
+                                Some(s) => {
+                                    s.dispatch(frame)?;
+                                }
+                                _ => {}
                             }
                         }
                     }
-                    event_buffer.push(Event::Disposition(
-                        self.id,
-                        session.local_channel,
-                        tags,
-                        disposition.clone(),
-                    ));
                 }
-                Ok(())
-            }
-            Performative::Detach(detach) => {
-                if self.state == ConnectionState::Opening || self.state == ConnectionState::Closed {
-                    return Err(AmqpError::framing_error());
-                }
-                let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
-                // Lookup session and remove link
-                if let Some(local_channel) = local_channel_opt {
-                    let session = self.sessions.get_mut(&local_channel).unwrap();
-                    session.links.remove(&detach.handle);
-                }
-
-                if let Some(error) = detach.error.clone() {
-                    Err(AmqpError::Amqp(error))
-                } else {
-                    Ok(())
-                }
-            }
-            Performative::End(end) => {
-                if self.state == ConnectionState::Opening || self.state == ConnectionState::Closed {
-                    return Err(AmqpError::framing_error());
-                }
-                let local_channel_opt = self.remote_channel_map.get_mut(&channel_id);
-                if let Some(local_channel) = local_channel_opt {
-                    self.sessions.remove(&local_channel);
-                    self.remote_channel_map.remove(&channel_id);
-                }
-                if let Some(error) = end.error.clone() {
-                    Err(AmqpError::Amqp(error))
-                } else {
-                    Ok(())
-                }
-            }
-            Performative::Close(close) => {
-                if self.state == ConnectionState::Closed {
-                    return Err(AmqpError::framing_error());
-                }
-                if channel_id == 0 {
-                    let id = self.id;
-                    event_buffer.push(Event::RemoteClose(id, close.clone()));
-                    self.sessions.clear();
-                    if self.state == ConnectionState::CloseSent {
-                        self.state = ConnectionState::Closed;
-                    } else if self.state != ConnectionState::Closed {
-                        self.state = ConnectionState::Closing;
-                    }
-                }
-                Ok(())
             }
         }
-    }
-}
-
-impl Session {
-    pub fn open(self: &mut Self) {
-        self.opened = true;
+        Ok(())
     }
 
-    pub fn get_link(self: &mut Self, handle_id: HandleId) -> Option<&mut Link> {
-        self.links.get_mut(&handle_id)
-    }
+    fn allocate_session(
+        self: &Self,
+        remote_channel_id: Option<ChannelId>,
+    ) -> Option<Arc<SessionDriver>> {
+        let mut m = self.sessions.lock().unwrap();
+        for i in 0..self.channel_max {
+            let chan = i as ChannelId;
+            if !m.contains_key(&chan) {
+                let session = Arc::new(SessionDriver {
+                    driver: self.driver.clone(),
+                    local_channel: chan,
+                    rx: Channel::new(),
+                    links: Mutex::new(HashMap::new()),
+                    handle_generator: AtomicU32::new(0),
+                    did_incoming_id: Arc::new(AtomicU32::new(0)),
+                    did_generator: Arc::new(AtomicU32::new(0)),
+                    did_to_link: Arc::new(Mutex::new(HashMap::new())),
+                    //             driver: self.inner.clone(),
+                    /*
+                    remote_channel: remote_channel_id,
+                    local_channel: chan,
+                    handle_max: std::u32::MAX,
+                    delivery_to_handle: HashMap::new(),
+                    next_outgoing_id: 0,
 
-    fn allocate_handle(self: &mut Self) -> Option<HandleId> {
-        for i in 0..self.handle_max {
-            let id = i as HandleId;
-            if !self.links.contains_key(&id) {
-                return Some(id);
+                    opts: None,
+                    incoming: Channel::new(),
+                    opened: Channel::new(),
+                    */
+                });
+                m.insert(chan, session.clone());
+                remote_channel_id.map(|c| self.remote_channel_map.lock().unwrap().insert(c, chan));
+                return Some(session);
             }
         }
         None
     }
 
-    pub fn create_sender<'a>(self: &mut Self, address: Option<&'a str>) -> &mut Link {
-        let name = address.unwrap_or("unknown").to_string();
-        let id = self.allocate_handle().unwrap();
-        self.links.insert(
-            id,
-            Link {
-                name: name,
-                handle: id,
-                next_message_id: 0,
-                role: LinkRole::Sender,
-                state: LinkState::Opening,
-                source: Some(Source {
-                    address: None,
-                    durable: None,
-                    expiry_policy: None,
-                    timeout: None,
-                    dynamic: None,
-                    dynamic_node_properties: None,
-                    default_outcome: None,
-                    distribution_mode: None,
-                    filter: None,
-                    outcomes: None,
-                    capabilities: None,
-                }),
-                target: Some(Target {
-                    address: address.map(|s| s.to_string()),
-                    durable: None,
-                    expiry_policy: None,
-                    timeout: None,
-                    dynamic: Some(false),
-                    dynamic_node_properties: None,
-                    capabilities: None,
-                }),
-                opened: false,
-                closed: false,
-                deliveries: Vec::new(),
-                dispositions: Vec::new(),
-                unsettled: HashMap::new(),
-                flow: Vec::new(),
-            },
-        );
-        self.links.get_mut(&id).unwrap()
+    pub async fn new_session(&self, _opts: Option<SessionOpts>) -> Result<Arc<SessionDriver>> {
+        let session = self.allocate_session(None).unwrap();
+        let begin = Begin {
+            remote_channel: None,
+            next_outgoing_id: 0,
+            incoming_window: 10,
+            outgoing_window: 10,
+            handle_max: None,
+            offered_capabilities: None,
+            desired_capabilities: None,
+            properties: None,
+        };
+        self.driver
+            .lock()
+            .unwrap()
+            .begin(session.local_channel, begin)?;
+
+        Ok(session)
     }
 
-    pub fn create_receiver<'a>(self: &mut Self, address: Option<&'a str>) -> &mut Link {
-        let name = address.unwrap_or("unknown").to_string();
-        let id = self.allocate_handle().unwrap();
-        self.links.insert(
-            id,
-            Link {
-                name: name,
-                handle: id,
-                next_message_id: 0,
-                role: LinkRole::Receiver,
-                state: LinkState::Opening,
-                source: Some(Source {
-                    address: address.map(|s| s.to_string()),
-                    durable: None,
-                    expiry_policy: None,
-                    timeout: None,
-                    dynamic: Some(false),
-                    dynamic_node_properties: None,
-                    default_outcome: None,
-                    distribution_mode: None,
-                    filter: None,
-                    outcomes: None,
-                    capabilities: None,
-                }),
-                target: Some(Target {
-                    address: address.map(|s| s.to_string()),
-                    durable: None,
-                    expiry_policy: None,
-                    timeout: None,
-                    dynamic: Some(false),
-                    dynamic_node_properties: None,
-                    capabilities: None,
-                }),
-                opened: false,
-                closed: false,
-                deliveries: Vec::new(),
-                dispositions: Vec::new(),
-                unsettled: HashMap::new(),
-                flow: Vec::new(),
-            },
-        );
-        self.links.get_mut(&id).unwrap()
+    pub fn recv(&self) -> Result<AmqpFrame> {
+        self.rx.recv()
     }
 
-    fn process(
-        self: &mut Self,
-        connection_id: ConnectionId,
-        connection: &mut Connection,
-        event_buffer: &mut EventBuffer,
-    ) -> Result<()> {
-        match self.state {
-            SessionState::Opening => {
-                if self.opened {
-                    let begin = Begin {
-                        remote_channel: self.remote_channel,
-                        next_outgoing_id: 0,
-                        incoming_window: 10,
-                        outgoing_window: 10,
-                        handle_max: None,
-                        offered_capabilities: None,
-                        desired_capabilities: None,
-                        properties: None,
-                    };
-                    connection.begin(self.local_channel, begin.clone())?;
-                    event_buffer.push(Event::LocalBegin(connection_id, self.local_channel, begin));
-                    self.state = SessionState::Opened;
-                }
-                Ok(())
-            }
-            SessionState::Opened => {
-                if self.closed {
-                    let end = End {
-                        error: self.end_condition.clone(),
-                    };
-                    connection.end(self.local_channel, end.clone())?;
-                    event_buffer.push(Event::LocalEnd(connection_id, self.local_channel, end));
-                    self.state = SessionState::Closing;
-                } else {
-                    for (_, link) in self.links.iter_mut() {
-                        self.next_outgoing_id = link.process(
-                            connection_id,
-                            connection,
-                            &mut self.delivery_to_handle,
-                            self.local_channel,
-                            self.next_outgoing_id,
-                            event_buffer,
-                        )?;
-                    }
-                }
-                Ok(())
-            }
-            SessionState::Closing | SessionState::Closed => Err(AmqpError::not_implemented()),
-        }
+    pub fn unrecv(&self, frame: AmqpFrame) -> Result<()> {
+        self.rx.send(frame)
     }
 }
 
-impl Link {
-    pub fn open(self: &mut Self) {
-        self.opened = true;
+impl SessionDriver {
+    pub fn dispatch(&self, frame: AmqpFrame) -> Result<()> {
+        match frame.performative {
+            Some(Performative::Attach(ref _attach)) => {
+                self.rx.send(frame)?;
+            }
+            Some(Performative::Detach(ref _detach)) => {
+                self.rx.send(frame)?;
+            }
+            Some(Performative::Transfer(ref transfer)) => {
+                let link = {
+                    let mut m = self.links.lock().unwrap();
+                    m.get_mut(&transfer.handle).unwrap().clone()
+                };
+
+                if link
+                    .available
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+                        if x <= 0 {
+                            Some(0)
+                        } else {
+                            Some(x - 1)
+                        }
+                    })
+                    == Ok(0)
+                {
+                    // TODO: Modified temporary?
+                } else {
+                    link.rx.send(frame)?;
+                }
+            }
+            Some(Performative::Disposition(ref disposition)) => {
+                trace!("Received disposition: {:?}", disposition);
+                let last = disposition.last.unwrap_or(disposition.first);
+                for id in disposition.first..=last {
+                    if let Some(handle) = self.did_to_link.lock().unwrap().get(&id) {
+                        let link = {
+                            let mut m = self.links.lock().unwrap();
+                            m.get_mut(&handle).unwrap().clone()
+                        };
+                        if link.role == disposition.role {
+                            link.rx.send(frame.clone())?;
+                        }
+                    }
+                }
+            }
+            Some(Performative::Flow(ref flow)) => {
+                trace!("Received flow!");
+                if let Some(handle) = flow.handle {
+                    let link = {
+                        let mut m = self.links.lock().unwrap();
+                        m.get_mut(&handle).unwrap().clone()
+                    };
+                    if let Some(credit) = flow.link_credit {
+                        link.credit.store(credit, Ordering::SeqCst);
+                    }
+                }
+            }
+            _ => {
+                trace!("Unexpected performative for session: {:?}", frame);
+            }
+        }
+        Ok(())
     }
 
-    pub fn flow(self: &mut Self, credits: u32) {
-        self.flow.push(credits);
+    pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
+        let mut driver = self.driver.lock().unwrap();
+        driver.end(self.local_channel, End { error: error })?;
+        driver.flush()
     }
 
-    pub fn send(self: &mut Self, data: &str) -> Result<Delivery> {
-        let mut message = Message::amqp_value(Value::String(data.to_string()));
-        message.properties = Some(MessageProperties {
-            message_id: Some(Value::Ulong(self.next_message_id + 1)),
-            user_id: None,
-            to: None,
-            subject: None,
-            reply_to: None,
-            correlation_id: None,
-            content_type: None,
-            content_encoding: None,
-            absolute_expiry_time: None,
-            creation_time: None,
-            group_id: None,
-            group_sequence: None,
-            reply_to_group_id: None,
+    pub fn new_link(&self, addr: &str, role: LinkRole) -> Result<Arc<LinkDriver>> {
+        trace!("Creating new link!");
+        let handle = self.handle_generator.fetch_add(1, Ordering::SeqCst);
+        let link = Arc::new(LinkDriver {
+            role: role,
+            channel: self.local_channel,
+            driver: self.driver.clone(),
+            handle: handle,
+            rx: Channel::new(),
+            unsettled: Mutex::new(HashMap::new()),
+            did_generator: self.did_generator.clone(),
+            did_to_link: self.did_to_link.clone(),
+            did_incoming_id: self.did_incoming_id.clone(),
+            credit: AtomicU32::new(0),
+            available: AtomicU32::new(0),
         });
-        self.next_message_id += 1;
+        // TODO: Increment id
+        let mut m = self.links.lock().unwrap();
+        m.insert(handle, link.clone());
 
-        let delivery_tag = rand::thread_rng().gen::<[u8; 16]>();
+        // Send attach frame
+        let attach = Attach {
+            name: addr.to_string(),
+            handle: handle as u32,
+            role: role,
+            snd_settle_mode: None,
+            rcv_settle_mode: None,
+            source: Some(Source {
+                address: Some(addr.to_string()),
+                durable: None,
+                expiry_policy: None,
+                timeout: None,
+                dynamic: Some(false),
+                dynamic_node_properties: None,
+                default_outcome: None,
+                distribution_mode: None,
+                filter: None,
+                outcomes: None,
+                capabilities: None,
+            }),
+            target: Some(Target {
+                address: Some(addr.to_string()),
+                durable: None,
+                expiry_policy: None,
+                timeout: None,
+                dynamic: Some(false),
+                dynamic_node_properties: None,
+                capabilities: None,
+            }),
+            unsettled: None,
+            incomplete_unsettled: None,
+            initial_delivery_count: if role == LinkRole::Sender {
+                Some(0)
+            } else {
+                None
+            },
+            max_message_size: None,
+            offered_capabilities: None,
+            desired_capabilities: None,
+            properties: None,
+        };
+        self.driver
+            .lock()
+            .unwrap()
+            .attach(self.local_channel, attach)?;
+        Ok(link)
+    }
 
-        let delivery = Delivery {
+    pub fn recv(&self) -> Result<AmqpFrame> {
+        self.rx.recv()
+    }
+
+    pub fn unrecv(&self, frame: AmqpFrame) -> Result<()> {
+        self.rx.send(frame)
+    }
+}
+
+impl LinkDriver {
+    pub fn driver(&self) -> std::sync::MutexGuard<conn::Connection> {
+        self.driver.lock().unwrap()
+    }
+    pub async fn send_message(
+        &self,
+        message: Message,
+        settled: bool,
+    ) -> Result<Arc<DeliveryDriver>> {
+        if self
+            .credit
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+                if x <= 0 {
+                    Some(0)
+                } else {
+                    Some(x - 1)
+                }
+            })
+            == Ok(0)
+        {
+            return Err(AmqpError::amqp_error(
+                "not enough credits to send message",
+                None,
+            ));
+        }
+
+        let delivery_tag = rand::thread_rng().gen::<[u8; 16]>().to_vec();
+        let delivery_id = self.did_generator.fetch_add(1, Ordering::SeqCst);
+        let delivery = Arc::new(DeliveryDriver {
             message: message,
-            id: 0, // Set by transfer
-            tag: delivery_tag.to_vec(),
+            id: delivery_id,
+            tag: delivery_tag.clone(),
             state: None,
             remotely_settled: false,
-            settled: false,
+            settled: settled,
+        });
+
+        if !settled {
+            self.unsettled
+                .lock()
+                .unwrap()
+                .insert(delivery_tag.clone(), delivery.clone());
+
+            self.did_to_link
+                .lock()
+                .unwrap()
+                .insert(delivery_id, self.handle);
+        }
+
+        let transfer = Transfer {
+            handle: self.handle,
+            delivery_id: Some(delivery_id),
+            delivery_tag: Some(delivery_tag),
+            message_format: Some(0),
+            settled: Some(settled),
+            more: Some(false),
+            rcv_settle_mode: None,
+            state: None,
+            resume: None,
+            aborted: None,
+            batchable: None,
         };
 
-        self.deliveries.push(delivery.clone());
+        let mut msgbuf = Vec::new();
+        delivery.message.encode(&mut msgbuf)?;
+
+        self.driver
+            .lock()
+            .unwrap()
+            .transfer(self.channel, transfer, Some(msgbuf))?;
+
         Ok(delivery)
     }
 
-    pub fn settle(self: &mut Self, delivery: &Delivery, settled: bool, state: DeliveryState) {
-        self.dispositions.push(DeliveryDisposition {
-            id: delivery.id,
-            settled: settled,
-            state: state,
-        });
+    pub async fn flow(&self, credit: u32) -> Result<()> {
+        self.credit.store(credit, Ordering::SeqCst);
+        self.available.store(credit, Ordering::SeqCst);
+        let flow = Flow {
+            next_incoming_id: Some(self.did_incoming_id.load(Ordering::SeqCst)),
+            incoming_window: std::i32::MAX as u32,
+            next_outgoing_id: self.did_generator.load(Ordering::SeqCst),
+            outgoing_window: std::i32::MAX as u32,
+            handle: Some(self.handle as u32),
+            delivery_count: None,
+            link_credit: Some(credit),
+            available: None,
+            drain: None,
+            echo: None,
+            properties: None,
+        };
+        self.driver.lock().unwrap().flow(self.channel, flow)?;
+
+        Ok(())
     }
 
-    fn process(
-        self: &mut Self,
-        connection_id: ConnectionId,
-        connection: &mut Connection,
-        delivery_to_handle: &mut HashMap<u32, HandleId>,
-        local_channel: ChannelId,
-        next_outgoing_id: u32,
-        event_buffer: &mut EventBuffer,
-    ) -> Result<u32> {
-        match self.state {
-            LinkState::Opening => {
-                if self.opened {
-                    let attach = Attach {
-                        name: self.name.clone(),
-                        handle: self.handle as u32,
-                        role: self.role,
-                        snd_settle_mode: None,
-                        rcv_settle_mode: None,
-                        source: self.source.clone(),
-                        target: self.target.clone(),
-                        unsettled: None,
-                        incomplete_unsettled: None,
-                        initial_delivery_count: if self.role == LinkRole::Sender {
-                            Some(0)
-                        } else {
-                            None
-                        },
-                        max_message_size: None,
-                        offered_capabilities: None,
-                        desired_capabilities: None,
-                        properties: None,
-                    };
-                    connection.attach(local_channel, attach.clone())?;
+    pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
+        let mut driver = self.driver.lock().unwrap();
+        driver.detach(
+            self.channel,
+            Detach {
+                handle: self.handle,
+                closed: Some(true),
+                error: error,
+            },
+        )?;
+        driver.flush()
+    }
 
-                    event_buffer.push(Event::LocalAttach(
-                        connection_id,
-                        local_channel,
-                        self.handle,
-                        attach,
-                    ));
-                    self.state = LinkState::Opened;
-                }
-                Ok(next_outgoing_id)
-            }
-            LinkState::Opened => {
-                if self.closed {
-                    Err(AmqpError::not_implemented())
-                } else {
-                    if self.role == LinkRole::Sender {
-                        let mut next_id = next_outgoing_id;
-                        for mut delivery in self.deliveries.drain(..) {
-                            let delivery_id = next_id;
-                            next_id += 1;
+    pub fn recv(&self) -> Result<AmqpFrame> {
+        self.rx.recv()
+    }
 
-                            trace!("TX MESSAGE: {:?}", delivery.message);
-                            let mut msgbuf = Vec::new();
-                            delivery.message.encode(&mut msgbuf)?;
-                            let tag = delivery.tag.clone();
-
-                            delivery.id = delivery_id;
-                            delivery_to_handle.insert(delivery_id, self.handle);
-                            self.unsettled.insert(delivery_id, delivery);
-
-                            connection.transfer(
-                                local_channel,
-                                Transfer {
-                                    handle: self.handle,
-                                    delivery_id: Some(delivery_id),
-                                    delivery_tag: Some(tag),
-                                    message_format: Some(0),
-                                    settled: Some(false),
-                                    more: Some(false),
-                                    rcv_settle_mode: None,
-                                    state: None,
-                                    resume: None,
-                                    aborted: None,
-                                    batchable: None,
-                                },
-                                Some(msgbuf),
-                            )?;
-                        }
-                        Ok(next_id)
-                    } else {
-                        for disposition in self.dispositions.drain(..) {
-                            connection.disposition(
-                                local_channel,
-                                Disposition {
-                                    role: self.role,
-                                    first: disposition.id,
-                                    last: None,
-                                    settled: Some(disposition.settled),
-                                    state: Some(disposition.state),
-                                    batchable: None,
-                                },
-                            )?;
-                        }
-                        for amount in self.flow.drain(..) {
-                            connection.flow(
-                                local_channel,
-                                Flow {
-                                    next_incoming_id: None,
-                                    incoming_window: std::i32::MAX as u32,
-                                    next_outgoing_id: next_outgoing_id,
-                                    outgoing_window: std::i32::MAX as u32,
-                                    handle: Some(self.handle as u32),
-                                    delivery_count: None,
-                                    link_credit: Some(amount),
-                                    available: None,
-                                    drain: None,
-                                    echo: None,
-                                    properties: None,
-                                },
-                            )?;
-                        }
-                        Ok(next_outgoing_id)
-                    }
-                }
-            }
-            LinkState::Closing | LinkState::Closed => Err(AmqpError::not_implemented()),
-        }
+    pub fn unrecv(&self, frame: AmqpFrame) -> Result<()> {
+        self.rx.send(frame)
     }
 }
 
-impl event::Source for ConnectionDriver {
-    fn register(
-        &mut self,
-        registry: &Registry,
-        token: Token,
-        interests: Interest,
-    ) -> std::io::Result<()> {
-        self.connection.register(registry, token, interests)
+pub struct Channel<T> {
+    tx: Mutex<mpsc::Sender<T>>,
+    rx: Mutex<mpsc::Receiver<T>>,
+}
+
+impl<T> Channel<T> {
+    pub fn new() -> Channel<T> {
+        let (tx, rx) = mpsc::channel();
+        return Channel {
+            tx: Mutex::new(tx),
+            rx: Mutex::new(rx),
+        };
     }
 
-    fn reregister(
-        &mut self,
-        registry: &Registry,
-        token: Token,
-        interests: Interest,
-    ) -> std::io::Result<()> {
-        self.connection.reregister(registry, token, interests)
+    pub fn send(&self, value: T) -> Result<()> {
+        self.tx.lock().unwrap().send(value)?;
+        Ok(())
     }
 
-    fn deregister(&mut self, registry: &Registry) -> std::io::Result<()> {
-        self.connection.deregister(registry)
+    pub fn try_recv(&self) -> Result<T> {
+        let r = self.rx.lock().unwrap().try_recv()?;
+        Ok(r)
+    }
+
+    pub fn recv(&self) -> Result<T> {
+        let r = self.rx.lock().unwrap().recv()?;
+        Ok(r)
     }
 }
