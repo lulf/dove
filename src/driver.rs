@@ -431,7 +431,7 @@ impl LinkDriver {
         message: Message,
         settled: bool,
     ) -> Result<Arc<DeliveryDriver>> {
-        if self
+        while self
             .credit
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
                 if x <= 0 {
@@ -442,10 +442,13 @@ impl LinkDriver {
             })
             == Ok(0)
         {
+            std::thread::sleep(Duration::from_millis(500));
+            /*
             return Err(AmqpError::amqp_error(
                 "not enough credits to send message",
                 None,
             ));
+            */
         }
 
         let delivery_tag = rand::thread_rng().gen::<[u8; 16]>().to_vec();
