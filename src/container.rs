@@ -11,7 +11,6 @@ use crate::driver::{
 use crate::error::*;
 use crate::framing;
 use crate::framing::{LinkRole, Open, Performative};
-use crate::message::{Message, MessageProperties};
 
 use log::trace;
 use mio::{Events, Poll, Token};
@@ -20,12 +19,14 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use uuid::Uuid;
 
 // Re-exports
 pub use crate::conn::ConnectionOptions;
 pub use crate::framing::DeliveryState;
+pub use crate::message::{Message, MessageProperties};
 pub use crate::sasl::SaslMechanism;
-pub use crate::types::Value;
+pub use crate::types::{Value, ValueRef};
 
 pub struct Container {
     container: Arc<ContainerInner>,
@@ -88,8 +89,9 @@ pub struct Delivery {
 impl Container {
     pub fn new() -> Result<Container> {
         let p = Poll::new()?;
+        let uuid = Uuid::new_v4();
         let inner = ContainerInner {
-            container_id: "rs-amqp10".to_string(),
+            container_id: uuid.to_string(),
             incoming: Channel::new(),
             poll: Mutex::new(p),
             connections: Mutex::new(HashMap::new()),
@@ -394,8 +396,7 @@ impl Session {
 }
 
 impl Sender {
-    pub async fn send(&self, data: &str) -> Result<Disposition> {
-        let mut message = Message::amqp_value(Value::String(data.to_string()));
+    pub async fn send(&self, mut message: Message) -> Result<Disposition> {
         message.properties = Some(MessageProperties {
             message_id: Some(Value::Ulong(
                 self.next_message_id.fetch_add(1, Ordering::SeqCst),

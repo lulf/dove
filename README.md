@@ -18,6 +18,7 @@ Dove exposes two different APIs:
 
 ## TODO
 
+* Allow setting more options (on container, connection, session, links)
 * Cleaning up crate/module structure.
 * TLS/SSL support
 * Improve SASL support (missing SCRAM* support)

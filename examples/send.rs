@@ -20,7 +20,7 @@ fn main() {
     let host = &args[1];
     let port = args[2].parse::<u16>().expect("Error parsing port");
     let address = &args[3];
-    let message = &args[4];
+    let data = &args[4];
 
     let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
 
@@ -48,6 +48,7 @@ fn main() {
             .expect("sender not created");
 
         //  Send message and get delivery.
+        let message = Message::amqp_value(Value::String(data.to_string()));
         let _ = sender.send(message).await.expect("delivery not received");
     });
 }

@@ -7,9 +7,6 @@ use dove::container::*;
 use dove::message::MessageBody;
 
 use futures::executor::block_on;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use std::{thread, time};
 
 #[test]
 fn client() {
@@ -49,8 +46,9 @@ fn client() {
         println!("Sender created!");
 
         //  Send message and get disposition.
-        let disposition = sender
-            .send("Hello, World")
+        let message = Message::amqp_value(Value::String("Hello, World".to_string()));
+        let _ = sender
+            .send(message)
             .await
             .expect("disposition not received");
 
