@@ -13,7 +13,7 @@ use crate::framing::{
 };
 use crate::message::Message;
 use log::trace;
-use mio::{Interest, Poll, Token};
+use mio::{Interest, Poll, Token, Waker};
 use rand::Rng;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -29,6 +29,7 @@ pub struct ConnectionDriver {
     idle_timeout: Duration,
     driver: Arc<Mutex<conn::Connection>>,
     sessions: Mutex<HashMap<ChannelId, Arc<SessionDriver>>>,
+    waker: Arc<Waker>,
 
     // Frames received on this connection
     rx: Channel<AmqpFrame>,
@@ -90,16 +91,22 @@ pub struct SessionOpts {
 }
 
 impl ConnectionDriver {
-    pub fn new(conn: conn::Connection) -> ConnectionDriver {
+    pub fn new(conn: conn::Connection, waker: Arc<Waker>) -> ConnectionDriver {
         ConnectionDriver {
             driver: Arc::new(Mutex::new(conn)),
             rx: Channel::new(),
             sessions: Mutex::new(HashMap::new()),
+            waker: waker,
             remote_channel_map: Mutex::new(HashMap::new()),
             idle_timeout: Duration::from_secs(5),
             remote_idle_timeout: Duration::from_secs(0),
             channel_max: std::u16::MAX,
         }
+    }
+
+    pub fn wakeup(&self) -> Result<()> {
+        self.waker.wake()?;
+        Ok(())
     }
 
     pub fn register(&self, id: Token, poll: &mut Poll) -> Result<()> {
