@@ -9,7 +9,6 @@ use crate::driver::{
     Channel, ConnectionDriver, DeliveryDriver, LinkDriver, SessionDriver, SessionOpts,
 };
 use crate::error::*;
-use crate::framing;
 use crate::framing::{LinkRole, Open, Performative};
 
 use log::trace;
@@ -510,18 +509,6 @@ impl Delivery {
     }
 
     pub async fn disposition(&self, settled: bool, state: DeliveryState) -> Result<()> {
-        let disposition = framing::Disposition {
-            role: self.link.role,
-            first: self.delivery.id,
-            last: None,
-            settled: Some(settled),
-            state: Some(state),
-            batchable: None,
-        };
-
-        self.link
-            .driver()
-            .disposition(self.link.channel, disposition)?;
-        Ok(())
+        self.link.disposition(&self.delivery, settled, state).await
     }
 }

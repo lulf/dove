@@ -6,6 +6,7 @@
 use crate::conn;
 use crate::conn::ChannelId;
 use crate::error::*;
+use crate::framing;
 use crate::framing::{
     AmqpFrame, Attach, Begin, Close, DeliveryState, Detach, End, Flow, Frame, LinkRole,
     Performative, Source, Target, Transfer,
@@ -72,7 +73,7 @@ pub struct LinkDriver {
     did_to_link: Arc<Mutex<HashMap<u32, HandleId>>>,
     unsettled: Mutex<HashMap<DeliveryTag, Arc<DeliveryDriver>>>,
     credit: AtomicU32,
-    available: AtomicU32,
+    delivery_count: AtomicU32,
 }
 
 pub struct DeliveryDriver {
@@ -113,14 +114,14 @@ impl ConnectionDriver {
     }
 
     pub fn flowcontrol(&self, connection: &mut conn::Connection) -> Result<()> {
-        let low_flow_watermark = 10;
-        let high_flow_watermark = 100;
+        let low_flow_watermark = 100;
+        let high_flow_watermark = 1000;
 
         for (_, session) in self.sessions.lock().unwrap().iter_mut() {
             for (_, link) in session.links.lock().unwrap().iter_mut() {
                 if link.role == LinkRole::Receiver {
                     let credit = link.credit.load(Ordering::SeqCst);
-                    if credit < low_flow_watermark {
+                    if credit <= low_flow_watermark {
                         link.flowcontrol(high_flow_watermark, connection)?;
                     }
                 }
@@ -294,7 +295,14 @@ impl ConnectionDriver {
 impl SessionDriver {
     pub fn dispatch(&self, frame: AmqpFrame) -> Result<()> {
         match frame.performative {
-            Some(Performative::Attach(ref _attach)) => {
+            Some(Performative::Attach(ref attach)) => {
+                if let Some(delivery_count) = attach.initial_delivery_count {
+                    let link = {
+                        let mut m = self.links.lock().unwrap();
+                        m.get_mut(&attach.handle).unwrap().clone()
+                    };
+                    link.delivery_count.store(delivery_count, Ordering::SeqCst);
+                }
                 self.rx.send(frame)?;
             }
             Some(Performative::Detach(ref _detach)) => {
@@ -317,8 +325,16 @@ impl SessionDriver {
                     })
                     == Ok(0)
                 {
-                    // TODO: Modified temporary?
+                    trace!("Transfer but no space left!");
                 } else {
+                    trace!(
+                        "Received transfert. Credit: {:?}",
+                        link.credit.load(Ordering::SeqCst)
+                    );
+                    if let Some(did) = transfer.delivery_id {
+                        self.did_incoming_id.store(did + 1, Ordering::SeqCst);
+                    }
+                    link.delivery_count.fetch_add(1, Ordering::SeqCst);
                     link.rx.send(frame)?;
                 }
             }
@@ -345,7 +361,7 @@ impl SessionDriver {
                         m.get_mut(&handle).unwrap().clone()
                     };
                     if let Some(credit) = flow.link_credit {
-                        link.available.store(credit, Ordering::SeqCst);
+                        link.credit.store(credit, Ordering::SeqCst);
                     }
                 }
             }
@@ -376,7 +392,7 @@ impl SessionDriver {
             did_to_link: self.did_to_link.clone(),
             did_incoming_id: self.did_incoming_id.clone(),
             credit: AtomicU32::new(0),
-            available: AtomicU32::new(0),
+            delivery_count: AtomicU32::new(0),
         });
         // TODO: Increment id
         let mut m = self.links.lock().unwrap();
@@ -449,7 +465,7 @@ impl LinkDriver {
         settled: bool,
     ) -> Result<Arc<DeliveryDriver>> {
         while self
-            .available
+            .credit
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
                 if x <= 0 {
                     Some(0)
@@ -531,7 +547,7 @@ impl LinkDriver {
                 next_outgoing_id: self.did_generator.load(Ordering::SeqCst),
                 outgoing_window: std::i32::MAX as u32,
                 handle: Some(self.handle as u32),
-                delivery_count: None,
+                delivery_count: Some(self.delivery_count.load(Ordering::SeqCst)),
                 link_credit: Some(credit),
                 available: None,
                 drain: None,
@@ -560,6 +576,29 @@ impl LinkDriver {
 
     pub fn unrecv(&self, frame: AmqpFrame) -> Result<()> {
         self.rx.send(frame)
+    }
+
+    pub async fn disposition(
+        &self,
+        delivery: &DeliveryDriver,
+        settled: bool,
+        state: DeliveryState,
+    ) -> Result<()> {
+        if settled {
+            self.unsettled.lock().unwrap().remove(&delivery.tag);
+            self.did_to_link.lock().unwrap().remove(&delivery.id);
+        }
+        let disposition = framing::Disposition {
+            role: self.role,
+            first: delivery.id,
+            last: Some(delivery.id),
+            settled: Some(settled),
+            state: Some(state),
+            batchable: None,
+        };
+
+        self.driver().disposition(self.channel, disposition)?;
+        Ok(())
     }
 }
 
