@@ -6,13 +6,14 @@
 use crate::conn;
 use crate::conn::ChannelId;
 use crate::error::*;
+use crate::framing;
 use crate::framing::{
     AmqpFrame, Attach, Begin, Close, DeliveryState, Detach, End, Flow, Frame, LinkRole,
     Performative, Source, Target, Transfer,
 };
 use crate::message::Message;
 use log::trace;
-use mio::{Interest, Poll, Token};
+use mio::{Interest, Poll, Token, Waker};
 use rand::Rng;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -28,6 +29,7 @@ pub struct ConnectionDriver {
     idle_timeout: Duration,
     driver: Arc<Mutex<conn::Connection>>,
     sessions: Mutex<HashMap<ChannelId, Arc<SessionDriver>>>,
+    waker: Arc<Waker>,
 
     // Frames received on this connection
     rx: Channel<AmqpFrame>,
@@ -72,7 +74,7 @@ pub struct LinkDriver {
     did_to_link: Arc<Mutex<HashMap<u32, HandleId>>>,
     unsettled: Mutex<HashMap<DeliveryTag, Arc<DeliveryDriver>>>,
     credit: AtomicU32,
-    available: AtomicU32,
+    delivery_count: AtomicU32,
 }
 
 pub struct DeliveryDriver {
@@ -89,16 +91,22 @@ pub struct SessionOpts {
 }
 
 impl ConnectionDriver {
-    pub fn new(conn: conn::Connection) -> ConnectionDriver {
+    pub fn new(conn: conn::Connection, waker: Arc<Waker>) -> ConnectionDriver {
         ConnectionDriver {
             driver: Arc::new(Mutex::new(conn)),
             rx: Channel::new(),
             sessions: Mutex::new(HashMap::new()),
+            waker: waker,
             remote_channel_map: Mutex::new(HashMap::new()),
             idle_timeout: Duration::from_secs(5),
             remote_idle_timeout: Duration::from_secs(0),
             channel_max: std::u16::MAX,
         }
+    }
+
+    pub fn wakeup(&self) -> Result<()> {
+        self.waker.wake()?;
+        Ok(())
     }
 
     pub fn register(&self, id: Token, poll: &mut Poll) -> Result<()> {
@@ -110,6 +118,23 @@ impl ConnectionDriver {
 
     pub fn driver(&self) -> std::sync::MutexGuard<conn::Connection> {
         self.driver.lock().unwrap()
+    }
+
+    pub fn flowcontrol(&self, connection: &mut conn::Connection) -> Result<()> {
+        let low_flow_watermark = 100;
+        let high_flow_watermark = 1000;
+
+        for (_, session) in self.sessions.lock().unwrap().iter_mut() {
+            for (_, link) in session.links.lock().unwrap().iter_mut() {
+                if link.role == LinkRole::Receiver {
+                    let credit = link.credit.load(Ordering::SeqCst);
+                    if credit <= low_flow_watermark {
+                        link.flowcontrol(high_flow_watermark, connection)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn keepalive(&self, connection: &mut conn::Connection) -> Result<()> {
@@ -277,7 +302,14 @@ impl ConnectionDriver {
 impl SessionDriver {
     pub fn dispatch(&self, frame: AmqpFrame) -> Result<()> {
         match frame.performative {
-            Some(Performative::Attach(ref _attach)) => {
+            Some(Performative::Attach(ref attach)) => {
+                if let Some(delivery_count) = attach.initial_delivery_count {
+                    let link = {
+                        let mut m = self.links.lock().unwrap();
+                        m.get_mut(&attach.handle).unwrap().clone()
+                    };
+                    link.delivery_count.store(delivery_count, Ordering::SeqCst);
+                }
                 self.rx.send(frame)?;
             }
             Some(Performative::Detach(ref _detach)) => {
@@ -290,7 +322,7 @@ impl SessionDriver {
                 };
 
                 if link
-                    .available
+                    .credit
                     .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
                         if x <= 0 {
                             Some(0)
@@ -300,8 +332,16 @@ impl SessionDriver {
                     })
                     == Ok(0)
                 {
-                    // TODO: Modified temporary?
+                    trace!("Transfer but no space left!");
                 } else {
+                    trace!(
+                        "Received transfert. Credit: {:?}",
+                        link.credit.load(Ordering::SeqCst)
+                    );
+                    if let Some(did) = transfer.delivery_id {
+                        self.did_incoming_id.store(did + 1, Ordering::SeqCst);
+                    }
+                    link.delivery_count.fetch_add(1, Ordering::SeqCst);
                     link.rx.send(frame)?;
                 }
             }
@@ -359,7 +399,7 @@ impl SessionDriver {
             did_to_link: self.did_to_link.clone(),
             did_incoming_id: self.did_incoming_id.clone(),
             credit: AtomicU32::new(0),
-            available: AtomicU32::new(0),
+            delivery_count: AtomicU32::new(0),
         });
         // TODO: Increment id
         let mut m = self.links.lock().unwrap();
@@ -445,7 +485,7 @@ impl LinkDriver {
             std::thread::sleep(Duration::from_millis(500));
             /*
             return Err(AmqpError::amqp_error(
-                "not enough credits to send message",
+                "not enough available credits to send message",
                 None,
             ));
             */
@@ -500,24 +540,28 @@ impl LinkDriver {
     }
 
     pub async fn flow(&self, credit: u32) -> Result<()> {
-        self.credit.store(credit, Ordering::SeqCst);
-        self.available.store(credit, Ordering::SeqCst);
-        let flow = Flow {
-            next_incoming_id: Some(self.did_incoming_id.load(Ordering::SeqCst)),
-            incoming_window: std::i32::MAX as u32,
-            next_outgoing_id: self.did_generator.load(Ordering::SeqCst),
-            outgoing_window: std::i32::MAX as u32,
-            handle: Some(self.handle as u32),
-            delivery_count: None,
-            link_credit: Some(credit),
-            available: None,
-            drain: None,
-            echo: None,
-            properties: None,
-        };
-        self.driver.lock().unwrap().flow(self.channel, flow)?;
+        let mut driver = self.driver.lock().unwrap();
+        self.flowcontrol(credit, &mut driver)
+    }
 
-        Ok(())
+    fn flowcontrol(&self, credit: u32, connection: &mut conn::Connection) -> Result<()> {
+        self.credit.store(credit, Ordering::SeqCst);
+        connection.flow(
+            self.channel,
+            Flow {
+                next_incoming_id: Some(self.did_incoming_id.load(Ordering::SeqCst)),
+                incoming_window: std::i32::MAX as u32,
+                next_outgoing_id: self.did_generator.load(Ordering::SeqCst),
+                outgoing_window: std::i32::MAX as u32,
+                handle: Some(self.handle as u32),
+                delivery_count: Some(self.delivery_count.load(Ordering::SeqCst)),
+                link_credit: Some(credit),
+                available: None,
+                drain: None,
+                echo: None,
+                properties: None,
+            },
+        )
     }
 
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
@@ -539,6 +583,29 @@ impl LinkDriver {
 
     pub fn unrecv(&self, frame: AmqpFrame) -> Result<()> {
         self.rx.send(frame)
+    }
+
+    pub async fn disposition(
+        &self,
+        delivery: &DeliveryDriver,
+        settled: bool,
+        state: DeliveryState,
+    ) -> Result<()> {
+        if settled {
+            self.unsettled.lock().unwrap().remove(&delivery.tag);
+            self.did_to_link.lock().unwrap().remove(&delivery.id);
+        }
+        let disposition = framing::Disposition {
+            role: self.role,
+            first: delivery.id,
+            last: Some(delivery.id),
+            settled: Some(settled),
+            state: Some(state),
+            batchable: None,
+        };
+
+        self.driver().disposition(self.channel, disposition)?;
+        Ok(())
     }
 }
 

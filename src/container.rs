@@ -9,12 +9,11 @@ use crate::driver::{
     Channel, ConnectionDriver, DeliveryDriver, LinkDriver, SessionDriver, SessionOpts,
 };
 use crate::error::*;
-use crate::framing;
 use crate::framing::{LinkRole, Open, Performative};
 
 use log::trace;
-use mio::{Events, Poll, Token};
-use std::collections::{HashMap, HashSet};
+use mio::{Events, Poll, Token, Waker};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -40,6 +39,7 @@ struct ContainerInner {
     incoming: Channel<Token>,
     connections: Mutex<HashMap<Token, Arc<ConnectionDriver>>>,
     token_generator: AtomicU32,
+    waker: Arc<Waker>,
 }
 
 pub struct Connection {
@@ -89,6 +89,7 @@ pub struct Delivery {
 impl Container {
     pub fn new() -> Result<Container> {
         let p = Poll::new()?;
+        let waker = Arc::new(Waker::new(p.registry(), Token(std::u32::MAX as usize))?);
         let uuid = Uuid::new_v4();
         let inner = ContainerInner {
             container_id: uuid.to_string(),
@@ -96,6 +97,7 @@ impl Container {
             poll: Mutex::new(p),
             connections: Mutex::new(HashMap::new()),
             token_generator: AtomicU32::new(0),
+            waker: waker,
         };
         Ok(Container {
             container: Arc::new(inner),
@@ -186,15 +188,16 @@ impl ContainerInner {
         open.idle_timeout = Some(5000);
         driver.open(open)?;
 
-        let conn = Arc::new(ConnectionDriver::new(driver));
-
         // TODO: Increment
         let id = Token(self.token_generator.fetch_add(1, Ordering::SeqCst) as usize);
-        {
+        let conn = {
+            let conn = Arc::new(ConnectionDriver::new(driver, self.waker.clone()));
             let mut m = self.connections.lock().unwrap();
             m.insert(id, conn.clone());
-        }
+            conn
+        };
         self.incoming.send(id)?;
+        self.waker.wake()?;
 
         trace!("Waiting until opened...");
         loop {
@@ -226,10 +229,6 @@ impl ContainerInner {
     }
 
     pub fn process(&self) -> Result<()> {
-        let mut events = Events::with_capacity(1024);
-
-        let mut tokens = HashSet::new();
-
         // Register new connections
         loop {
             let result = self.incoming.try_recv();
@@ -240,8 +239,6 @@ impl ContainerInner {
                     let conn = m.get_mut(&id).unwrap();
                     let mut poll = self.poll.lock().unwrap();
                     conn.register(id, &mut poll)?;
-
-                    tokens.insert(id);
                 }
             }
         }
@@ -252,6 +249,8 @@ impl ContainerInner {
 
             // Handle keepalive
             connection.keepalive(&mut driver)?;
+
+            connection.flowcontrol(&mut driver)?;
 
             // Flush data
             trace!("Flushing driver");
@@ -265,23 +264,31 @@ impl ContainerInner {
         }
 
         // Poll for new events
+        let mut events = Events::with_capacity(1024);
         {
             self.poll
                 .lock()
                 .unwrap()
-                .poll(&mut events, Some(Duration::from_millis(100)))?;
+                .poll(&mut events, Some(Duration::from_millis(2000)))?;
         }
 
+        let waker_token = Token(std::u32::MAX as usize);
         for event in &events {
             let id = event.token();
             trace!("Got event for {:?}", id);
-            let connection = {
-                let m = self.connections.lock().unwrap();
-                m.get(&id).map(|c| c.clone())
-            };
-            match connection {
-                Some(c) => c.process()?,
-                _ => {}
+            if id == waker_token {
+                for (_, connection) in self.connections.lock().unwrap().iter_mut() {
+                    connection.process()?;
+                }
+            } else {
+                let connection = {
+                    let m = self.connections.lock().unwrap();
+                    m.get(&id).map(|c| c.clone())
+                };
+                match connection {
+                    Some(c) => c.process()?,
+                    _ => {}
+                }
             }
         }
         Ok(())
@@ -300,6 +307,7 @@ impl Connection {
     pub async fn new_session(&self, opts: Option<SessionOpts>) -> Result<Session> {
         let s = self.connection.new_session(opts).await?;
 
+        self.connection.wakeup()?;
         trace!("Waiting until begin...");
         loop {
             let frame = s.recv()?;
@@ -345,6 +353,7 @@ impl Session {
     pub async fn new_sender(&self, addr: &str) -> Result<Sender> {
         let link = self.session.new_link(addr, LinkRole::Sender)?;
         trace!("Created link, waiting for attach frame");
+        self.connection.wakeup()?;
         loop {
             let frame = self.session.recv()?;
             match frame.performative {
@@ -369,6 +378,7 @@ impl Session {
     pub async fn new_receiver(&self, addr: &str) -> Result<Receiver> {
         let link = self.session.new_link(addr, LinkRole::Receiver)?;
         trace!("Created link, waiting for attach frame");
+        self.connection.wakeup()?;
         loop {
             let frame = self.session.recv()?;
             match frame.performative {
@@ -416,6 +426,7 @@ impl Sender {
         });
         let settled = false;
         let delivery = self.link.send_message(message, settled).await?;
+        self.connection.wakeup()?;
 
         if !settled {
             loop {
@@ -457,7 +468,9 @@ impl Drop for Sender {
 
 impl Receiver {
     pub async fn flow(&self, credit: u32) -> Result<()> {
-        self.link.flow(credit).await
+        self.link.flow(credit).await?;
+        self.connection.wakeup()?;
+        Ok(())
     }
 
     pub async fn receive(&self) -> Result<Delivery> {
@@ -508,18 +521,6 @@ impl Delivery {
     }
 
     pub async fn disposition(&self, settled: bool, state: DeliveryState) -> Result<()> {
-        let disposition = framing::Disposition {
-            role: self.link.role,
-            first: self.delivery.id,
-            last: None,
-            settled: Some(settled),
-            state: Some(state),
-            batchable: None,
-        };
-
-        self.link
-            .driver()
-            .disposition(self.link.channel, disposition)?;
-        Ok(())
+        self.link.disposition(&self.delivery, settled, state).await
     }
 }

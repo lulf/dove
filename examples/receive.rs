@@ -47,8 +47,6 @@ fn main() {
             .await
             .expect("receiver not created");
 
-        receiver.flow(10).await.expect("error sending flow");
-
         let delivery = receiver.receive().await.expect("unable to receive message");
 
         println!("Received: {:?}", delivery.message().body);

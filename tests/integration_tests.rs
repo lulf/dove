@@ -53,83 +53,42 @@ fn client() {
         println!("Sender created!");
 
         //  Send message and get disposition.
-        let message = Message::amqp_value(Value::String("Hello, World".to_string()));
-        let _ = sender
-            .send(message)
-            .await
-            .expect("disposition not received");
+        let to_send: usize = 2000;
+        let mut messages = Vec::new();
+        for i in 0..to_send {
+            let message =
+                Message::amqp_value(Value::String(format!("Hello, World: {}", i).to_string()));
+            messages.push(sender.send(message));
+        }
+        println!("Initiated send of {} messages", messages.len());
 
-        receiver.flow(10).await.expect("error sending flow");
-
-        let delivery = receiver.receive().await.expect("unable to receive message");
-
-        if let MessageBody::AmqpValue(Value::String(ref s)) = delivery.message().body {
-            assert!(s == "Hello, World");
-        } else {
-            assert!(false);
+        let mut deliveries = Vec::new();
+        for _ in messages.iter() {
+            deliveries.push(receiver.receive());
         }
 
-        // Manual disposition. If not sent, disposition settled + Accepted will be sent on delivery teardown
-        delivery
-            .disposition(true, DeliveryState::Accepted)
-            .await
-            .expect("unable to send disposition");
-    });
-}
+        // Making sure messages are sent
+        for message in messages.drain(..) {
+            message.await.expect("error awaiting message");
+        }
 
-//#[test]
-/*
-fn server() {
-    let mut listener = listen(
-        "localhost",
-        5672,
-        ListenOptions {
-            container_id: "ce8c4a3e-96b3-11e9-9bfd-c85b7644b4a4",
-        },
-    )
-    .expect("Error creating listener");
+        println!("Verifying {} messages", deliveries.len());
 
-    let mut driver = ConnectionDriver::new();
-
-    let connection = listener.accept().unwrap();
-
-    driver.register(connection);
-
-    let mut event_buffer = EventBuffer::new();
-    loop {
-        match driver.poll(&mut event_buffer) {
-            Ok(_) => {
-                for event in event_buffer.drain(..) {
-                    match event {
-                        Event::ConnectionInit(_) => {}
-                        Event::RemoteOpen(cid, _) => {
-                            println!("Remote opened!");
-                            let conn = driver.connection(cid).unwrap();
-                            conn.open();
-                        }
-                        Event::RemoteBegin(cid, chan, _) => {
-                            println!("Remote begin");
-                            let conn = driver.connection(cid).unwrap();
-
-                            let session = conn.get_session(chan).unwrap();
-                            session.open();
-                        }
-                        Event::RemoteClose(cid, _) => {
-                            println!("Received close from peer, closing connection!");
-                            let conn = driver.connection(cid).unwrap();
-                            conn.close(None);
-                        }
-                        e => {
-                            println!("Unhandled event: {:#?}", e);
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                println!("Got error: {:?}", e);
+        // Verify results
+        for delivery in deliveries.drain(..) {
+            let delivery = delivery.await.expect("error awaiting delivery");
+            if let MessageBody::AmqpValue(Value::String(ref s)) = delivery.message().body {
+                assert!(s.starts_with("Hello, World"));
+            } else {
                 assert!(false);
             }
+            // Manual disposition. If not sent, disposition settled + Accepted will be sent on delivery teardown
+            delivery
+                .disposition(true, DeliveryState::Accepted)
+                .await
+                .expect("disposition not sent");
         }
-    }
+
+        println!("Messages verified");
+    });
 }
-*/
