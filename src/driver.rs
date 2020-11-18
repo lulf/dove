@@ -112,6 +112,23 @@ impl ConnectionDriver {
         self.driver.lock().unwrap()
     }
 
+    pub fn flowcontrol(&self, connection: &mut conn::Connection) -> Result<()> {
+        let low_flow_watermark = 10;
+        let high_flow_watermark = 1000;
+
+        for (_, session) in self.sessions.lock().unwrap().iter_mut() {
+            for (_, link) in session.links.lock().unwrap().iter_mut() {
+                if link.role == LinkRole::Receiver {
+                    let credit = link.credit.load(Ordering::SeqCst);
+                    if credit < low_flow_watermark {
+                        link.flowcontrol(high_flow_watermark, connection)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn keepalive(&self, connection: &mut conn::Connection) -> Result<()> {
         // Sent out keepalives...
         let now = Instant::now();
@@ -290,7 +307,7 @@ impl SessionDriver {
                 };
 
                 if link
-                    .available
+                    .credit
                     .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
                         if x <= 0 {
                             Some(0)
@@ -328,7 +345,7 @@ impl SessionDriver {
                         m.get_mut(&handle).unwrap().clone()
                     };
                     if let Some(credit) = flow.link_credit {
-                        link.credit.store(credit, Ordering::SeqCst);
+                        link.available.store(credit, Ordering::SeqCst);
                     }
                 }
             }
@@ -432,7 +449,7 @@ impl LinkDriver {
         settled: bool,
     ) -> Result<Arc<DeliveryDriver>> {
         while self
-            .credit
+            .available
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
                 if x <= 0 {
                     Some(0)
@@ -445,7 +462,7 @@ impl LinkDriver {
             std::thread::sleep(Duration::from_millis(500));
             /*
             return Err(AmqpError::amqp_error(
-                "not enough credits to send message",
+                "not enough available credits to send message",
                 None,
             ));
             */
@@ -500,24 +517,28 @@ impl LinkDriver {
     }
 
     pub async fn flow(&self, credit: u32) -> Result<()> {
-        self.credit.store(credit, Ordering::SeqCst);
-        self.available.store(credit, Ordering::SeqCst);
-        let flow = Flow {
-            next_incoming_id: Some(self.did_incoming_id.load(Ordering::SeqCst)),
-            incoming_window: std::i32::MAX as u32,
-            next_outgoing_id: self.did_generator.load(Ordering::SeqCst),
-            outgoing_window: std::i32::MAX as u32,
-            handle: Some(self.handle as u32),
-            delivery_count: None,
-            link_credit: Some(credit),
-            available: None,
-            drain: None,
-            echo: None,
-            properties: None,
-        };
-        self.driver.lock().unwrap().flow(self.channel, flow)?;
+        let mut driver = self.driver.lock().unwrap();
+        self.flowcontrol(credit, &mut driver)
+    }
 
-        Ok(())
+    fn flowcontrol(&self, credit: u32, connection: &mut conn::Connection) -> Result<()> {
+        self.credit.store(credit, Ordering::SeqCst);
+        connection.flow(
+            self.channel,
+            Flow {
+                next_incoming_id: Some(self.did_incoming_id.load(Ordering::SeqCst)),
+                incoming_window: std::i32::MAX as u32,
+                next_outgoing_id: self.did_generator.load(Ordering::SeqCst),
+                outgoing_window: std::i32::MAX as u32,
+                handle: Some(self.handle as u32),
+                delivery_count: None,
+                link_credit: Some(credit),
+                available: None,
+                drain: None,
+                echo: None,
+                properties: None,
+            },
+        )
     }
 
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {

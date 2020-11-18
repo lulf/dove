@@ -253,6 +253,8 @@ impl ContainerInner {
             // Handle keepalive
             connection.keepalive(&mut driver)?;
 
+            connection.flowcontrol(&mut driver)?;
+
             // Flush data
             trace!("Flushing driver");
             let result = driver.flush();

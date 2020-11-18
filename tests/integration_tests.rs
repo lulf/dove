@@ -59,9 +59,11 @@ fn client() {
             .await
             .expect("disposition not received");
 
-        receiver.flow(10).await.expect("error sending flow");
+        println!("Message sent");
 
         let delivery = receiver.receive().await.expect("unable to receive message");
+
+        println!("Message received!");
 
         if let MessageBody::AmqpValue(Value::String(ref s)) = delivery.message().body {
             assert!(s == "Hello, World");
