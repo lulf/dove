@@ -53,29 +53,46 @@ fn client() {
         println!("Sender created!");
 
         //  Send message and get disposition.
-        let message = Message::amqp_value(Value::String("Hello, World".to_string()));
-        let _ = sender
-            .send(message)
-            .await
-            .expect("disposition not received");
+        let to_send: usize = 200;
+        let mut messages = Vec::new();
+        for i in 0..to_send {
+            let message =
+                Message::amqp_value(Value::String(format!("Hello, World: {}", i).to_string()));
+            messages.push(sender.send(message));
+        }
+        println!("Messages send started");
 
-        println!("Message sent");
-
-        let delivery = receiver.receive().await.expect("unable to receive message");
-
-        println!("Message received!");
-
-        if let MessageBody::AmqpValue(Value::String(ref s)) = delivery.message().body {
-            assert!(s == "Hello, World");
-        } else {
-            assert!(false);
+        let mut deliveries = Vec::new();
+        for _ in messages.iter() {
+            deliveries.push(receiver.receive());
         }
 
-        // Manual disposition. If not sent, disposition settled + Accepted will be sent on delivery teardown
-        delivery
-            .disposition(true, DeliveryState::Accepted)
-            .await
-            .expect("unable to send disposition");
+        println!("Receive started");
+
+        for message in messages.drain(..) {
+            message.await.expect("error awaiting message");
+        }
+
+        println!("Messages sent");
+
+        // Verify results
+        for delivery in deliveries.drain(..) {
+            println!("Joining delivery");
+            let delivery = delivery.await.expect("error awaiting delivery");
+            println!("Joined delivery");
+            if let MessageBody::AmqpValue(Value::String(ref s)) = delivery.message().body {
+                assert!(s.starts_with("Hello, World"));
+            } else {
+                assert!(false);
+            }
+            // Manual disposition. If not sent, disposition settled + Accepted will be sent on delivery teardown
+            delivery
+                .disposition(true, DeliveryState::Accepted)
+                .await
+                .expect("disposition not sent");
+        }
+
+        println!("Messages verified");
     });
 }
 

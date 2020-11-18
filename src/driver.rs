@@ -114,7 +114,7 @@ impl ConnectionDriver {
 
     pub fn flowcontrol(&self, connection: &mut conn::Connection) -> Result<()> {
         let low_flow_watermark = 10;
-        let high_flow_watermark = 1000;
+        let high_flow_watermark = 100;
 
         for (_, session) in self.sessions.lock().unwrap().iter_mut() {
             for (_, link) in session.links.lock().unwrap().iter_mut() {
