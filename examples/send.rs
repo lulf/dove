@@ -4,6 +4,7 @@
  */
 
 use dove::container::*;
+use dove::url;
 use futures::executor::block_on;
 use std::env;
 
@@ -12,17 +13,22 @@ use std::env;
  */
 fn main() {
     let args: Vec<String> = env::args().collect();
-
-    if args.len() < 5 {
-        println!("Usage: ./example_send localhost 5672 myqueue 'Hello, world'");
+    if args.len() < 2 {
+        println!("Usage: send amqp://localhost:5672/myqueue 'Hello, world'");
         std::process::exit(1);
     }
-    let host = &args[1];
-    let port = args[2].parse::<u16>().expect("Error parsing port");
-    let address = &args[3];
-    let data = &args[4];
 
-    let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
+    let url = &args[1];
+    let data = &args[2];
+
+    let url = url::Url::parse(url).expect("error parsing url");
+    let opts = ConnectionOptions {
+        username: url.username.map(|s| s.to_string()),
+        password: url.password.map(|s| s.to_string()),
+        sasl_mechanism: url.username.map_or(Some(SaslMechanism::Anonymous), |_| {
+            Some(SaslMechanism::Plain)
+        }),
+    };
 
     let container = Container::new()
         .expect("unable to create container")
@@ -31,7 +37,7 @@ fn main() {
     // connect creates the TCP connection and sends OPEN frame.
     block_on(async {
         let connection = container
-            .connect(&host, port, opts)
+            .connect(&url.hostname, url.port, opts)
             .await
             .expect("connection not created");
 
@@ -43,12 +49,14 @@ fn main() {
 
         // new_sender creates the AMQP sender link.
         let sender = session
-            .new_sender(address)
+            .new_sender(&url.address)
             .await
             .expect("sender not created");
 
         //  Send message and get delivery.
         let message = Message::amqp_value(Value::String(data.to_string()));
         let _ = sender.send(message).await.expect("delivery not received");
+
+        println!("Message sent!");
     });
 }
