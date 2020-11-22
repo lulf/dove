@@ -46,3 +46,4 @@ Client examples can be found in the [examples/](https://github.com/lulf/dove/tre
 * conn - Low level API for sending and recieving frames on a connection
 * driver - Functionality for handling most control logic.
 * container - API for writing applications
+* url - utilities for handling AMQP urls
