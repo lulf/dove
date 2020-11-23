@@ -3,6 +3,8 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+//! The transport module contains the network connectivity transport for the upper layers. It is implemented using mio.
+
 use log::trace;
 use mio::event::Source;
 use mio::net::TcpStream;

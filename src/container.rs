@@ -4,6 +4,7 @@
  */
 
 //! The container module contains a simple API for creating client connections and sending and receiving messages
+
 use crate::conn;
 use crate::driver::{
     Channel, ConnectionDriver, DeliveryDriver, LinkDriver, SessionDriver, SessionOpts,

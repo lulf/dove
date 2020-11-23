@@ -3,6 +3,8 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+//! Utility module for working with AMQP 1.0 URLs similar to that supported by Apache Qpid.
+
 use crate::error::*;
 
 #[derive(PartialEq, Debug)]

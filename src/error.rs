@@ -3,6 +3,8 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+//! The error module implements all AMQP 1.0 error types that is supported by dove. Conversion from many different error types are supported.
+
 use std::error;
 use std::fmt;
 use std::io;

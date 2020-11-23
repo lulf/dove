@@ -22,7 +22,12 @@ See [TODO Issues](https://github.com/lulf/dove/issues?q=is%3Aissue+is%3Aopen+lab
 
 ## Examples
 
-Client examples can be found in the [examples/](https://github.com/lulf/dove/tree/master/examples) directory.
+Client examples can be found in the [examples/](https://github.com/lulf/dove/tree/master/examples) directory. You can run them like this:
+
+```
+cargo run --example send amqp://localhost:5672/myqueue "Hello, World"
+cargo run --example receive amqp://localhost:5672/myqueue
+```
 
 ## Modules
 
