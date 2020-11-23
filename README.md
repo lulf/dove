@@ -18,14 +18,7 @@ Dove exposes two different APIs:
 
 ## TODO
 
-* Allow setting more options (on container, connection, session, links)
-* Cleaning up crate/module structure.
-* TLS/SSL support
-* Improve SASL support (missing SCRAM* support)
-* Complete implementation of encoding+decoding for all AMQP 1.0 types.
-* Improve test coverage.
-* Make transport layer pluggable (for embedded use cases where mio is not possible).
-* Compile to WASM.
+See [TODO Issues](https://github.com/lulf/dove/issues?q=is%3Aissue+is%3Aopen+label%3Atodo)
 
 ## Examples
 
