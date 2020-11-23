@@ -11,22 +11,6 @@ description = "Dove is an open source Rust implementation of the AMQP 1.0 OASIS 
 license-file = "LICENSE"
 include = ["README.md", "LICENSE", "src/*.rs", "tests/*.rs", "examples/*.rs"]
 
-[lib]
-name = "dove"
-src = "src/lib.rs"
-
-[[bin]]
-name = "example_send_framing"
-path = "examples/send_framing.rs"
-
-[[bin]]
-name = "example_send"
-path = "examples/send.rs"
-
-[[bin]]
-name = "example_receive"
-path = "examples/receive.rs"
-
 [dependencies]
 byteorder = "1.3.2"
 mio = { version = "0.7", features = ["tcp", "os-poll"] }

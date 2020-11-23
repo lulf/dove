@@ -37,6 +37,9 @@ pub mod condition {
 }
 
 impl AmqpError {
+    pub fn generic(s: &str) -> AmqpError {
+        AmqpError::Generic(s.to_string())
+    }
     pub fn internal_error() -> AmqpError {
         AmqpError::amqp_error(condition::INTERNAL_ERROR, None)
     }
@@ -116,5 +119,11 @@ impl std::convert::From<std::string::FromUtf8Error> for AmqpError {
 impl std::convert::From<std::boxed::Box<dyn std::any::Any + std::marker::Send>> for AmqpError {
     fn from(_error: std::boxed::Box<dyn std::any::Any + std::marker::Send>) -> Self {
         return AmqpError::Generic("thread error".to_string());
+    }
+}
+
+impl std::convert::From<std::num::ParseIntError> for AmqpError {
+    fn from(error: std::num::ParseIntError) -> Self {
+        return AmqpError::Generic(error.to_string());
     }
 }
