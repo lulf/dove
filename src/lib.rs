@@ -18,6 +18,9 @@
 
 //! # Example
 //!
+//! ```
+//! use dove::container::*;
+//! use futures::executor::block_on;
 //! let container = Container::new()
 //!     .expect("unable to create container")
 //!     .start();
@@ -35,7 +38,13 @@
 //!         .await
 //!         .expect("session not created");
 //!
-//!     // new_sender creates the AMQP sender link.
+//!     // Create receiver
+//!     let receiver = session
+//!         .new_receiver("myqueue")
+//!         .await
+//!         .expect("receiver not created");
+//!
+//!     // Create sender
 //!     let sender = session
 //!         .new_sender("myqueue")
 //!         .await
@@ -45,17 +54,13 @@
 //!     let message = Message::amqp_value(Value::String("Hello, World".to_string()));
 //!     let _ = sender.send(message).await.expect("delivery not received");
 //!
-//!     // Create receiver and receive message.
-//!     let receiver = session
-//!         .new_receiver("myqueue")
-//!         .await
-//!         .expect("receiver not created");
-//!
+//!     // Receive message. Disposition will be sent in destructor of delivery.
 //!     let delivery = receiver.receive().await.expect("unable to receive message");
 //!
 //!     println!("Received: {:?}", delivery.message().body);
 //!
 //! });
+//! ```
 pub mod conn;
 pub mod container;
 pub mod convert;
