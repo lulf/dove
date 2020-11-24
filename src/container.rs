@@ -28,6 +28,7 @@ pub use crate::message::{Message, MessageProperties};
 pub use crate::sasl::SaslMechanism;
 pub use crate::types::{Value, ValueRef};
 
+/// Represents an AMQP 1.0 container that can manage multiple connections.
 pub struct Container {
     container: Arc<ContainerInner>,
     running: Arc<AtomicBool>,
@@ -43,6 +44,7 @@ struct ContainerInner {
     waker: Arc<Waker>,
 }
 
+/// Represents a single AMQP connection to a remote endpoint.
 pub struct Connection {
     connection: Arc<ConnectionDriver>,
 
@@ -56,11 +58,13 @@ pub struct Connection {
     pub remote_channel_max: u16,
 }
 
+/// Represents an AMQP session.
 pub struct Session {
     connection: Arc<ConnectionDriver>,
     session: Arc<SessionDriver>,
 }
 
+/// Represents a sender link.
 #[allow(dead_code)]
 pub struct Sender {
     handle: u32,
@@ -69,6 +73,7 @@ pub struct Sender {
     next_message_id: AtomicU64,
 }
 
+/// Represents a receiver link.
 #[allow(dead_code)]
 pub struct Receiver {
     handle: u32,
@@ -77,17 +82,22 @@ pub struct Receiver {
     next_message_id: AtomicU64,
 }
 
+/// Represents a disposition response for a sent message.
 #[allow(dead_code)]
 pub struct Disposition {
     delivery: Arc<DeliveryDriver>,
 }
 
+/// Represent a delivery
 pub struct Delivery {
     link: Arc<LinkDriver>,
     delivery: Arc<DeliveryDriver>,
 }
 
 impl Container {
+    /// Creates a new container that can be used to connect to AMQP endpoints.
+    /// use the start() method to launch a worker thread that handles the connection processing,
+    /// or invoke the run() method.
     pub fn new() -> Result<Container> {
         let p = Poll::new()?;
         let waker = Arc::new(Waker::new(p.registry(), Token(std::u32::MAX as usize))?);
@@ -107,6 +117,7 @@ impl Container {
         })
     }
 
+    /// Start a worker thread to process connections for this container.
     pub fn start(mut self) -> Self {
         self.running.store(true, Ordering::SeqCst);
         let running = self.running.clone();
@@ -117,6 +128,7 @@ impl Container {
         self
     }
 
+    /// Process connections for this container.
     pub fn run(&self) {
         Container::do_work(self.running.clone(), self.container.clone());
     }
@@ -135,6 +147,7 @@ impl Container {
         }
     }
 
+    /// Connect to an AMQP endpoint and send the initial open performative.
     pub async fn connect(
         &self,
         host: &str,
@@ -144,6 +157,8 @@ impl Container {
         self.container.connect(host, port, opts).await
     }
 
+    /// Close the connection. Flushes outgoing buffer before sending the final close performative,
+    /// and closing the connection.
     pub fn close(&mut self) -> Result<()> {
         self.container.close()?;
         self.running.store(false, Ordering::SeqCst);
@@ -167,19 +182,14 @@ impl Drop for Container {
 }
 
 impl ContainerInner {
-    pub fn close(&self) -> Result<()> {
+    fn close(&self) -> Result<()> {
         for (_id, connection) in self.connections.lock().unwrap().iter_mut() {
             connection.close(None)?;
         }
         Ok(())
     }
 
-    pub async fn connect(
-        &self,
-        host: &str,
-        port: u16,
-        opts: ConnectionOptions,
-    ) -> Result<Connection> {
+    async fn connect(&self, host: &str, port: u16, opts: ConnectionOptions) -> Result<Connection> {
         let mut driver = conn::connect(host, port, opts)?;
         trace!("Connected! Sending open...");
 
@@ -229,7 +239,7 @@ impl ContainerInner {
         }
     }
 
-    pub fn process(&self) -> Result<()> {
+    fn process(&self) -> Result<()> {
         // Register new connections
         loop {
             let result = self.incoming.try_recv();
@@ -305,6 +315,8 @@ impl Drop for ContainerInner {
 }
 
 impl Connection {
+    /// Create a new session over this connection. Returns a session once the other
+    /// endpoint have confirmed the creation.
     pub async fn new_session(&self, opts: Option<SessionOpts>) -> Result<Session> {
         let s = self.connection.new_session(opts).await?;
 
@@ -329,6 +341,7 @@ impl Connection {
         }
     }
 
+    /// Close a connection, ending the close performative.
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
         self.connection.close(error)
     }
@@ -351,6 +364,8 @@ impl Drop for Session {
 }
 
 impl Session {
+    /// Create a new sender link for a given address cross this session. The sender
+    /// is returned when the other side have confirmed its existence.
     pub async fn new_sender(&self, addr: &str) -> Result<Sender> {
         let link = self.session.new_link(addr, LinkRole::Sender)?;
         trace!("Created link, waiting for attach frame");
@@ -376,6 +391,8 @@ impl Session {
         }
     }
 
+    /// Create a new receiving link for a given address cross this session. The
+    /// is returned when the other side have confirmed its existence.
     pub async fn new_receiver(&self, addr: &str) -> Result<Receiver> {
         let link = self.session.new_link(addr, LinkRole::Receiver)?;
         trace!("Created link, waiting for attach frame");
@@ -401,13 +418,16 @@ impl Session {
         }
     }
 
+    /// Close a session, ending the end performative.
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
         self.session.close(error)
     }
 }
 
 impl Sender {
+    /// Send a message across this link. The returned disposition signals the acceptance or rejection of the message on the receiving end.
     pub async fn send(&self, mut message: Message) -> Result<Disposition> {
+        // TODO: Do not override message properties except message id.
         message.properties = Some(MessageProperties {
             message_id: Some(Value::Ulong(
                 self.next_message_id.fetch_add(1, Ordering::SeqCst),
@@ -454,6 +474,7 @@ impl Sender {
         }
     }
 
+    /// Close the sender link, sending the detach performative.
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
         self.link.close(error)
     }
@@ -468,12 +489,16 @@ impl Drop for Sender {
 }
 
 impl Receiver {
+    /// Issue credits to the remote sender link, signalling that the receiver canaldigital
+    /// accept more messages.
     pub async fn flow(&self, credit: u32) -> Result<()> {
         self.link.flow(credit).await?;
         self.connection.wakeup()?;
         Ok(())
     }
 
+    /// Receive a single message across the link. The delivery is returned
+    /// when a message is received.
     pub async fn receive(&self) -> Result<Delivery> {
         loop {
             let frame = self.link.recv()?;
@@ -503,6 +528,7 @@ impl Receiver {
         }
     }
 
+    /// Close the sender link, sending the detach performative.
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
         self.link.close(error)
     }
@@ -517,10 +543,12 @@ impl Drop for Receiver {
 }
 
 impl Delivery {
+    /// Retrieve the message associated with this delivery.
     pub fn message(&self) -> &Message {
         return &self.delivery.message;
     }
 
+    /// Send a disposition for this delivery, indicating message settlement and delivery state.
     pub async fn disposition(&self, settled: bool, state: DeliveryState) -> Result<()> {
         self.link.disposition(&self.delivery, settled, state)
     }
