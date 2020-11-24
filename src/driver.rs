@@ -587,7 +587,7 @@ impl LinkDriver {
         self.rx.send(frame)
     }
 
-    pub async fn disposition(
+    pub fn disposition(
         &self,
         delivery: &DeliveryDriver,
         settled: bool,

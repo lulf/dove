@@ -522,6 +522,14 @@ impl Delivery {
     }
 
     pub async fn disposition(&self, settled: bool, state: DeliveryState) -> Result<()> {
-        self.link.disposition(&self.delivery, settled, state).await
+        self.link.disposition(&self.delivery, settled, state)
+    }
+}
+
+impl Drop for Delivery {
+    fn drop(&mut self) {
+        match self.link.disposition(&self.delivery, true, DeliveryState::Accepted) {
+            _ => {}
+        }
     }
 }

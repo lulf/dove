@@ -43,13 +43,13 @@
 //!
 //!     // Create receiver
 //!     let receiver = session
-//!         .new_receiver("myqueue")
+//!         .new_receiver("queue1")
 //!         .await
 //!         .expect("receiver not created");
 //!
 //!     // Create sender
 //!     let sender = session
-//!         .new_sender("myqueue")
+//!         .new_sender("queue1")
 //!         .await
 //!         .expect("sender not created");
 //!
