@@ -556,7 +556,10 @@ impl Delivery {
 
 impl Drop for Delivery {
     fn drop(&mut self) {
-        match self.link.disposition(&self.delivery, true, DeliveryState::Accepted) {
+        match self
+            .link
+            .disposition(&self.delivery, true, DeliveryState::Accepted)
+        {
             _ => {}
         }
     }

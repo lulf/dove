@@ -18,7 +18,7 @@ use log::trace;
 use mio::{Interest, Poll, Token, Waker};
 use rand::Rng;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -37,6 +37,9 @@ pub struct ConnectionDriver {
     rx: Channel<AmqpFrame>,
     remote_channel_map: Mutex<HashMap<ChannelId, ChannelId>>,
     remote_idle_timeout: Duration,
+
+    // State
+    closed: AtomicBool,
 }
 
 pub struct SessionDriver {
@@ -103,6 +106,7 @@ impl ConnectionDriver {
             idle_timeout: Duration::from_secs(5),
             remote_idle_timeout: Duration::from_secs(0),
             channel_max: std::u16::MAX,
+            closed: AtomicBool::new(false),
         }
     }
 
@@ -159,6 +163,9 @@ impl ConnectionDriver {
     }
 
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
+        if self.closed.fetch_or(true, Ordering::SeqCst) {
+            return Ok(());
+        }
         let mut driver = self.driver.lock().unwrap();
         driver.close(Close { error: error })?;
         driver.flush()?;
@@ -166,11 +173,18 @@ impl ConnectionDriver {
     }
 
     pub fn process(&self) -> Result<()> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
         // Read frames until we're blocked
         let mut rx_frames = Vec::new();
         {
             let mut driver = self.driver.lock().unwrap();
             loop {
+                if self.closed.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
                 let result = driver.process(&mut rx_frames);
                 match result {
                     Ok(_) => {}
