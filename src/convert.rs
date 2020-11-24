@@ -3,6 +3,10 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+//! Conversion functions for types that is used in this implementation. This is used  *
+//! when decoding frames. At present there is a lot of duplication, and this part     *
+//! could use some refactoring to simplify.                                           *
+
 use std::collections::BTreeMap;
 use std::vec::Vec;
 
@@ -10,14 +14,6 @@ use crate::error::*;
 use crate::frame_codec::*;
 use crate::symbol::*;
 use crate::types::*;
-
-/**
- *************************************************************************************
- * Conversion functions for types that is used in this implementation. This is used  *
- * when decoding frames. At present there is a lot of duplication, and this part     *
- * could use some refactoring to simplify.                                           *
- *************************************************************************************
- */
 
 pub trait TryFromValue {
     fn try_from(value: Value) -> Result<Self>

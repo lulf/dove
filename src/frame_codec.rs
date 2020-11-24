@@ -3,6 +3,8 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+//! The frame_codec contains utility types for simplifying frame and composite type encoding and decoding.
+
 use byteorder::NetworkEndian;
 use byteorder::WriteBytesExt;
 use log::trace;

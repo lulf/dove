@@ -3,6 +3,8 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+//! The encoding module contains AMQP 1.0 type encoders and rust native types encoders.
+
 use byteorder::NetworkEndian;
 use byteorder::WriteBytesExt;
 use std::collections::BTreeMap;

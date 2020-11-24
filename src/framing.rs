@@ -3,6 +3,8 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+//! The framing module implements the different AMQP 1.0 frame type model, encoder and decoder.
+
 use byteorder::NetworkEndian;
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;

@@ -3,6 +3,8 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+//! The symbol module contains symbol type specific code.
+
 use std::io::Write;
 use std::vec::Vec;
 

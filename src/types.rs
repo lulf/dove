@@ -3,6 +3,8 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+//! The types module contains the AMQP 1.0 types system encoders and decoders. By using these types you can enforce a certain encoding for your data.
+
 use log::trace;
 use std::collections::BTreeMap;
 use std::io::Write;
