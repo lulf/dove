@@ -418,8 +418,10 @@ impl SessionDriver {
             delivery_count: AtomicU32::new(0),
         });
         // TODO: Increment id
-        let mut m = self.links.lock().unwrap();
-        m.insert(handle, link.clone());
+        {
+            let mut m = self.links.lock().unwrap();
+            m.insert(handle, link.clone());
+        }
 
         // Send attach frame
         let attach = Attach {
@@ -519,15 +521,19 @@ impl LinkDriver {
         });
 
         if !settled {
-            self.unsettled
-                .lock()
-                .unwrap()
-                .insert(delivery_tag.clone(), delivery.clone());
+            {
+                self.unsettled
+                    .lock()
+                    .unwrap()
+                    .insert(delivery_tag.clone(), delivery.clone());
+            }
 
-            self.did_to_link
-                .lock()
-                .unwrap()
-                .insert(delivery_id, self.handle);
+            {
+                self.did_to_link
+                    .lock()
+                    .unwrap()
+                    .insert(delivery_id, self.handle);
+            }
         }
 
         let transfer = Transfer {
