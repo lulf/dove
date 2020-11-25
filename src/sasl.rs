@@ -88,7 +88,11 @@ impl Sasl {
         self.state == SaslState::Success || self.state == SaslState::Failed
     }
 
-    pub fn perform_handshake(self: &mut Self, transport: &mut Transport) -> Result<()> {
+    pub fn perform_handshake(
+        self: &mut Self,
+        hostname: &str,
+        transport: &mut Transport,
+    ) -> Result<()> {
         match &self.role {
             SaslRole::Client(sasl_client) => {
                 let frame = transport.read_frame()?;
@@ -127,7 +131,7 @@ impl Sasl {
                             let init = Frame::SASL(SaslFrame::SaslInit(SaslInit {
                                 mechanism: sasl_client.mechanism,
                                 initial_response: initial_response,
-                                hostname: None,
+                                hostname: Some(hostname.to_string()),
                             }));
                             transport.write_frame(&init)?;
                         }

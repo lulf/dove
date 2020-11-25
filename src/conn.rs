@@ -286,6 +286,7 @@ impl Connection {
                     }
                     self.header_sent = true;
                 }
+                self.transport.flush()?;
                 let header = self.transport.read_protocol_header()?;
                 if let Some(header) = header {
                     match header {
@@ -309,15 +310,17 @@ impl Connection {
                         SASL_10_HEADER if self.sasl.is_some() => {
                             self.transport.write_protocol_header(&SASL_10_HEADER)?;
                             self.state = ConnectionState::Sasl;
+                            self.transport.flush()?;
                         }
                         AMQP_10_HEADER if self.skip_sasl() => {
                             self.transport.write_protocol_header(&AMQP_10_HEADER)?;
                             self.state = ConnectionState::Opened;
+                            self.transport.flush()?;
                         }
                         _ => {
                             self.transport.write_protocol_header(&AMQP_10_HEADER)?;
+                            self.transport.flush()?;
                             self.transport.close()?;
-                            self.state = ConnectionState::Closed;
                         }
                     }
                 }
@@ -334,7 +337,7 @@ impl Connection {
                         self.state = ConnectionState::Closed;
                     }
                     SaslState::InProgress => {
-                        sasl.perform_handshake(&mut self.transport)?;
+                        sasl.perform_handshake(&self.hostname, &mut self.transport)?;
                     }
                 }
             }

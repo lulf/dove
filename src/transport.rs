@@ -162,7 +162,6 @@ impl Transport {
 
     pub fn write_protocol_header(self: &mut Self, header: &ProtocolHeader) -> Result<()> {
         header.encode(&mut self.outgoing)?;
-        self.flush()?;
         Ok(())
     }
 
