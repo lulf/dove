@@ -319,6 +319,7 @@ impl Connection {
                         }
                         _ => {
                             self.transport.write_protocol_header(&AMQP_10_HEADER)?;
+                            self.state = ConnectionState::Closed;
                             self.transport.flush()?;
                             self.transport.close()?;
                         }
