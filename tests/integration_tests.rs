@@ -182,7 +182,7 @@ fn multiple_clients() {
             println!("Verifying {} messages", deliveries.len());
 
             // Verify results
-            for mut delivery in deliveries.drain(..) {
+            for delivery in deliveries.drain(..) {
                 let mut delivery = delivery.await.expect("error awaiting delivery");
                 if let MessageBody::AmqpValue(Value::String(ref s)) = delivery.message().body {
                     assert!(s.starts_with("Hello, World"));
