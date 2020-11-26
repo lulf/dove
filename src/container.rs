@@ -429,24 +429,32 @@ impl Session {
 impl Sender {
     /// Send a message across this link. The returned disposition signals the acceptance or rejection of the message on the receiving end.
     pub async fn send(&self, mut message: Message) -> Result<Disposition> {
-        // TODO: Do not override message properties except message id.
-        message.properties = Some(MessageProperties {
-            message_id: Some(Value::Ulong(
-                self.next_message_id.fetch_add(1, Ordering::SeqCst),
-            )),
-            user_id: None,
-            to: None,
-            subject: None,
-            reply_to: None,
-            correlation_id: None,
-            content_type: None,
-            content_encoding: None,
-            absolute_expiry_time: None,
-            creation_time: None,
-            group_id: None,
-            group_sequence: None,
-            reply_to_group_id: None,
-        });
+        let message_id = Some(Value::Ulong(
+            self.next_message_id.fetch_add(1, Ordering::SeqCst),
+        ));
+        message.properties = message.properties.map_or_else(
+            || {
+                Some(MessageProperties {
+                    message_id: message_id.clone(),
+                    user_id: None,
+                    to: None,
+                    subject: None,
+                    reply_to: None,
+                    correlation_id: None,
+                    content_type: None,
+                    content_encoding: None,
+                    absolute_expiry_time: None,
+                    creation_time: None,
+                    group_id: None,
+                    group_sequence: None,
+                    reply_to_group_id: None,
+                })
+            },
+            |mut p| {
+                p.message_id = message_id.clone();
+                Some(p)
+            },
+        );
         let settled = false;
         let delivery = self.link.send_message(message, settled).await?;
         self.connection.wakeup()?;
