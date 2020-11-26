@@ -105,7 +105,10 @@ fn multiple_clients() {
 
             println!("Going to connect");
 
-            let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
+            let opts = ConnectionOptions::new()
+                .sasl_mechanism(SaslMechanism::Plain)
+                .username("test")
+                .password("test");
             let port: u16 = 5672;
             let connection = container
                 .connect("127.0.0.1", port, opts)
@@ -122,7 +125,7 @@ fn multiple_clients() {
 
             // new_sender creates the AMQP sender link.
             let sender = session
-                .new_sender("myqueue")
+                .new_sender("queue2")
                 .await
                 .expect("sender not created");
 
@@ -152,7 +155,10 @@ fn multiple_clients() {
 
             println!("Going to connect");
 
-            let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
+            let opts = ConnectionOptions::new()
+                .sasl_mechanism(SaslMechanism::Plain)
+                .username("test")
+                .password("test");
             let port: u16 = 5672;
             let connection = container
                 .connect("127.0.0.1", port, opts)
@@ -168,7 +174,7 @@ fn multiple_clients() {
             println!("Session created!");
 
             let receiver = session
-                .new_receiver("myqueue")
+                .new_receiver("queue2")
                 .await
                 .expect("receiver not created");
 
