@@ -47,6 +47,7 @@ struct ContainerInner {
 /// Represents a single AMQP connection to a remote endpoint.
 pub struct Connection {
     connection: Arc<ConnectionDriver>,
+    waker: Arc<Waker>,
 
     pub container_id: String,
     pub hostname: String,
@@ -60,6 +61,7 @@ pub struct Connection {
 
 /// Represents an AMQP session.
 pub struct Session {
+    waker: Arc<Waker>,
     connection: Arc<ConnectionDriver>,
     session: Arc<SessionDriver>,
 }
@@ -68,6 +70,7 @@ pub struct Session {
 #[allow(dead_code)]
 pub struct Sender {
     handle: u32,
+    waker: Arc<Waker>,
     connection: Arc<ConnectionDriver>,
     link: Arc<LinkDriver>,
     next_message_id: AtomicU64,
@@ -76,6 +79,7 @@ pub struct Sender {
 /// Represents a receiver link.
 #[allow(dead_code)]
 pub struct Receiver {
+    waker: Arc<Waker>,
     handle: u32,
     connection: Arc<ConnectionDriver>,
     link: Arc<LinkDriver>,
@@ -91,7 +95,7 @@ pub struct Disposition {
 /// Represent a delivery
 pub struct Delivery {
     settled: bool,
-    connection: Arc<ConnectionDriver>,
+    waker: Arc<Waker>,
     link: Arc<LinkDriver>,
     delivery: Arc<DeliveryDriver>,
 }
@@ -204,7 +208,7 @@ impl ContainerInner {
         // TODO: Increment
         let id = Token(self.token_generator.fetch_add(1, Ordering::SeqCst) as usize);
         let conn = {
-            let conn = Arc::new(ConnectionDriver::new(driver, self.waker.clone()));
+            let conn = Arc::new(ConnectionDriver::new(driver));
             let mut m = self.connections.lock().unwrap();
             m.insert(id, conn.clone());
             conn
@@ -219,6 +223,7 @@ impl ContainerInner {
                 Some(Performative::Open(o)) => {
                     // Populate remote properties
                     return Ok(Connection {
+                        waker: self.waker.clone(),
                         connection: conn.clone(),
                         container_id: self.container_id.clone(),
                         hostname: host.to_string(),
@@ -322,7 +327,7 @@ impl Connection {
     pub async fn new_session(&self, opts: Option<SessionOpts>) -> Result<Session> {
         let s = self.connection.new_session(opts).await?;
 
-        self.connection.wakeup()?;
+        self.waker.wake()?;
         trace!("Waiting until begin...");
         loop {
             let frame = s.recv()?;
@@ -330,6 +335,7 @@ impl Connection {
                 Some(Performative::Begin(_b)) => {
                     // Populate remote properties
                     return Ok(Session {
+                        waker: self.waker.clone(),
                         connection: self.connection.clone(),
                         session: s,
                     });
@@ -371,13 +377,14 @@ impl Session {
     pub async fn new_sender(&self, addr: &str) -> Result<Sender> {
         let link = self.session.new_link(addr, LinkRole::Sender)?;
         trace!("Created link, waiting for attach frame");
-        self.connection.wakeup()?;
+        self.waker.wake()?;
         loop {
             let frame = self.session.recv()?;
             match frame.performative {
                 Some(Performative::Attach(_a)) => {
                     // Populate remote properties
                     return Ok(Sender {
+                        waker: self.waker.clone(),
                         handle: link.handle,
                         connection: self.connection.clone(),
                         link: link,
@@ -398,13 +405,14 @@ impl Session {
     pub async fn new_receiver(&self, addr: &str) -> Result<Receiver> {
         let link = self.session.new_link(addr, LinkRole::Receiver)?;
         trace!("Created link, waiting for attach frame");
-        self.connection.wakeup()?;
+        self.waker.wake()?;
         loop {
             let frame = self.session.recv()?;
             match frame.performative {
                 Some(Performative::Attach(_a)) => {
                     // Populate remote properties
                     return Ok(Receiver {
+                        waker: self.waker.clone(),
                         handle: link.handle,
                         connection: self.connection.clone(),
                         link: link,
@@ -457,7 +465,7 @@ impl Sender {
         );
         let settled = false;
         let delivery = self.link.send_message(message, settled).await?;
-        self.connection.wakeup()?;
+        self.waker.wake()?;
 
         if !settled {
             loop {
@@ -503,7 +511,7 @@ impl Receiver {
     /// accept more messages.
     pub async fn flow(&self, credit: u32) -> Result<()> {
         self.link.flow(credit).await?;
-        self.connection.wakeup()?;
+        self.waker.wake()?;
         Ok(())
     }
 
@@ -526,8 +534,8 @@ impl Receiver {
                         message: message,
                     });
                     return Ok(Delivery {
+                        waker: self.waker.clone(),
                         settled: false,
-                        connection: self.connection.clone(),
                         link: self.link.clone(),
                         delivery: delivery,
                     });
@@ -565,7 +573,7 @@ impl Delivery {
         if !self.settled {
             self.link.disposition(&self.delivery, settled, state)?;
             self.settled = settled;
-            self.connection.wakeup()?;
+            self.waker.wake()?;
         }
         Ok(())
     }
@@ -581,7 +589,7 @@ impl Drop for Delivery {
             {
                 _ => {}
             }
-            match self.connection.wakeup() {
+            match self.waker.wake() {
                 _ => {}
             }
         }
