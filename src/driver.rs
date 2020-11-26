@@ -74,8 +74,8 @@ impl SessionFlowControl {
             next_outgoing_id: 0,
             next_incoming_id: 0,
 
-            incoming_window: 100,
-            outgoing_window: 100,
+            incoming_window: std::i32::MAX as u32,
+            outgoing_window: std::i32::MAX as u32,
 
             remote_incoming_window: 0,
             remote_outgoing_window: 0,
@@ -703,6 +703,8 @@ impl LinkDriver {
         if settled {
             self.unsettled.lock().unwrap().remove(&delivery.tag);
             self.did_to_link.lock().unwrap().remove(&delivery.id);
+            let mut control = self.session_flow_control.lock().unwrap();
+            control.incoming_window += 1;
         }
         let disposition = framing::Disposition {
             role: self.role,
