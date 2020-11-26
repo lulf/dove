@@ -74,16 +74,16 @@ impl SessionFlowControl {
             next_outgoing_id: 0,
             next_incoming_id: 0,
 
-            incoming_window: std::u32::MAX,
-            outgoing_window: std::u32::MAX,
+            incoming_window: 100,
+            outgoing_window: 100,
 
-            remote_incoming_window: std::u32::MAX,
-            remote_outgoing_window: std::u32::MAX,
+            remote_incoming_window: 0,
+            remote_outgoing_window: 0,
         }
     }
 
     fn accept(&mut self, delivery_id: u32) -> Result<bool> {
-        if delivery_id < self.next_incoming_id || self.remote_outgoing_window == 0 {
+        if delivery_id < self.next_incoming_id - 1 || self.remote_outgoing_window == 0 {
             Err(AmqpError::framing_error())
         } else if self.incoming_window == 0 {
             Ok(false)
