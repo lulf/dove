@@ -90,6 +90,8 @@ pub struct Disposition {
 
 /// Represent a delivery
 pub struct Delivery {
+    settled: bool,
+    connection: Arc<ConnectionDriver>,
     link: Arc<LinkDriver>,
     delivery: Arc<DeliveryDriver>,
 }
@@ -516,6 +518,8 @@ impl Receiver {
                         message: message,
                     });
                     return Ok(Delivery {
+                        settled: false,
+                        connection: self.connection.clone(),
                         link: self.link.clone(),
                         delivery: delivery,
                     });
@@ -549,18 +553,29 @@ impl Delivery {
     }
 
     /// Send a disposition for this delivery, indicating message settlement and delivery state.
-    pub async fn disposition(&self, settled: bool, state: DeliveryState) -> Result<()> {
-        self.link.disposition(&self.delivery, settled, state)
+    pub async fn disposition(&mut self, settled: bool, state: DeliveryState) -> Result<()> {
+        if !self.settled {
+            self.link.disposition(&self.delivery, settled, state)?;
+            self.settled = settled;
+            self.connection.wakeup()?;
+        }
+        Ok(())
     }
 }
 
 impl Drop for Delivery {
     fn drop(&mut self) {
-        match self
-            .link
-            .disposition(&self.delivery, true, DeliveryState::Accepted)
-        {
-            _ => {}
+        if !self.settled {
+            self.settled = true;
+            match self
+                .link
+                .disposition(&self.delivery, true, DeliveryState::Accepted)
+            {
+                _ => {}
+            }
+            match self.connection.wakeup() {
+                _ => {}
+            }
         }
     }
 }

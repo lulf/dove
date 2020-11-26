@@ -83,7 +83,7 @@ impl SessionFlowControl {
     }
 
     fn accept(&mut self, delivery_id: u32) -> Result<bool> {
-        if delivery_id < self.next_incoming_id - 1 || self.remote_outgoing_window == 0 {
+        if delivery_id + 1 < self.next_incoming_id || self.remote_outgoing_window == 0 {
             Err(AmqpError::framing_error())
         } else if self.incoming_window == 0 {
             Ok(false)
