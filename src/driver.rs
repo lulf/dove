@@ -15,7 +15,7 @@ use crate::framing::{
 };
 use crate::message::Message;
 use log::trace;
-use mio::{Interest, Poll, Token, Waker};
+use mio::{Interest, Poll, Token};
 use rand::Rng;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -26,12 +26,12 @@ use std::time::{Duration, Instant};
 pub type DeliveryTag = Vec<u8>;
 pub type HandleId = u32;
 
+#[derive(Debug)]
 pub struct ConnectionDriver {
     channel_max: u16,
     idle_timeout: Duration,
     driver: Arc<Mutex<conn::Connection>>,
     sessions: Mutex<HashMap<ChannelId, Arc<SessionDriver>>>,
-    waker: Arc<Waker>,
 
     // Frames received on this connection
     rx: Channel<AmqpFrame>,
@@ -42,46 +42,89 @@ pub struct ConnectionDriver {
     closed: AtomicBool,
 }
 
+#[derive(Debug)]
 pub struct SessionDriver {
     // Frames received on this session
     driver: Arc<Mutex<conn::Connection>>,
     local_channel: ChannelId,
     rx: Channel<AmqpFrame>,
     links: Mutex<HashMap<HandleId, Arc<LinkDriver>>>,
+    did_to_delivery: Arc<Mutex<HashMap<u32, (HandleId, Arc<DeliveryDriver>)>>>,
     handle_generator: AtomicU32,
-    did_generator: Arc<AtomicU32>,
-    did_to_link: Arc<Mutex<HashMap<u32, HandleId>>>,
-    did_incoming_id: Arc<AtomicU32>,
-    //   driver: Arc<Mutex<conn::Connection>>,
-    /*    channel: ChannelId,
-    driver: Arc<Mutex<conn::Connection>>,
-    opened: Channel<()>,
+    initial_outgoing_id: u32,
 
-    end_condition: Option<ErrorCondition>,
-    remote_channel: Option<ChannelId>,
-    handle_max: u32,
-    delivery_to_handle: HashMap<u32, HandleId>,
-    next_outgoing_id: u32,
-
-    opts: SessionOpts,
-    incoming: Channel<HandleId>,
-    */
+    flow_control: Arc<Mutex<SessionFlowControl>>,
 }
 
+// TODO: Make this use atomic operations
+#[derive(Clone, Debug)]
+struct SessionFlowControl {
+    next_outgoing_id: u32,
+    next_incoming_id: u32,
+
+    incoming_window: u32,
+    outgoing_window: u32,
+
+    remote_incoming_window: u32,
+    remote_outgoing_window: u32,
+}
+
+impl SessionFlowControl {
+    fn new() -> SessionFlowControl {
+        SessionFlowControl {
+            next_outgoing_id: 0,
+            next_incoming_id: 0,
+
+            incoming_window: std::i32::MAX as u32,
+            outgoing_window: std::i32::MAX as u32,
+
+            remote_incoming_window: 0,
+            remote_outgoing_window: 0,
+        }
+    }
+
+    fn accept(&mut self, delivery_id: u32) -> Result<bool> {
+        if delivery_id + 1 < self.next_incoming_id || self.remote_outgoing_window == 0 {
+            Err(AmqpError::framing_error())
+        } else if self.incoming_window == 0 {
+            Ok(false)
+        } else {
+            self.incoming_window -= 1;
+            self.next_incoming_id = delivery_id + 1;
+            self.remote_outgoing_window -= 1;
+            Ok(true)
+        }
+    }
+
+    fn next(&mut self) -> Option<SessionFlowControl> {
+        if self.outgoing_window > 0 && self.remote_incoming_window > 0 {
+            let original = self.clone();
+            self.next_outgoing_id += 1;
+            self.outgoing_window -= 1;
+            self.remote_incoming_window -= 1;
+            Some(original)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct LinkDriver {
     pub handle: u32,
     pub role: LinkRole,
     pub channel: ChannelId,
     driver: Arc<Mutex<conn::Connection>>,
     rx: Channel<AmqpFrame>,
-    did_generator: Arc<AtomicU32>,
-    did_incoming_id: Arc<AtomicU32>,
-    did_to_link: Arc<Mutex<HashMap<u32, HandleId>>>,
-    unsettled: Mutex<HashMap<DeliveryTag, Arc<DeliveryDriver>>>,
+
+    session_flow_control: Arc<Mutex<SessionFlowControl>>,
+
+    did_to_delivery: Arc<Mutex<HashMap<u32, (HandleId, Arc<DeliveryDriver>)>>>,
     credit: AtomicU32,
     delivery_count: AtomicU32,
 }
 
+#[derive(Debug)]
 pub struct DeliveryDriver {
     pub message: Message,
     pub remotely_settled: bool,
@@ -96,23 +139,17 @@ pub struct SessionOpts {
 }
 
 impl ConnectionDriver {
-    pub fn new(conn: conn::Connection, waker: Arc<Waker>) -> ConnectionDriver {
+    pub fn new(conn: conn::Connection) -> ConnectionDriver {
         ConnectionDriver {
             driver: Arc::new(Mutex::new(conn)),
             rx: Channel::new(),
             sessions: Mutex::new(HashMap::new()),
-            waker: waker,
             remote_channel_map: Mutex::new(HashMap::new()),
             idle_timeout: Duration::from_secs(5),
             remote_idle_timeout: Duration::from_secs(0),
             channel_max: std::u16::MAX,
             closed: AtomicBool::new(false),
         }
-    }
-
-    pub fn wakeup(&self) -> Result<()> {
-        self.waker.wake()?;
-        Ok(())
     }
 
     pub fn register(&self, id: Token, poll: &mut Poll) -> Result<()> {
@@ -220,9 +257,20 @@ impl ConnectionDriver {
                         Performative::Close(ref _close) => {
                             self.rx.send(frame)?;
                         }
-                        Performative::Begin(ref _begin) => {
-                            let mut m = self.sessions.lock().unwrap();
-                            m.get_mut(&channel).map(|s| s.rx.send(frame));
+                        Performative::Begin(ref begin) => {
+                            let m = self.sessions.lock().unwrap();
+                            let s = m.get(&channel);
+                            match s {
+                                Some(s) => {
+                                    {
+                                        let mut f = s.flow_control.lock().unwrap();
+                                        f.remote_outgoing_window = begin.outgoing_window;
+                                        f.remote_incoming_window = begin.incoming_window;
+                                    }
+                                    s.rx.send(frame)?;
+                                }
+                                None => {}
+                            }
                         }
                         Performative::End(ref _end) => {
                             let mut m = self.sessions.lock().unwrap();
@@ -262,21 +310,10 @@ impl ConnectionDriver {
                     rx: Channel::new(),
                     links: Mutex::new(HashMap::new()),
                     handle_generator: AtomicU32::new(0),
-                    did_incoming_id: Arc::new(AtomicU32::new(0)),
-                    did_generator: Arc::new(AtomicU32::new(0)),
-                    did_to_link: Arc::new(Mutex::new(HashMap::new())),
-                    //             driver: self.inner.clone(),
-                    /*
-                    remote_channel: remote_channel_id,
-                    local_channel: chan,
-                    handle_max: std::u32::MAX,
-                    delivery_to_handle: HashMap::new(),
-                    next_outgoing_id: 0,
+                    flow_control: Arc::new(Mutex::new(SessionFlowControl::new())),
+                    initial_outgoing_id: 0,
 
-                    opts: None,
-                    incoming: Channel::new(),
-                    opened: Channel::new(),
-                    */
+                    did_to_delivery: Arc::new(Mutex::new(HashMap::new())),
                 });
                 m.insert(chan, session.clone());
                 remote_channel_id.map(|c| self.remote_channel_map.lock().unwrap().insert(c, chan));
@@ -288,11 +325,12 @@ impl ConnectionDriver {
 
     pub async fn new_session(&self, _opts: Option<SessionOpts>) -> Result<Arc<SessionDriver>> {
         let session = self.allocate_session(None).unwrap();
+        let flow_control: SessionFlowControl = { session.flow_control.lock().unwrap().clone() };
         let begin = Begin {
             remote_channel: None,
-            next_outgoing_id: 0,
-            incoming_window: 10,
-            outgoing_window: 10,
+            next_outgoing_id: flow_control.next_outgoing_id,
+            incoming_window: flow_control.incoming_window,
+            outgoing_window: flow_control.outgoing_window,
             handle_max: None,
             offered_capabilities: None,
             desired_capabilities: None,
@@ -318,25 +356,38 @@ impl ConnectionDriver {
 impl SessionDriver {
     pub fn dispatch(&self, frame: AmqpFrame) -> Result<()> {
         match frame.performative {
-            Some(Performative::Attach(ref attach)) => {
-                if let Some(delivery_count) = attach.initial_delivery_count {
-                    let link = {
-                        let mut m = self.links.lock().unwrap();
-                        m.get_mut(&attach.handle).unwrap().clone()
-                    };
-                    link.delivery_count.store(delivery_count, Ordering::SeqCst);
-                }
+            Some(Performative::Attach(ref _attach)) => {
                 self.rx.send(frame)?;
             }
             Some(Performative::Detach(ref _detach)) => {
                 self.rx.send(frame)?;
             }
             Some(Performative::Transfer(ref transfer)) => {
+                // Session flow control
+                if let Some(delivery_id) = transfer.delivery_id {
+                    loop {
+                        let result = self.flow_control.lock().unwrap().accept(delivery_id);
+                        match result {
+                            Err(AmqpError::Amqp(cond)) => {
+                                self.close(Some(cond))?;
+                            }
+                            Err(_) => {
+                                self.close(None)?;
+                            }
+                            Ok(true) => {
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
                 let link = {
                     let mut m = self.links.lock().unwrap();
                     m.get_mut(&transfer.handle).unwrap().clone()
                 };
 
+                // Link flow control
                 if link
                     .credit
                     .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
@@ -354,9 +405,6 @@ impl SessionDriver {
                         "Received transfert. Credit: {:?}",
                         link.credit.load(Ordering::SeqCst)
                     );
-                    if let Some(did) = transfer.delivery_id {
-                        self.did_incoming_id.store(did + 1, Ordering::SeqCst);
-                    }
                     link.delivery_count.fetch_add(1, Ordering::SeqCst);
                     link.rx.send(frame)?;
                 }
@@ -365,7 +413,7 @@ impl SessionDriver {
                 trace!("Received disposition: {:?}", disposition);
                 let last = disposition.last.unwrap_or(disposition.first);
                 for id in disposition.first..=last {
-                    if let Some(handle) = self.did_to_link.lock().unwrap().get(&id) {
+                    if let Some((handle, _)) = self.did_to_delivery.lock().unwrap().get(&id) {
                         let link = {
                             let mut m = self.links.lock().unwrap();
                             m.get_mut(&handle).unwrap().clone()
@@ -378,12 +426,28 @@ impl SessionDriver {
             }
             Some(Performative::Flow(ref flow)) => {
                 trace!("Received flow!");
+                // Session flow control
+                {
+                    let mut control = self.flow_control.lock().unwrap();
+                    control.next_incoming_id = flow.next_outgoing_id;
+                    control.remote_outgoing_window = flow.outgoing_window;
+                    if let Some(next_incoming_id) = flow.next_incoming_id {
+                        control.remote_incoming_window =
+                            next_incoming_id + flow.incoming_window - control.next_outgoing_id;
+                    } else {
+                        control.remote_incoming_window = self.initial_outgoing_id
+                            + flow.incoming_window
+                            - control.next_outgoing_id;
+                    }
+                }
                 if let Some(handle) = flow.handle {
                     let link = {
                         let mut m = self.links.lock().unwrap();
                         m.get_mut(&handle).unwrap().clone()
                     };
                     if let Some(credit) = flow.link_credit {
+                        let credit = flow.delivery_count.unwrap_or(0) + credit
+                            - link.delivery_count.load(Ordering::SeqCst);
                         link.credit.store(credit, Ordering::SeqCst);
                     }
                 }
@@ -410,10 +474,8 @@ impl SessionDriver {
             driver: self.driver.clone(),
             handle: handle,
             rx: Channel::new(),
-            unsettled: Mutex::new(HashMap::new()),
-            did_generator: self.did_generator.clone(),
-            did_to_link: self.did_to_link.clone(),
-            did_incoming_id: self.did_incoming_id.clone(),
+            session_flow_control: self.flow_control.clone(),
+            did_to_delivery: self.did_to_delivery.clone(),
             credit: AtomicU32::new(0),
             delivery_count: AtomicU32::new(0),
         });
@@ -484,20 +546,24 @@ impl LinkDriver {
     pub fn driver(&self) -> std::sync::MutexGuard<conn::Connection> {
         self.driver.lock().unwrap()
     }
+
     pub async fn send_message(
         &self,
         message: Message,
         settled: bool,
     ) -> Result<Arc<DeliveryDriver>> {
+        let semaphore_fn = |x| {
+            if x <= 0 {
+                Some(0)
+            } else {
+                Some(x - 1)
+            }
+        };
+
+        // Link flow control
         while self
             .credit
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
-                if x <= 0 {
-                    Some(0)
-                } else {
-                    Some(x - 1)
-                }
-            })
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, semaphore_fn)
             == Ok(0)
         {
             std::thread::sleep(Duration::from_millis(500));
@@ -509,11 +575,22 @@ impl LinkDriver {
             */
         }
 
+        // Session flow control
+        let next_outgoing_id;
+        loop {
+            let props = self.session_flow_control.lock().unwrap().next();
+            if let Some(props) = props {
+                next_outgoing_id = props.next_outgoing_id;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+
+        self.delivery_count.fetch_add(1, Ordering::SeqCst);
         let delivery_tag = rand::thread_rng().gen::<[u8; 16]>().to_vec();
-        let delivery_id = self.did_generator.fetch_add(1, Ordering::SeqCst);
         let delivery = Arc::new(DeliveryDriver {
             message: message,
-            id: delivery_id,
+            id: next_outgoing_id,
             tag: delivery_tag.clone(),
             state: None,
             remotely_settled: false,
@@ -521,24 +598,15 @@ impl LinkDriver {
         });
 
         if !settled {
-            {
-                self.unsettled
-                    .lock()
-                    .unwrap()
-                    .insert(delivery_tag.clone(), delivery.clone());
-            }
-
-            {
-                self.did_to_link
-                    .lock()
-                    .unwrap()
-                    .insert(delivery_id, self.handle);
-            }
+            self.did_to_delivery
+                .lock()
+                .unwrap()
+                .insert(next_outgoing_id, (self.handle, delivery.clone()));
         }
 
         let transfer = Transfer {
             handle: self.handle,
-            delivery_id: Some(delivery_id),
+            delivery_id: Some(next_outgoing_id),
             delivery_tag: Some(delivery_tag),
             message_format: Some(0),
             settled: Some(settled),
@@ -568,13 +636,14 @@ impl LinkDriver {
 
     fn flowcontrol(&self, credit: u32, connection: &mut conn::Connection) -> Result<()> {
         self.credit.store(credit, Ordering::SeqCst);
+        let props = { self.session_flow_control.lock().unwrap().clone() };
         connection.flow(
             self.channel,
             Flow {
-                next_incoming_id: Some(self.did_incoming_id.load(Ordering::SeqCst)),
-                incoming_window: std::i32::MAX as u32,
-                next_outgoing_id: self.did_generator.load(Ordering::SeqCst),
-                outgoing_window: std::i32::MAX as u32,
+                next_incoming_id: Some(props.next_incoming_id),
+                incoming_window: props.incoming_window,
+                next_outgoing_id: props.next_outgoing_id,
+                outgoing_window: props.outgoing_window,
                 handle: Some(self.handle as u32),
                 delivery_count: Some(self.delivery_count.load(Ordering::SeqCst)),
                 link_credit: Some(credit),
@@ -614,8 +683,9 @@ impl LinkDriver {
         state: DeliveryState,
     ) -> Result<()> {
         if settled {
-            self.unsettled.lock().unwrap().remove(&delivery.tag);
-            self.did_to_link.lock().unwrap().remove(&delivery.id);
+            self.did_to_delivery.lock().unwrap().remove(&delivery.id);
+            let mut control = self.session_flow_control.lock().unwrap();
+            control.incoming_window += 1;
         }
         let disposition = framing::Disposition {
             role: self.role,
@@ -631,6 +701,7 @@ impl LinkDriver {
     }
 }
 
+#[derive(Debug)]
 pub struct Channel<T> {
     tx: Mutex<mpsc::Sender<T>>,
     rx: Mutex<mpsc::Receiver<T>>,

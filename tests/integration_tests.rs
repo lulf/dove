@@ -7,6 +7,7 @@ use dove::container::*;
 use dove::message::MessageBody;
 
 use futures::executor::block_on;
+use std::thread;
 
 #[test]
 fn client() {
@@ -76,7 +77,7 @@ fn client() {
 
         // Verify results
         for delivery in deliveries.drain(..) {
-            let delivery = delivery.await.expect("error awaiting delivery");
+            let mut delivery = delivery.await.expect("error awaiting delivery");
             if let MessageBody::AmqpValue(Value::String(ref s)) = delivery.message().body {
                 assert!(s.starts_with("Hello, World"));
             } else {
@@ -91,4 +92,119 @@ fn client() {
 
         println!("Messages verified");
     });
+}
+
+#[test]
+fn multiple_clients() {
+    let to_send: usize = 2000;
+    let t1 = thread::spawn(move || {
+        block_on(async {
+            let container = Container::new()
+                .expect("unable to create container")
+                .start();
+
+            println!("Going to connect");
+
+            let opts = ConnectionOptions::new()
+                .sasl_mechanism(SaslMechanism::Plain)
+                .username("test")
+                .password("test");
+            let port: u16 = 5672;
+            let connection = container
+                .connect("127.0.0.1", port, opts)
+                .await
+                .expect("connection not created");
+            println!("Connection created!");
+
+            // new_session creates the AMQP session.
+            let session = connection
+                .new_session(None)
+                .await
+                .expect("session not created");
+            println!("Session created!");
+
+            // new_sender creates the AMQP sender link.
+            let sender = session
+                .new_sender("queue2")
+                .await
+                .expect("sender not created");
+
+            println!("Sender created!");
+
+            //  Send message and get disposition.
+            let mut messages = Vec::new();
+            for i in 0..to_send {
+                let message =
+                    Message::amqp_value(Value::String(format!("Hello, World: {}", i).to_string()));
+                messages.push(sender.send(message));
+            }
+            println!("Initiated send of {} messages", messages.len());
+
+            // Making sure messages are sent
+            for message in messages.drain(..) {
+                message.await.expect("error awaiting message");
+            }
+        });
+    });
+
+    let t2 = thread::spawn(move || {
+        block_on(async {
+            let container = Container::new()
+                .expect("unable to create container")
+                .start();
+
+            println!("Going to connect");
+
+            let opts = ConnectionOptions::new()
+                .sasl_mechanism(SaslMechanism::Plain)
+                .username("test")
+                .password("test");
+            let port: u16 = 5672;
+            let connection = container
+                .connect("127.0.0.1", port, opts)
+                .await
+                .expect("connection not created");
+            println!("Connection created!");
+
+            // new_session creates the AMQP session.
+            let session = connection
+                .new_session(None)
+                .await
+                .expect("session not created");
+            println!("Session created!");
+
+            let receiver = session
+                .new_receiver("queue2")
+                .await
+                .expect("receiver not created");
+
+            println!("Receiver created!");
+
+            let mut deliveries = Vec::new();
+            for _ in 0..to_send {
+                deliveries.push(receiver.receive());
+            }
+
+            println!("Verifying {} messages", deliveries.len());
+
+            // Verify results
+            for delivery in deliveries.drain(..) {
+                let mut delivery = delivery.await.expect("error awaiting delivery");
+                if let MessageBody::AmqpValue(Value::String(ref s)) = delivery.message().body {
+                    assert!(s.starts_with("Hello, World"));
+                } else {
+                    assert!(false);
+                }
+                delivery
+                    .disposition(true, DeliveryState::Accepted)
+                    .await
+                    .expect("disposition not sent");
+            }
+
+            println!("Messages verified");
+        });
+    });
+
+    let _ = t1.join();
+    let _ = t2.join();
 }
