@@ -971,10 +971,10 @@ impl Outcome {
     pub fn from_slice(data: &[u8]) -> Result<Outcome> {
         let input = std::str::from_utf8(data)?;
         match input {
-            "Accepted" => Ok(Outcome::Accepted),
-            "Rejected" => Ok(Outcome::Rejected),
-            "Released" => Ok(Outcome::Released),
-            "Modified" => Ok(Outcome::Modified),
+            "amqp:accepted:list" => Ok(Outcome::Accepted),
+            "amqp:rejected:list" => Ok(Outcome::Rejected),
+            "amqp:released:list" => Ok(Outcome::Released),
+            "amqp:modified:list" => Ok(Outcome::Modified),
             v => Err(AmqpError::decode_error(Some(
                 format!("Unknown outcome {:?}", v).as_str(),
             ))),
@@ -987,8 +987,15 @@ impl TryFromValue for Outcome {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Symbol(v) => Outcome::from_slice(&v[..]),
+            Value::Described(desc, _) => match *desc {
+                DESC_DELIVERY_STATE_ACCEPTED => Ok(Outcome::Accepted),
+                DESC_DELIVERY_STATE_MODIFIED => Ok(Outcome::Modified),
+                DESC_DELIVERY_STATE_RELEASED => Ok(Outcome::Released),
+                DESC_DELIVERY_STATE_REJECTED => Ok(Outcome::Rejected),
+                _ => Err(AmqpError::decode_error(Some("Unknown outcome descriptor"))),
+            },
             _ => Err(AmqpError::decode_error(Some(
-                "Error converting value to Outcome",
+                format!("Error converting value to Outcome. Was {:?}", value).as_str(),
             ))),
         }
     }

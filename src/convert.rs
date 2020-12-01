@@ -15,7 +15,7 @@ use crate::frame_codec::*;
 use crate::symbol::*;
 use crate::types::*;
 
-pub trait TryFromValue {
+pub trait TryFromValue: std::fmt::Debug {
     fn try_from(value: Value) -> Result<Self>
     where
         Self: std::marker::Sized;
@@ -68,7 +68,7 @@ impl<T: TryFromValueVec> TryFromValue for Vec<T> {
                     .partition(Result::is_ok);
                 if errors.len() > 0 {
                     return Err(AmqpError::decode_error(Some(
-                        "Error decoding array elements",
+                        format!("Error decoding array elements: {:?}", errors).as_str(),
                     )));
                 } else {
                     return Ok(results.into_iter().map(Result::unwrap).collect());
