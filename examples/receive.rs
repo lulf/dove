@@ -17,8 +17,10 @@ fn main() {
         println!("Usage: receive amqp://localhost:5672/myqueue");
         std::process::exit(1);
     }
-    let url = &args[1];
 
+    env_logger::init();
+
+    let url = &args[1];
     let url = url::Url::parse(url).expect("error parsing url");
     let opts = ConnectionOptions {
         username: url.username.map(|s| s.to_string()),
@@ -40,16 +42,22 @@ fn main() {
             .await
             .expect("connection not created");
 
+        println!("Connected");
+
         // new_session creates the AMQP session.
         let session = connection
             .new_session(None)
             .await
             .expect("session not created");
 
+        println!("Session created");
+
         let receiver = session
             .new_receiver(url.address)
             .await
             .expect("receiver not created");
+
+        println!("Receiver created");
 
         let delivery = receiver.receive().await.expect("unable to receive message");
 

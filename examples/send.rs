@@ -18,6 +18,8 @@ fn main() {
         std::process::exit(1);
     }
 
+    env_logger::init();
+
     let url = &args[1];
     let data = &args[2];
 
