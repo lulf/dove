@@ -13,3 +13,7 @@ cache: cargo
 
 services:
   - docker
+
+script:
+  - cargo build --verbose --workspace
+  - RUST_LOG=info cargo test --verbose --workspace
