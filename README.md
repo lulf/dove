@@ -1,4 +1,5 @@
 ![Build status](https://github.com/lulf/dove/workflows/Dove%20CI/badge.svg)
+![crates.io](https://img.shields.io/crates/v/dove.svg)
 
 # Dove - Rust AMQP 1.0 Library
 
