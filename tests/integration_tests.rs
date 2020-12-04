@@ -22,7 +22,7 @@ fn setup() {
 
 #[test]
 fn test_artemis() {
-    panic_after(Duration::from_secs(60), || {
+    panic_after(Duration::from_secs(120), || {
         setup();
         let docker = clients::Cli::default();
         let node = docker.run(
@@ -31,7 +31,7 @@ fn test_artemis() {
                 .with_env_var("ARTEMIS_PASSWORD", "test"),
         );
         log::info!("ActiveMQ Artemis Started");
-        std::thread::sleep(Duration::from_millis(10000));
+        std::thread::sleep(Duration::from_millis(20000));
         let port: u16 = node.get_host_port(5672).unwrap();
         let opts = ConnectionOptions::new()
             .sasl_mechanism(SaslMechanism::Plain)
@@ -44,14 +44,14 @@ fn test_artemis() {
 
 #[test]
 fn test_qpid_dispatch() {
-    panic_after(Duration::from_secs(60), || {
+    panic_after(Duration::from_secs(120), || {
         setup();
         let docker = clients::Cli::default();
         let node = docker.run(images::generic::GenericImage::new(
             "quay.io/interconnectedcloud/qdrouterd:1.12.0",
         ));
         log::info!("Router Started");
-        std::thread::sleep(Duration::from_millis(5000));
+        std::thread::sleep(Duration::from_millis(10000));
         let port: u16 = node.get_host_port(5672).unwrap();
         let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
         multiple_clients(port, opts);
@@ -60,7 +60,7 @@ fn test_qpid_dispatch() {
 
 #[test]
 fn test_qpid_broker_j() {
-    panic_after(Duration::from_secs(60), || {
+    panic_after(Duration::from_secs(120), || {
         setup();
         let mut config_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         config_dir.push("tests");
@@ -71,7 +71,7 @@ fn test_qpid_broker_j() {
                 .with_volume(config_dir.as_path().to_str().unwrap(), "/usr/local/etc"),
         );
         log::info!("Qpid Broker J Started");
-        std::thread::sleep(Duration::from_millis(10000));
+        std::thread::sleep(Duration::from_millis(20000));
 
         // Create queues used by tests
         let client = reqwest::blocking::Client::new();
