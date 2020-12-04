@@ -189,11 +189,7 @@ impl Connection {
         Ok(())
     }
 
-    pub fn disposition(
-        &mut self,
-        channel: ChannelId,
-        disposition: Disposition,
-    ) -> Result<()> {
+    pub fn disposition(&mut self, channel: ChannelId, disposition: Disposition) -> Result<()> {
         self.tx_frames.push(Frame::AMQP(AmqpFrame {
             channel: channel as u16,
             performative: Some(Performative::Disposition(disposition)),
@@ -202,11 +198,7 @@ impl Connection {
         Ok(())
     }
 
-    pub fn keepalive(
-        &mut self,
-        remote_idle_timeout: Duration,
-        now: Instant,
-    ) -> Result<Instant> {
+    pub fn keepalive(&mut self, remote_idle_timeout: Duration, now: Instant) -> Result<Instant> {
         if remote_idle_timeout.as_millis() > 0 {
             trace!(
                 "Remote idle timeout millis: {:?}. Last sent: {:?}",

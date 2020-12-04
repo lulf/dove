@@ -150,10 +150,10 @@ impl Container {
                 return;
             }
             if let Err(e) = container.process() {
-                    error!(
-                        "{}: error while processing: {:?}",
-                        container.container_id, e
-                    );
+                error!(
+                    "{}: error while processing: {:?}",
+                    container.container_id, e
+                );
             }
         }
     }
@@ -175,7 +175,7 @@ impl Container {
         self.running.store(false, Ordering::SeqCst);
         let thread = self.thread.take();
         if let Some(t) = thread {
-                t.join()?;
+            t.join()?;
         }
         Ok(())
     }
@@ -306,7 +306,7 @@ impl ContainerInner {
             // Flush data
             let result = driver.flush();
             if result.is_err() {
-                    trace!("{}: error flushing driver for {:?}", self.container_id, id);
+                trace!("{}: error flushing driver for {:?}", self.container_id, id);
             }
         }
 
@@ -340,16 +340,16 @@ impl ContainerInner {
             m.get_mut(&id).cloned()
         };
         if let Some(c) = connection {
-                let result = c.process();
-                match result {
-                    Err(AmqpError::Amqp(condition)) => {
-                        self.close_connection(id, &c, Some(condition))?;
-                    }
-                    Err(_) => {
-                        self.close_connection(id, &c, None)?;
-                    }
-                    _ => {}
+            let result = c.process();
+            match result {
+                Err(AmqpError::Amqp(condition)) => {
+                    self.close_connection(id, &c, Some(condition))?;
                 }
+                Err(_) => {
+                    self.close_connection(id, &c, None)?;
+                }
+                _ => {}
+            }
         }
         Ok(())
     }

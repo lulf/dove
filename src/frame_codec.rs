@@ -57,10 +57,7 @@ impl FrameEncoder {
 impl<'a> FrameDecoder<'a> {
     pub fn new(desc: &'a Value, input: &'a mut Value) -> Result<FrameDecoder<'a>> {
         if let Value::List(args) = input {
-            Ok(FrameDecoder {
-                desc,
-                args,
-            })
+            Ok(FrameDecoder { desc, args })
         } else {
             Err(AmqpError::decode_error(Some(
                 format!("Error decoding frame arguments: {:?}", input).as_str(),

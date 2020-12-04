@@ -266,13 +266,13 @@ impl ConnectionDriver {
                             let m = self.sessions.lock().unwrap();
                             let s = m.get(&channel);
                             if let Some(s) = s {
-                                    {
-                                        let mut f = s.flow_control.lock().unwrap();
-                                        f.remote_outgoing_window = begin.outgoing_window;
-                                        f.remote_incoming_window = begin.incoming_window;
-                                    }
-                                    s.rx.send(frame)?;
+                                {
+                                    let mut f = s.flow_control.lock().unwrap();
+                                    f.remote_outgoing_window = begin.outgoing_window;
+                                    f.remote_incoming_window = begin.incoming_window;
                                 }
+                                s.rx.send(frame)?;
+                            }
                         }
                         Performative::End(ref _end) => {
                             let mut m = self.sessions.lock().unwrap();
@@ -285,8 +285,8 @@ impl ConnectionDriver {
                             };
 
                             if let Some(s) = session {
-                                    s.dispatch(frame)?;
-                                }
+                                s.dispatch(frame)?;
+                            }
                         }
                     }
                 }
@@ -295,10 +295,7 @@ impl ConnectionDriver {
         Ok(())
     }
 
-    fn allocate_session(
-        &self,
-        remote_channel_id: Option<ChannelId>,
-    ) -> Option<Arc<SessionDriver>> {
+    fn allocate_session(&self, remote_channel_id: Option<ChannelId>) -> Option<Arc<SessionDriver>> {
         let mut m = self.sessions.lock().unwrap();
         for i in 0..self.channel_max {
             let chan = i as ChannelId;
@@ -387,12 +384,12 @@ impl SessionDriver {
                 };
 
                 let count_down = |x| {
-                        if x == 0 {
-                            Some(0)
-                        } else {
-                            Some(x - 1)
-                        }
-                    };
+                    if x == 0 {
+                        Some(0)
+                    } else {
+                        Some(x - 1)
+                    }
+                };
                 // Link flow control
                 if link
                     .credit
