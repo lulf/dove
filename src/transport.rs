@@ -5,7 +5,7 @@
 
 //! The transport module contains the network connectivity transport for the upper layers. It is implemented using mio.
 
-use log::trace;
+use log::{debug, trace};
 use mio::event::Source;
 use mio::net::TcpStream;
 use mio::{Interest, Registry, Token};
@@ -168,24 +168,24 @@ impl Transport {
     pub fn read_frame(self: &mut Self) -> Result<Frame> {
         loop {
             let mut buf = self.incoming.peek();
-            // println!("Filled {} bytes", buf.len());
+            trace!("Filled {} bytes", buf.len());
             if buf.len() >= 8 {
                 let header = FrameHeader::decode(&mut buf)?;
                 let frame_size = header.size as usize;
-                /*
-                println!(
+                trace!(
                     "Found enough bytes for header {:?}. Buffer is {} bytes!",
                     header,
                     buf.len()
                 );
-                */
                 if buf.len() >= frame_size - 8 {
                     let mut cursor = Cursor::new(&mut buf);
                     let frame = Frame::decode(header, &mut cursor)?;
                     self.incoming.consume(frame_size)?;
                     self.last_received = Instant::now();
-                    trace!("RX {:?}", frame);
+                    debug!("RX {:?}", frame);
                     return Ok(frame);
+                } else {
+                    self.incoming.fill(&mut self.stream)?;
                 }
             } else {
                 self.incoming.fill(&mut self.stream)?;

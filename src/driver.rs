@@ -14,7 +14,7 @@ use crate::framing::{
     Performative, Source, Target, Transfer,
 };
 use crate::message::Message;
-use log::trace;
+use log::{trace, warn};
 use mio::{Interest, Poll, Token};
 use rand::Rng;
 use std::collections::HashMap;
@@ -206,7 +206,8 @@ impl ConnectionDriver {
         let mut driver = self.driver.lock().unwrap();
         driver.close(Close { error: error })?;
         driver.flush()?;
-        driver.shutdown()
+        driver.shutdown()?;
+        Ok(())
     }
 
     pub fn process(&self) -> Result<()> {
@@ -238,7 +239,9 @@ impl ConnectionDriver {
             }
         }
 
-        trace!("Got {:?} frames", rx_frames.len());
+        if rx_frames.len() > 0 {
+            trace!("Dispatching {:?} frames", rx_frames.len());
+        }
 
         self.dispatch(rx_frames)
     }
@@ -402,7 +405,7 @@ impl SessionDriver {
                     trace!("Transfer but no space left!");
                 } else {
                     trace!(
-                        "Received transfert. Credit: {:?}",
+                        "Received transfer. Credit: {:?}",
                         link.credit.load(Ordering::SeqCst)
                     );
                     link.delivery_count.fetch_add(1, Ordering::SeqCst);
@@ -453,7 +456,7 @@ impl SessionDriver {
                 }
             }
             _ => {
-                trace!("Unexpected performative for session: {:?}", frame);
+                warn!("Unexpected performative for session: {:?}", frame);
             }
         }
         Ok(())
@@ -635,6 +638,7 @@ impl LinkDriver {
     }
 
     fn flowcontrol(&self, credit: u32, connection: &mut conn::Connection) -> Result<()> {
+        trace!("{}: issuing {} credits", self.handle, credit);
         self.credit.store(credit, Ordering::SeqCst);
         let props = { self.session_flow_control.lock().unwrap().clone() };
         connection.flow(

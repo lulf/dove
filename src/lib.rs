@@ -29,9 +29,7 @@
 //! block_on(async {
 //!     let connection = container
 //!         .connect("localhost", 5672, ConnectionOptions::new()
-//!             .username("test")
-//!             .password("test")
-//!             .sasl_mechanism(SaslMechanism::Plain))
+//!             .sasl_mechanism(SaslMechanism::Anonymous))
 //!         .await
 //!         .expect("connection not created");
 //!

@@ -5,7 +5,7 @@
 
 //! The conn module contains basic primitives for establishing and accepting AMQP connections and performing the initial handshake. Once handshake is complete, the connection can be used to send and receive frames.
 
-use log::trace;
+use log::{debug, trace};
 use mio::event::Source;
 use mio::net::TcpListener;
 use mio::net::TcpStream;
@@ -207,13 +207,11 @@ impl Connection {
         now: Instant,
     ) -> Result<Instant> {
         if remote_idle_timeout.as_millis() > 0 {
-            /*
             trace!(
                 "Remote idle timeout millis: {:?}. Last sent: {:?}",
-                self.remote_idle_timeout.as_millis(),
+                remote_idle_timeout.as_millis(),
                 now - self.transport.last_sent()
             );
-            */
 
             if now - self.transport.last_sent() >= remote_idle_timeout {
                 self.tx_frames.push(Frame::AMQP(AmqpFrame {
@@ -266,7 +264,7 @@ impl Connection {
         match self.state {
             ConnectionState::Opened | ConnectionState::Closed => {
                 for frame in self.tx_frames.drain(..) {
-                    trace!("TX {:?}", frame);
+                    debug!("TX {:?}", frame);
                     self.transport.write_frame(&frame)?;
                 }
             }
@@ -297,6 +295,7 @@ impl Connection {
                             self.state = ConnectionState::Opened;
                         }
                         _ => {
+                            trace!("WHY ARE WE CLOSING1");
                             self.transport.close()?;
                             self.state = ConnectionState::Closed;
                         }
@@ -321,6 +320,7 @@ impl Connection {
                             self.transport.write_protocol_header(&AMQP_10_HEADER)?;
                             self.state = ConnectionState::Closed;
                             self.transport.flush()?;
+                            trace!("WHY ARE WE CLOSING2");
                             self.transport.close()?;
                         }
                     }
@@ -334,6 +334,7 @@ impl Connection {
                         self.state = ConnectionState::Start;
                     }
                     SaslState::Failed => {
+                        trace!("WHY ARE WE CLOSING3");
                         self.transport.close()?;
                         self.state = ConnectionState::Closed;
                     }
@@ -343,13 +344,15 @@ impl Connection {
                 }
             }
             ConnectionState::Opened => {
-                frames.push(self.transport.read_frame()?);
+                let frame = self.transport.read_frame()?;
+                frames.push(frame);
             }
             ConnectionState::Closed => {
+                trace!("WHY ARE WE CLOSING4");
                 return Err(AmqpError::amqp_error(
                     condition::connection::CONNECTION_FORCED,
                     None,
-                ))
+                ));
             }
         }
         Ok(())
