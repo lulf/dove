@@ -9,7 +9,7 @@ use dove::message::MessageBody;
 use futures::executor::block_on;
 use reqwest;
 use std::sync::Once;
-use std::thread;
+use std::{sync::mpsc, thread, time::Duration};
 use testcontainers::{clients, images, Docker};
 
 static INIT: Once = Once::new();
@@ -22,76 +22,68 @@ fn setup() {
 
 #[test]
 fn test_artemis() {
-    setup();
-    let docker = clients::Cli::default();
-    let node = docker.run(
-        images::generic::GenericImage::new("docker.io/vromero/activemq-artemis:2-latest")
-            .with_env_var("ARTEMIS_USERNAME", "test")
-            .with_env_var("ARTEMIS_PASSWORD", "test"),
-    );
-    log::info!("ActiveMQ Artemis Started");
-    std::thread::sleep(std::time::Duration::from_millis(10000));
-    let port: u16 = node.get_host_port(5672).unwrap();
-    let opts = ConnectionOptions::new()
-        .sasl_mechanism(SaslMechanism::Plain)
-        .username("test")
-        .password("test");
-    single_client(port, opts.clone());
-    multiple_clients(port, opts);
+    panic_after(Duration::from_secs(60), || {
+        setup();
+        let docker = clients::Cli::default();
+        let node = docker.run(
+            images::generic::GenericImage::new("docker.io/vromero/activemq-artemis:2-latest")
+                .with_env_var("ARTEMIS_USERNAME", "test")
+                .with_env_var("ARTEMIS_PASSWORD", "test"),
+        );
+        log::info!("ActiveMQ Artemis Started");
+        std::thread::sleep(Duration::from_millis(10000));
+        let port: u16 = node.get_host_port(5672).unwrap();
+        let opts = ConnectionOptions::new()
+            .sasl_mechanism(SaslMechanism::Plain)
+            .username("test")
+            .password("test");
+        single_client(port, opts.clone());
+        multiple_clients(port, opts);
+    });
 }
 
 #[test]
 fn test_qpid_dispatch() {
-    setup();
-    let docker = clients::Cli::default();
-    let node = docker.run(images::generic::GenericImage::new(
-        "quay.io/interconnectedcloud/qdrouterd:1.12.0",
-    ));
-    log::info!("Router Started");
-    std::thread::sleep(std::time::Duration::from_millis(5000));
-    let port: u16 = node.get_host_port(5672).unwrap();
-    let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
-    multiple_clients(port, opts);
-}
-
-fn create_queue(client: &reqwest::blocking::Client, port: u16, queue: &str) {
-    let url = format!(
-        "http://localhost:{}/api/latest/queue/default/default/{}",
-        port, queue
-    );
-    let response = client
-        .put(&url)
-        .body("{\"durable\":true}")
-        .send()
-        .expect("error creating queue");
-    log::trace!("Create queue response: {:?}", response);
-    assert!(response.status().is_success());
+    panic_after(Duration::from_secs(60), || {
+        setup();
+        let docker = clients::Cli::default();
+        let node = docker.run(images::generic::GenericImage::new(
+            "quay.io/interconnectedcloud/qdrouterd:1.12.0",
+        ));
+        log::info!("Router Started");
+        std::thread::sleep(Duration::from_millis(5000));
+        let port: u16 = node.get_host_port(5672).unwrap();
+        let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
+        multiple_clients(port, opts);
+    });
 }
 
 #[test]
 fn test_qpid_broker_j() {
-    setup();
-    let mut config_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    config_dir.push("tests");
-    config_dir.push("qpid-broker-j");
-    let docker = clients::Cli::default();
-    let node = docker.run(
-        images::generic::GenericImage::new("docker.io/chrisob/qpid-broker-j-docker:8.0.0")
-            .with_volume(config_dir.as_path().to_str().unwrap(), "/usr/local/etc"),
-    );
-    log::info!("Qpid Broker J Started");
-    std::thread::sleep(std::time::Duration::from_millis(10000));
+    panic_after(Duration::from_secs(60), || {
+        setup();
+        let mut config_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        config_dir.push("tests");
+        config_dir.push("qpid-broker-j");
+        let docker = clients::Cli::default();
+        let node = docker.run(
+            images::generic::GenericImage::new("docker.io/chrisob/qpid-broker-j-docker:8.0.0")
+                .with_volume(config_dir.as_path().to_str().unwrap(), "/usr/local/etc"),
+        );
+        log::info!("Qpid Broker J Started");
+        std::thread::sleep(Duration::from_millis(10000));
 
-    // Create queues used by tests
-    let client = reqwest::blocking::Client::new();
-    let http_port: u16 = node.get_host_port(8080).unwrap();
-    create_queue(&client, http_port, "myqueue");
-    create_queue(&client, http_port, "queue2");
+        // Create queues used by tests
+        let client = reqwest::blocking::Client::new();
+        let http_port: u16 = node.get_host_port(8080).unwrap();
+        create_queue(&client, http_port, "myqueue");
+        create_queue(&client, http_port, "queue2");
 
-    let port: u16 = node.get_host_port(5672).unwrap();
-    let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
-    single_client(port, opts.clone());
-    multiple_clients(port, opts);
+        let port: u16 = node.get_host_port(5672).unwrap();
+        let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
+        single_client(port, opts.clone());
+        multiple_clients(port, opts);
+    });
 }
 
 fn single_client(port: u16, opts: ConnectionOptions) {
@@ -275,4 +267,37 @@ fn multiple_clients(port: u16, opts: ConnectionOptions) {
 
     t1.join().expect("sender error");
     t2.join().expect("receiver error");
+}
+
+fn create_queue(client: &reqwest::blocking::Client, port: u16, queue: &str) {
+    let url = format!(
+        "http://localhost:{}/api/latest/queue/default/default/{}",
+        port, queue
+    );
+    let response = client
+        .put(&url)
+        .body("{\"durable\":true}")
+        .send()
+        .expect("error creating queue");
+    log::trace!("Create queue response: {:?}", response);
+    assert!(response.status().is_success());
+}
+
+fn panic_after<T, F>(d: Duration, f: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> T,
+    F: Send + 'static,
+{
+    let (done_tx, done_rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let val = f();
+        done_tx.send(()).expect("Unable to send completion signal");
+        val
+    });
+
+    match done_rx.recv_timeout(d) {
+        Ok(_) => handle.join().expect("Thread panicked"),
+        Err(_) => panic!("Thread took too long"),
+    }
 }
