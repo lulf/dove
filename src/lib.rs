@@ -13,8 +13,8 @@
 //!
 //! Dove exposes two different APIs:
 //!
-//! * A low level connection API that allows you to send and receive frames defined as rust types.
 //! * An API for writing messaging applications using async rust.
+//! * A low level connection API that allows you to send and receive frames defined as rust types.
 
 //! # Example
 //!
