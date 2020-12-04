@@ -25,10 +25,10 @@ pub enum UrlScheme {
 
 impl UrlScheme {
     fn parse(input: &str) -> (&str, Result<UrlScheme>) {
-        if input.starts_with("amqp://") {
-            (&input[7..], Ok(UrlScheme::AMQP))
-        } else if input.starts_with("amqps://") {
-            (&input[8..], Ok(UrlScheme::AMQPS))
+        if let Some(s) = input.strip_prefix("amqp://") {
+            (s, Ok(UrlScheme::AMQP))
+        } else if let Some(s) = input.strip_prefix("amqps://") {
+            (s, Ok(UrlScheme::AMQPS))
         } else {
             (input, Err(AmqpError::generic("unable to detect scheme")))
         }
