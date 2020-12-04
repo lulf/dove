@@ -16,4 +16,4 @@ services:
 
 script:
   - cargo build --verbose --workspace
-  - RUST_LOG=info cargo test --verbose --workspace
+  - RUST_LOG=info cargo test --verbose --workspace -- --test-threads=1 --nocapture
