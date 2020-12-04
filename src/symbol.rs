@@ -23,27 +23,27 @@ impl Symbol {
     pub fn from_slice(data: &[u8]) -> Symbol {
         let mut vec = Vec::new();
         vec.extend_from_slice(data);
-        return Symbol { data: vec };
+        Symbol { data: vec }
     }
 
-    pub fn from_str(data: &str) -> Symbol {
+    pub fn symbol_from_str(data: &str) -> Symbol {
         let mut vec = Vec::new();
         vec.extend_from_slice(data.as_bytes());
-        return Symbol { data: vec };
+        Symbol { data: vec }
     }
 
     pub fn from_vec(data: Vec<u8>) -> Symbol {
-        return Symbol { data };
+        Symbol { data }
     }
 
     pub fn from_string(data: &str) -> Symbol {
         let mut vec = Vec::new();
         vec.extend_from_slice(data.as_bytes());
-        return Symbol { data: vec };
+        Symbol { data: vec }
     }
 
     pub fn to_slice(&self) -> &[u8] {
-        return &self.data[..];
+        &self.data[..]
     }
 }
 

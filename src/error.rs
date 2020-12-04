@@ -25,16 +25,16 @@ pub struct ErrorCondition {
 }
 
 pub mod condition {
-    pub const INTERNAL_ERROR: &'static str = "amqp:internal-error";
-    pub const NOT_FOUND: &'static str = "amqp:not-found";
-    pub const DECODE_ERROR: &'static str = "amqp:decode-error";
-    pub const NOT_IMPLEMENTED: &'static str = "amqp:not-implemented";
-    pub const RESOURCE_LIMIT_EXCEEDED: &'static str = "amqp:resource-limit-exceeded";
+    pub const INTERNAL_ERROR: &str = "amqp:internal-error";
+    pub const NOT_FOUND: &str = "amqp:not-found";
+    pub const DECODE_ERROR: &str = "amqp:decode-error";
+    pub const NOT_IMPLEMENTED: &str = "amqp:not-implemented";
+    pub const RESOURCE_LIMIT_EXCEEDED: &str = "amqp:resource-limit-exceeded";
 
     pub mod connection {
-        pub const CONNECTION_FORCED: &'static str = "amqp:connection:forced";
-        pub const FRAMING_ERROR: &'static str = "amqp:connection:framing-error";
-        pub const REDIRECT: &'static str = "amqp:connection:redirect";
+        pub const CONNECTION_FORCED: &str = "amqp:connection:forced";
+        pub const FRAMING_ERROR: &str = "amqp:connection:framing-error";
+        pub const REDIRECT: &str = "amqp:connection:redirect";
     }
 }
 
@@ -84,48 +84,48 @@ impl fmt::Display for AmqpError {
 
 impl std::convert::From<io::Error> for AmqpError {
     fn from(error: io::Error) -> Self {
-        return AmqpError::IoError(error);
+        AmqpError::IoError(error)
     }
 }
 
 impl<T> std::convert::From<std::sync::mpsc::SendError<T>> for AmqpError {
     fn from(error: std::sync::mpsc::SendError<T>) -> Self {
-        return AmqpError::Generic(error.to_string());
+        AmqpError::Generic(error.to_string())
     }
 }
 
 impl std::convert::From<std::sync::mpsc::RecvError> for AmqpError {
     fn from(error: std::sync::mpsc::RecvError) -> Self {
-        return AmqpError::Generic(error.to_string());
+        AmqpError::Generic(error.to_string())
     }
 }
 
 impl std::convert::From<std::sync::mpsc::TryRecvError> for AmqpError {
     fn from(error: std::sync::mpsc::TryRecvError) -> Self {
-        return AmqpError::Generic(error.to_string());
+        AmqpError::Generic(error.to_string())
     }
 }
 
 impl std::convert::From<std::str::Utf8Error> for AmqpError {
     fn from(error: std::str::Utf8Error) -> Self {
-        return AmqpError::Generic(error.to_string());
+        AmqpError::Generic(error.to_string())
     }
 }
 
 impl std::convert::From<std::string::FromUtf8Error> for AmqpError {
     fn from(error: std::string::FromUtf8Error) -> Self {
-        return AmqpError::Generic(error.to_string());
+        AmqpError::Generic(error.to_string())
     }
 }
 
 impl std::convert::From<std::boxed::Box<dyn std::any::Any + std::marker::Send>> for AmqpError {
     fn from(_error: std::boxed::Box<dyn std::any::Any + std::marker::Send>) -> Self {
-        return AmqpError::Generic("thread error".to_string());
+        AmqpError::Generic("thread error".to_string())
     }
 }
 
 impl std::convert::From<std::num::ParseIntError> for AmqpError {
     fn from(error: std::num::ParseIntError) -> Self {
-        return AmqpError::Generic(error.to_string());
+        AmqpError::Generic(error.to_string())
     }
 }

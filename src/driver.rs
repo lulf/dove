@@ -14,7 +14,7 @@ use crate::framing::{
     Performative, Source, Target, Transfer,
 };
 use crate::message::Message;
-use log::trace;
+use log::{trace, warn};
 use mio::{Interest, Poll, Token};
 use rand::Rng;
 use std::collections::HashMap;
@@ -49,6 +49,7 @@ pub struct SessionDriver {
     local_channel: ChannelId,
     rx: Channel<AmqpFrame>,
     links: Mutex<HashMap<HandleId, Arc<LinkDriver>>>,
+    #[allow(clippy::type_complexity)]
     did_to_delivery: Arc<Mutex<HashMap<u32, (HandleId, Arc<DeliveryDriver>)>>>,
     handle_generator: AtomicU32,
     initial_outgoing_id: u32,
@@ -119,6 +120,7 @@ pub struct LinkDriver {
 
     session_flow_control: Arc<Mutex<SessionFlowControl>>,
 
+    #[allow(clippy::type_complexity)]
     did_to_delivery: Arc<Mutex<HashMap<u32, (HandleId, Arc<DeliveryDriver>)>>>,
     credit: AtomicU32,
     delivery_count: AtomicU32,
@@ -204,9 +206,10 @@ impl ConnectionDriver {
             return Ok(());
         }
         let mut driver = self.driver.lock().unwrap();
-        driver.close(Close { error: error })?;
+        driver.close(Close { error })?;
         driver.flush()?;
-        driver.shutdown()
+        driver.shutdown()?;
+        Ok(())
     }
 
     pub fn process(&self) -> Result<()> {
@@ -238,7 +241,9 @@ impl ConnectionDriver {
             }
         }
 
-        trace!("Got {:?} frames", rx_frames.len());
+        if !rx_frames.is_empty() {
+            trace!("Dispatching {:?} frames", rx_frames.len());
+        }
 
         self.dispatch(rx_frames)
     }
@@ -260,16 +265,13 @@ impl ConnectionDriver {
                         Performative::Begin(ref begin) => {
                             let m = self.sessions.lock().unwrap();
                             let s = m.get(&channel);
-                            match s {
-                                Some(s) => {
-                                    {
-                                        let mut f = s.flow_control.lock().unwrap();
-                                        f.remote_outgoing_window = begin.outgoing_window;
-                                        f.remote_incoming_window = begin.incoming_window;
-                                    }
-                                    s.rx.send(frame)?;
+                            if let Some(s) = s {
+                                {
+                                    let mut f = s.flow_control.lock().unwrap();
+                                    f.remote_outgoing_window = begin.outgoing_window;
+                                    f.remote_incoming_window = begin.incoming_window;
                                 }
-                                None => {}
+                                s.rx.send(frame)?;
                             }
                         }
                         Performative::End(ref _end) => {
@@ -279,14 +281,11 @@ impl ConnectionDriver {
                         _ => {
                             let session = {
                                 let mut m = self.sessions.lock().unwrap();
-                                m.get_mut(&channel).map(|s| s.clone())
+                                m.get_mut(&channel).cloned()
                             };
 
-                            match session {
-                                Some(s) => {
-                                    s.dispatch(frame)?;
-                                }
-                                _ => {}
+                            if let Some(s) = session {
+                                s.dispatch(frame)?;
                             }
                         }
                     }
@@ -296,10 +295,7 @@ impl ConnectionDriver {
         Ok(())
     }
 
-    fn allocate_session(
-        self: &Self,
-        remote_channel_id: Option<ChannelId>,
-    ) -> Option<Arc<SessionDriver>> {
+    fn allocate_session(&self, remote_channel_id: Option<ChannelId>) -> Option<Arc<SessionDriver>> {
         let mut m = self.sessions.lock().unwrap();
         for i in 0..self.channel_max {
             let chan = i as ChannelId;
@@ -387,22 +383,23 @@ impl SessionDriver {
                     m.get_mut(&transfer.handle).unwrap().clone()
                 };
 
+                let count_down = |x| {
+                    if x == 0 {
+                        Some(0)
+                    } else {
+                        Some(x - 1)
+                    }
+                };
                 // Link flow control
                 if link
                     .credit
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
-                        if x <= 0 {
-                            Some(0)
-                        } else {
-                            Some(x - 1)
-                        }
-                    })
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, count_down)
                     == Ok(0)
                 {
                     trace!("Transfer but no space left!");
                 } else {
                     trace!(
-                        "Received transfert. Credit: {:?}",
+                        "Received transfer. Credit: {:?}",
                         link.credit.load(Ordering::SeqCst)
                     );
                     link.delivery_count.fetch_add(1, Ordering::SeqCst);
@@ -453,7 +450,7 @@ impl SessionDriver {
                 }
             }
             _ => {
-                trace!("Unexpected performative for session: {:?}", frame);
+                warn!("Unexpected performative for session: {:?}", frame);
             }
         }
         Ok(())
@@ -461,7 +458,7 @@ impl SessionDriver {
 
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
         let mut driver = self.driver.lock().unwrap();
-        driver.end(self.local_channel, End { error: error })?;
+        driver.end(self.local_channel, End { error })?;
         driver.flush()
     }
 
@@ -469,10 +466,10 @@ impl SessionDriver {
         trace!("Creating new link!");
         let handle = self.handle_generator.fetch_add(1, Ordering::SeqCst);
         let link = Arc::new(LinkDriver {
-            role: role,
+            role,
             channel: self.local_channel,
             driver: self.driver.clone(),
-            handle: handle,
+            handle,
             rx: Channel::new(),
             session_flow_control: self.flow_control.clone(),
             did_to_delivery: self.did_to_delivery.clone(),
@@ -489,7 +486,7 @@ impl SessionDriver {
         let attach = Attach {
             name: addr.to_string(),
             handle: handle as u32,
-            role: role,
+            role,
             snd_settle_mode: None,
             rcv_settle_mode: None,
             source: Some(Source {
@@ -553,7 +550,7 @@ impl LinkDriver {
         settled: bool,
     ) -> Result<Arc<DeliveryDriver>> {
         let semaphore_fn = |x| {
-            if x <= 0 {
+            if x == 0 {
                 Some(0)
             } else {
                 Some(x - 1)
@@ -589,12 +586,12 @@ impl LinkDriver {
         self.delivery_count.fetch_add(1, Ordering::SeqCst);
         let delivery_tag = rand::thread_rng().gen::<[u8; 16]>().to_vec();
         let delivery = Arc::new(DeliveryDriver {
-            message: message,
+            message,
             id: next_outgoing_id,
             tag: delivery_tag.clone(),
             state: None,
             remotely_settled: false,
-            settled: settled,
+            settled,
         });
 
         if !settled {
@@ -635,6 +632,7 @@ impl LinkDriver {
     }
 
     fn flowcontrol(&self, credit: u32, connection: &mut conn::Connection) -> Result<()> {
+        trace!("{}: issuing {} credits", self.handle, credit);
         self.credit.store(credit, Ordering::SeqCst);
         let props = { self.session_flow_control.lock().unwrap().clone() };
         connection.flow(
@@ -662,7 +660,7 @@ impl LinkDriver {
             Detach {
                 handle: self.handle,
                 closed: Some(true),
-                error: error,
+                error,
             },
         )?;
         driver.flush()
@@ -708,12 +706,13 @@ pub struct Channel<T> {
 }
 
 impl<T> Channel<T> {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Channel<T> {
         let (tx, rx) = mpsc::channel();
-        return Channel {
+        Channel {
             tx: Mutex::new(tx),
             rx: Mutex::new(rx),
-        };
+        }
     }
 
     pub fn send(&self, value: T) -> Result<()> {

@@ -5,7 +5,7 @@
 
 //! The conn module contains basic primitives for establishing and accepting AMQP connections and performing the initial handshake. Once handshake is complete, the connection can be used to send and receive frames.
 
-use log::trace;
+use log::{debug, trace};
 use mio::event::Source;
 use mio::net::TcpListener;
 use mio::net::TcpStream;
@@ -20,7 +20,7 @@ use crate::framing::*;
 use crate::sasl::*;
 use crate::transport::*;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConnectionOptions {
     pub username: Option<String>,
     pub password: Option<String>,
@@ -28,6 +28,7 @@ pub struct ConnectionOptions {
 }
 
 impl ConnectionOptions {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> ConnectionOptions {
         ConnectionOptions {
             username: None,
@@ -110,7 +111,7 @@ pub fn listen(host: &str, port: u16, _opts: ListenOptions) -> Result<Listener> {
     let addr = format!("{}:{}", host, port).parse().unwrap();
     let listener = TcpListener::bind(addr)?;
     Ok(Listener {
-        listener: listener,
+        listener,
         sasl_mechanisms: None,
     })
 }
@@ -130,7 +131,7 @@ impl Connection {
     pub fn new(hostname: &str, transport: Transport) -> Connection {
         Connection {
             hostname: hostname.to_string(),
-            transport: transport,
+            transport,
             state: ConnectionState::Start,
             sasl: None,
             tx_frames: Vec::new(),
@@ -138,7 +139,7 @@ impl Connection {
         }
     }
 
-    pub fn open(self: &mut Self, open: Open) -> Result<()> {
+    pub fn open(&mut self, open: Open) -> Result<()> {
         self.tx_frames.push(Frame::AMQP(AmqpFrame {
             channel: 0,
             performative: Some(Performative::Open(open)),
@@ -147,7 +148,7 @@ impl Connection {
         Ok(())
     }
 
-    pub fn begin(self: &mut Self, channel: ChannelId, begin: Begin) -> Result<()> {
+    pub fn begin(&mut self, channel: ChannelId, begin: Begin) -> Result<()> {
         self.tx_frames.push(Frame::AMQP(AmqpFrame {
             channel: channel as u16,
             performative: Some(Performative::Begin(begin)),
@@ -156,7 +157,7 @@ impl Connection {
         Ok(())
     }
 
-    pub fn attach(self: &mut Self, channel: ChannelId, attach: Attach) -> Result<()> {
+    pub fn attach(&mut self, channel: ChannelId, attach: Attach) -> Result<()> {
         self.tx_frames.push(Frame::AMQP(AmqpFrame {
             channel: channel as u16,
             performative: Some(Performative::Attach(attach)),
@@ -165,7 +166,7 @@ impl Connection {
         Ok(())
     }
 
-    pub fn flow(self: &mut Self, channel: ChannelId, flow: Flow) -> Result<()> {
+    pub fn flow(&mut self, channel: ChannelId, flow: Flow) -> Result<()> {
         self.tx_frames.push(Frame::AMQP(AmqpFrame {
             channel: channel as u16,
             performative: Some(Performative::Flow(flow)),
@@ -175,7 +176,7 @@ impl Connection {
     }
 
     pub fn transfer(
-        self: &mut Self,
+        &mut self,
         channel: ChannelId,
         transfer: Transfer,
         payload: Option<Vec<u8>>,
@@ -183,16 +184,12 @@ impl Connection {
         self.tx_frames.push(Frame::AMQP(AmqpFrame {
             channel: channel as u16,
             performative: Some(Performative::Transfer(transfer)),
-            payload: payload,
+            payload,
         }));
         Ok(())
     }
 
-    pub fn disposition(
-        self: &mut Self,
-        channel: ChannelId,
-        disposition: Disposition,
-    ) -> Result<()> {
+    pub fn disposition(&mut self, channel: ChannelId, disposition: Disposition) -> Result<()> {
         self.tx_frames.push(Frame::AMQP(AmqpFrame {
             channel: channel as u16,
             performative: Some(Performative::Disposition(disposition)),
@@ -201,19 +198,13 @@ impl Connection {
         Ok(())
     }
 
-    pub fn keepalive(
-        self: &mut Self,
-        remote_idle_timeout: Duration,
-        now: Instant,
-    ) -> Result<Instant> {
+    pub fn keepalive(&mut self, remote_idle_timeout: Duration, now: Instant) -> Result<Instant> {
         if remote_idle_timeout.as_millis() > 0 {
-            /*
             trace!(
                 "Remote idle timeout millis: {:?}. Last sent: {:?}",
-                self.remote_idle_timeout.as_millis(),
+                remote_idle_timeout.as_millis(),
                 now - self.transport.last_sent()
             );
-            */
 
             if now - self.transport.last_sent() >= remote_idle_timeout {
                 self.tx_frames.push(Frame::AMQP(AmqpFrame {
@@ -226,7 +217,7 @@ impl Connection {
         Ok(self.transport.last_received())
     }
 
-    pub fn detach(self: &mut Self, channel: ChannelId, detach: Detach) -> Result<()> {
+    pub fn detach(&mut self, channel: ChannelId, detach: Detach) -> Result<()> {
         self.tx_frames.push(Frame::AMQP(AmqpFrame {
             channel: channel as u16,
             performative: Some(Performative::Detach(detach)),
@@ -235,7 +226,7 @@ impl Connection {
         Ok(())
     }
 
-    pub fn end(self: &mut Self, channel: ChannelId, end: End) -> Result<()> {
+    pub fn end(&mut self, channel: ChannelId, end: End) -> Result<()> {
         self.tx_frames.push(Frame::AMQP(AmqpFrame {
             channel: channel as u16,
             performative: Some(Performative::End(end)),
@@ -244,7 +235,7 @@ impl Connection {
         Ok(())
     }
 
-    pub fn close(self: &mut Self, close: Close) -> Result<()> {
+    pub fn close(&mut self, close: Close) -> Result<()> {
         self.tx_frames.push(Frame::AMQP(AmqpFrame {
             channel: 0,
             performative: Some(Performative::Close(close)),
@@ -253,20 +244,20 @@ impl Connection {
         Ok(())
     }
 
-    pub fn shutdown(self: &mut Self) -> Result<()> {
+    pub fn shutdown(&mut self) -> Result<()> {
         self.transport.close()
     }
 
-    fn skip_sasl(self: &Self) -> bool {
+    fn skip_sasl(&self) -> bool {
         self.sasl.is_none() || self.sasl.as_ref().unwrap().is_done()
     }
 
     // Write outgoing frames
-    pub fn flush(self: &mut Self) -> Result<()> {
+    pub fn flush(&mut self) -> Result<()> {
         match self.state {
             ConnectionState::Opened | ConnectionState::Closed => {
                 for frame in self.tx_frames.drain(..) {
-                    trace!("TX {:?}", frame);
+                    debug!("TX {:?}", frame);
                     self.transport.write_frame(&frame)?;
                 }
             }
@@ -275,7 +266,7 @@ impl Connection {
         Ok(())
     }
 
-    pub fn process(self: &mut Self, frames: &mut Vec<Frame>) -> Result<()> {
+    pub fn process(&mut self, frames: &mut Vec<Frame>) -> Result<()> {
         match self.state {
             ConnectionState::Start => {
                 if !self.header_sent {
@@ -297,6 +288,7 @@ impl Connection {
                             self.state = ConnectionState::Opened;
                         }
                         _ => {
+                            trace!("WHY ARE WE CLOSING1");
                             self.transport.close()?;
                             self.state = ConnectionState::Closed;
                         }
@@ -321,6 +313,7 @@ impl Connection {
                             self.transport.write_protocol_header(&AMQP_10_HEADER)?;
                             self.state = ConnectionState::Closed;
                             self.transport.flush()?;
+                            trace!("WHY ARE WE CLOSING2");
                             self.transport.close()?;
                         }
                     }
@@ -334,6 +327,7 @@ impl Connection {
                         self.state = ConnectionState::Start;
                     }
                     SaslState::Failed => {
+                        trace!("WHY ARE WE CLOSING3");
                         self.transport.close()?;
                         self.state = ConnectionState::Closed;
                     }
@@ -343,13 +337,15 @@ impl Connection {
                 }
             }
             ConnectionState::Opened => {
-                frames.push(self.transport.read_frame()?);
+                let frame = self.transport.read_frame()?;
+                frames.push(frame);
             }
             ConnectionState::Closed => {
+                trace!("WHY ARE WE CLOSING4");
                 return Err(AmqpError::amqp_error(
                     condition::connection::CONNECTION_FORCED,
                     None,
-                ))
+                ));
             }
         }
         Ok(())

@@ -48,12 +48,12 @@ impl Encoder for ValueRef<'_> {
                 if val.len() > U8_MAX {
                     writer.write_u8(TypeCode::Str32 as u8)?;
                     writer.write_u32::<NetworkEndian>(val.len() as u32)?;
-                    writer.write(val.as_bytes())?;
+                    writer.write_all(val.as_bytes())?;
                     Ok(TypeCode::Str32)
                 } else {
                     writer.write_u8(TypeCode::Str8 as u8)?;
                     writer.write_u8(val.len() as u8)?;
-                    writer.write(val.as_bytes())?;
+                    writer.write_all(val.as_bytes())?;
                     Ok(TypeCode::Str8)
                 }
             }
@@ -61,12 +61,12 @@ impl Encoder for ValueRef<'_> {
                 if val.len() > U8_MAX {
                     writer.write_u8(TypeCode::Sym32 as u8)?;
                     writer.write_u32::<NetworkEndian>(val.len() as u32)?;
-                    writer.write(&val.as_bytes()[..])?;
+                    writer.write_all(&val.as_bytes()[..])?;
                     Ok(TypeCode::Sym32)
                 } else {
                     writer.write_u8(TypeCode::Sym8 as u8)?;
                     writer.write_u8(val.len() as u8)?;
-                    writer.write(&val.as_bytes()[..])?;
+                    writer.write_all(&val.as_bytes()[..])?;
                     Ok(TypeCode::Sym8)
                 }
             }
@@ -74,12 +74,12 @@ impl Encoder for ValueRef<'_> {
                 if val.len() > U8_MAX {
                     writer.write_u8(TypeCode::Sym32 as u8)?;
                     writer.write_u32::<NetworkEndian>(val.len() as u32)?;
-                    writer.write(val)?;
+                    writer.write_all(val)?;
                     Ok(TypeCode::Sym32)
                 } else {
                     writer.write_u8(TypeCode::Sym8 as u8)?;
                     writer.write_u8(val.len() as u8)?;
-                    writer.write(val)?;
+                    writer.write_all(val)?;
                     Ok(TypeCode::Sym8)
                 }
             }
@@ -87,12 +87,12 @@ impl Encoder for ValueRef<'_> {
                 if val.len() > U8_MAX {
                     writer.write_u8(TypeCode::Bin32 as u8)?;
                     writer.write_u32::<NetworkEndian>(val.len() as u32)?;
-                    writer.write(&val[..])?;
+                    writer.write_all(&val[..])?;
                     Ok(TypeCode::Bin32)
                 } else {
                     writer.write_u8(TypeCode::Bin8 as u8)?;
                     writer.write_u8(val.len() as u8)?;
-                    writer.write(&val[..])?;
+                    writer.write_all(&val[..])?;
                     Ok(TypeCode::Bin8)
                 }
             }
@@ -188,14 +188,14 @@ impl Encoder for ValueRef<'_> {
                     writer.write_u32::<NetworkEndian>((5 + arraybuf.len()) as u32)?;
                     writer.write_u32::<NetworkEndian>(vec.len() as u32)?;
                     writer.write_u8(code)?;
-                    writer.write(&arraybuf[..])?;
+                    writer.write_all(&arraybuf[..])?;
                     Ok(TypeCode::Array32)
-                } else if arraybuf.len() > 0 {
+                } else if !arraybuf.is_empty() {
                     writer.write_u8(TypeCode::Array8 as u8)?;
                     writer.write_u8((2 + arraybuf.len()) as u8)?;
                     writer.write_u8(vec.len() as u8)?;
                     writer.write_u8(code)?;
-                    writer.write(&arraybuf[..])?;
+                    writer.write_all(&arraybuf[..])?;
                     Ok(TypeCode::Array8)
                 } else {
                     writer.write_u8(TypeCode::Null as u8)?;
@@ -217,13 +217,13 @@ impl Encoder for ValueRef<'_> {
                     writer.write_u8(TypeCode::List32 as u8)?;
                     writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
                     writer.write_u32::<NetworkEndian>(vec.len() as u32)?;
-                    writer.write(&listbuf[..])?;
+                    writer.write_all(&listbuf[..])?;
                     Ok(TypeCode::List32)
-                } else if listbuf.len() > 0 {
+                } else if !listbuf.is_empty() {
                     writer.write_u8(TypeCode::List8 as u8)?;
                     writer.write_u8((1 + listbuf.len()) as u8)?;
                     writer.write_u8(vec.len() as u8)?;
-                    writer.write(&listbuf[..])?;
+                    writer.write_all(&listbuf[..])?;
                     Ok(TypeCode::List8)
                 } else {
                     writer.write_u8(TypeCode::List0 as u8)?;
@@ -248,13 +248,13 @@ impl Encoder for ValueRef<'_> {
                     writer.write_u8(TypeCode::Map32 as u8)?;
                     writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
                     writer.write_u32::<NetworkEndian>(n_items as u32)?;
-                    writer.write(&listbuf[..])?;
+                    writer.write_all(&listbuf[..])?;
                     Ok(TypeCode::Map32)
                 } else {
                     writer.write_u8(TypeCode::Map8 as u8)?;
                     writer.write_u8((1 + listbuf.len()) as u8)?;
                     writer.write_u8(n_items as u8)?;
-                    writer.write(&listbuf[..])?;
+                    writer.write_all(&listbuf[..])?;
                     Ok(TypeCode::Map8)
                 }
             }
@@ -280,14 +280,14 @@ impl Encoder for ValueRef<'_> {
                     writer.write_u32::<NetworkEndian>((5 + arraybuf.len()) as u32)?;
                     writer.write_u32::<NetworkEndian>(vec.len() as u32)?;
                     writer.write_u8(code)?;
-                    writer.write(&arraybuf[..])?;
+                    writer.write_all(&arraybuf[..])?;
                     Ok(TypeCode::Array32)
-                } else if arraybuf.len() > 0 {
+                } else if !arraybuf.is_empty() {
                     writer.write_u8(TypeCode::Array8 as u8)?;
                     writer.write_u8((2 + arraybuf.len()) as u8)?;
                     writer.write_u8(vec.len() as u8)?;
                     writer.write_u8(code)?;
-                    writer.write(&arraybuf[..])?;
+                    writer.write_all(&arraybuf[..])?;
                     Ok(TypeCode::Array8)
                 } else {
                     writer.write_u8(TypeCode::Null as u8)?;
@@ -309,13 +309,13 @@ impl Encoder for ValueRef<'_> {
                     writer.write_u8(TypeCode::List32 as u8)?;
                     writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
                     writer.write_u32::<NetworkEndian>(vec.len() as u32)?;
-                    writer.write(&listbuf[..])?;
+                    writer.write_all(&listbuf[..])?;
                     Ok(TypeCode::List32)
-                } else if listbuf.len() > 0 {
+                } else if !listbuf.is_empty() {
                     writer.write_u8(TypeCode::List8 as u8)?;
                     writer.write_u8((1 + listbuf.len()) as u8)?;
                     writer.write_u8(vec.len() as u8)?;
-                    writer.write(&listbuf[..])?;
+                    writer.write_all(&listbuf[..])?;
                     Ok(TypeCode::List8)
                 } else {
                     writer.write_u8(TypeCode::List0 as u8)?;
@@ -340,13 +340,13 @@ impl Encoder for ValueRef<'_> {
                     writer.write_u8(TypeCode::Map32 as u8)?;
                     writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
                     writer.write_u32::<NetworkEndian>(n_items as u32)?;
-                    writer.write(&listbuf[..])?;
+                    writer.write_all(&listbuf[..])?;
                     Ok(TypeCode::Map32)
                 } else {
                     writer.write_u8(TypeCode::Map8 as u8)?;
                     writer.write_u8((1 + listbuf.len()) as u8)?;
                     writer.write_u8(n_items as u8)?;
-                    writer.write(&listbuf[..])?;
+                    writer.write_all(&listbuf[..])?;
                     Ok(TypeCode::Map8)
                 }
             }
@@ -435,7 +435,7 @@ impl<T: Encoder> Encoder for Option<T> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         match self {
             Some(value) => value.encode(writer),
-            _ => return Value::Null.encode(writer),
+            _ => Value::Null.encode(writer),
         }
     }
 }

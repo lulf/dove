@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.com/lulf/dove.svg?branch=master)](https://travis-ci.com/lulf/dove)
+![Build status](https://github.com/lulf/dove/workflows/Dove%20CI/badge.svg)
 
 # Dove - Rust AMQP 1.0 Library
 
@@ -13,8 +13,22 @@ The library supports only the basics right now: Establishing connections, creati
 
 Dove exposes two different APIs:
 
-* A low level connection API that allows you to send and receive frames defined as rust types.
 * An API for writing messaging applications using async rust.
+* A low level connection API that allows you to send and receive frames defined as rust types.
+
+## Building
+
+```
+cargo build
+```
+
+## Testing
+
+Testing uses [testcontainers-rs](https://github.com/testcontainers/testcontainers-rs) which requires docker to run:
+
+```
+RUST_LOG=info cargo test
+```
 
 ## TODO
 

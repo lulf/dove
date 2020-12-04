@@ -63,7 +63,7 @@ pub enum MessageBody {
 
 impl Message {
     pub fn amqp_value(value: Value) -> Message {
-        return Message {
+        Message {
             header: Some(MessageHeader {
                 durable: Some(false),
                 priority: Some(4),
@@ -77,7 +77,7 @@ impl Message {
             application_properties: None,
             body: MessageBody::AmqpValue(value),
             footer: None,
-        };
+        }
     }
 
     pub fn decode(reader: &mut Vec<u8>) -> Result<Message> {
@@ -145,7 +145,7 @@ impl Message {
                 break;
             }
         }
-        return Ok(message);
+        Ok(message)
     }
 
     pub fn encode(&self, writer: &mut dyn Write) -> Result<()> {

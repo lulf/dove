@@ -84,15 +84,11 @@ impl ToString for SaslMechanism {
 }
 
 impl Sasl {
-    pub fn is_done(self: &Self) -> bool {
+    pub fn is_done(&self) -> bool {
         self.state == SaslState::Success || self.state == SaslState::Failed
     }
 
-    pub fn perform_handshake(
-        self: &mut Self,
-        hostname: &str,
-        transport: &mut Transport,
-    ) -> Result<()> {
+    pub fn perform_handshake(&mut self, hostname: &str, transport: &mut Transport) -> Result<()> {
         match &self.role {
             SaslRole::Client(sasl_client) => {
                 let frame = transport.read_frame()?;
@@ -130,7 +126,7 @@ impl Sasl {
                             }
                             let init = Frame::SASL(SaslFrame::SaslInit(SaslInit {
                                 mechanism: sasl_client.mechanism,
-                                initial_response: initial_response,
+                                initial_response,
                                 hostname: Some(hostname.to_string()),
                             }));
                             transport.write_frame(&init)?;

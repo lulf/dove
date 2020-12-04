@@ -35,9 +35,7 @@ impl<T: TryFromValue> TryFromValue for Option<T> {
 impl TryFromValue for Vec<u8> {
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            Value::Binary(v) => {
-                return Ok(v);
-            }
+            Value::Binary(v) => Ok(v),
             v => Err(AmqpError::decode_error(Some(
                 format!("Error converting value to u8: {:?}", v).as_str(),
             ))),
@@ -49,32 +47,28 @@ impl<T: TryFromValueVec> TryFromValue for Vec<T> {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::List(v) => {
-                let (results, errors): (Vec<_>, Vec<_>) = v
-                    .into_iter()
-                    .map(|f| T::try_from(f))
-                    .partition(Result::is_ok);
-                if errors.len() > 0 {
-                    return Err(AmqpError::decode_error(Some(
+                let (results, errors): (Vec<_>, Vec<_>) =
+                    v.into_iter().map(T::try_from).partition(Result::is_ok);
+                if !errors.is_empty() {
+                    Err(AmqpError::decode_error(Some(
                         "Error decoding list elements",
-                    )));
+                    )))
                 } else {
-                    return Ok(results.into_iter().map(Result::unwrap).collect());
+                    Ok(results.into_iter().map(Result::unwrap).collect())
                 }
             }
             Value::Array(v) => {
-                let (results, errors): (Vec<_>, Vec<_>) = v
-                    .into_iter()
-                    .map(|f| T::try_from(f))
-                    .partition(Result::is_ok);
-                if errors.len() > 0 {
-                    return Err(AmqpError::decode_error(Some(
+                let (results, errors): (Vec<_>, Vec<_>) =
+                    v.into_iter().map(T::try_from).partition(Result::is_ok);
+                if !errors.is_empty() {
+                    Err(AmqpError::decode_error(Some(
                         format!("Error decoding array elements: {:?}", errors).as_str(),
-                    )));
+                    )))
                 } else {
-                    return Ok(results.into_iter().map(Result::unwrap).collect());
+                    Ok(results.into_iter().map(Result::unwrap).collect())
                 }
             }
-            _ => return Ok(vec![T::try_from(value)?]),
+            _ => Ok(vec![T::try_from(value)?]),
         }
     }
 }
@@ -82,7 +76,7 @@ impl<T: TryFromValueVec> TryFromValue for Vec<T> {
 impl TryFromValue for u8 {
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            Value::Ubyte(v) => return Ok(v),
+            Value::Ubyte(v) => Ok(v),
             v => Err(AmqpError::decode_error(Some(
                 format!("Error converting value to u8: {:?}", v).as_str(),
             ))),
@@ -93,7 +87,7 @@ impl TryFromValue for u8 {
 impl TryFromValue for u64 {
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            Value::Ulong(v) => return Ok(v),
+            Value::Ulong(v) => Ok(v),
             _ => Err(AmqpError::decode_error(Some(
                 "Error converting value to u64",
             ))),
@@ -104,7 +98,7 @@ impl TryFromValue for u64 {
 impl TryFromValue for u32 {
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            Value::Uint(v) => return Ok(v),
+            Value::Uint(v) => Ok(v),
             _ => Err(AmqpError::amqp_error(
                 condition::DECODE_ERROR,
                 Some("Error converting value to u32"),
@@ -116,7 +110,7 @@ impl TryFromValue for u32 {
 impl TryFromValue for u16 {
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            Value::Ushort(v) => return Ok(v),
+            Value::Ushort(v) => Ok(v),
             _ => Err(AmqpError::amqp_error(
                 condition::DECODE_ERROR,
                 Some("Error converting value to u32"),
@@ -128,7 +122,7 @@ impl TryFromValue for u16 {
 impl TryFromValue for bool {
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            Value::Bool(v) => return Ok(v),
+            Value::Bool(v) => Ok(v),
             _ => Err(AmqpError::decode_error(Some(
                 "Error converting value to bool",
             ))),
