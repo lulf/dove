@@ -20,7 +20,7 @@ use crate::framing::*;
 use crate::sasl::*;
 use crate::transport::*;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConnectionOptions {
     pub username: Option<String>,
     pub password: Option<String>,

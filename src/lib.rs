@@ -21,6 +21,19 @@
 //! ```
 //! use dove::container::*;
 //! use futures::executor::block_on;
+//! use testcontainers::{clients, images, Docker};
+//!
+//! // Start a broker that we can run the client against.
+//! let docker = clients::Cli::default();
+//! let node = docker.run(
+//!     images::generic::GenericImage::new("docker.io/vromero/activemq-artemis:2-latest")
+//!         .with_env_var("ARTEMIS_USERNAME", "test")
+//!         .with_env_var("ARTEMIS_PASSWORD", "test")
+//! );
+//! std::thread::sleep(std::time::Duration::from_millis(10000));
+//! let port: u16 = node.get_host_port(5672).unwrap();
+//!
+//! // Create client and connect
 //! let container = Container::new()
 //!     .expect("unable to create container")
 //!     .start();
@@ -28,8 +41,10 @@
 //! // connect creates the TCP connection and sends OPEN frame.
 //! block_on(async {
 //!     let connection = container
-//!         .connect("localhost", 5672, ConnectionOptions::new()
-//!             .sasl_mechanism(SaslMechanism::Anonymous))
+//!         .connect("localhost", port, ConnectionOptions::new()
+//!             .sasl_mechanism(SaslMechanism::Plain)
+//!             .username("test")
+//!             .password("test"))
 //!         .await
 //!         .expect("connection not created");
 //!

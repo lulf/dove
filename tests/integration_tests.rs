@@ -7,8 +7,10 @@ use dove::container::*;
 use dove::message::MessageBody;
 
 use futures::executor::block_on;
+use reqwest;
 use std::sync::Once;
 use std::thread;
+use testcontainers::{clients, images, Docker};
 
 static INIT: Once = Once::new();
 
@@ -19,8 +21,80 @@ fn setup() {
 }
 
 #[test]
-fn single_client() {
+fn test_artemis() {
     setup();
+    let docker = clients::Cli::default();
+    let node = docker.run(
+        images::generic::GenericImage::new("docker.io/vromero/activemq-artemis:2-latest")
+            .with_env_var("ARTEMIS_USERNAME", "test")
+            .with_env_var("ARTEMIS_PASSWORD", "test"),
+    );
+    log::info!("ActiveMQ Artemis Started");
+    std::thread::sleep(std::time::Duration::from_millis(10000));
+    let port: u16 = node.get_host_port(5672).unwrap();
+    let opts = ConnectionOptions::new()
+        .sasl_mechanism(SaslMechanism::Plain)
+        .username("test")
+        .password("test");
+    single_client(port, opts.clone());
+    multiple_clients(port, opts);
+}
+
+#[test]
+fn test_qpid_dispatch() {
+    setup();
+    let docker = clients::Cli::default();
+    let node = docker.run(images::generic::GenericImage::new(
+        "quay.io/interconnectedcloud/qdrouterd:1.12.0",
+    ));
+    log::info!("Router Started");
+    std::thread::sleep(std::time::Duration::from_millis(5000));
+    let port: u16 = node.get_host_port(5672).unwrap();
+    let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
+    multiple_clients(port, opts);
+}
+
+fn create_queue(client: &reqwest::blocking::Client, port: u16, queue: &str) {
+    let url = format!(
+        "http://localhost:{}/api/latest/queue/default/default/{}",
+        port, queue
+    );
+    let response = client
+        .put(&url)
+        .body("{\"durable\":true}")
+        .send()
+        .expect("error creating queue");
+    log::trace!("Create queue response: {:?}", response);
+    assert!(response.status().is_success());
+}
+
+#[test]
+fn test_qpid_broker_j() {
+    setup();
+    let mut config_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    config_dir.push("tests");
+    config_dir.push("qpid-broker-j");
+    let docker = clients::Cli::default();
+    let node = docker.run(
+        images::generic::GenericImage::new("docker.io/chrisob/qpid-broker-j-docker:8.0.0")
+            .with_volume(config_dir.as_path().to_str().unwrap(), "/usr/local/etc"),
+    );
+    log::info!("Qpid Broker J Started");
+    std::thread::sleep(std::time::Duration::from_millis(10000));
+
+    // Create queues used by tests
+    let client = reqwest::blocking::Client::new();
+    let http_port: u16 = node.get_host_port(8080).unwrap();
+    create_queue(&client, http_port, "myqueue");
+    create_queue(&client, http_port, "queue2");
+
+    let port: u16 = node.get_host_port(5672).unwrap();
+    let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
+    single_client(port, opts.clone());
+    multiple_clients(port, opts);
+}
+
+fn single_client(port: u16, opts: ConnectionOptions) {
     // Container represents an AMQP 1.0 container.
     let container = Container::new()
         .expect("unable to create container")
@@ -28,10 +102,8 @@ fn single_client() {
 
     // connect creates the TCP connection and sends OPEN frame.
     block_on(async {
-        log::info!("{}: connecting", container.container_id());
+        log::info!("{}: connecting on port {}", container.container_id(), port);
 
-        let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
-        let port: u16 = 5672;
         let connection = container
             .connect("127.0.0.1", port, opts)
             .await
@@ -100,21 +172,18 @@ fn single_client() {
     });
 }
 
-#[test]
-fn multiple_clients() {
-    setup();
+fn multiple_clients(port: u16, opts: ConnectionOptions) {
     let to_send: usize = 2000;
+    let sender_opts = opts.clone();
     let t1 = thread::spawn(move || {
         block_on(async {
             let container = Container::with_id("sender")
                 .expect("unable to create container")
                 .start();
 
-            let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
-            let port: u16 = 5672;
-            log::info!("{}: connecting", container.container_id());
+            log::info!("{}: connecting on port {}", container.container_id(), port);
             let connection = container
-                .connect("127.0.0.1", port, opts)
+                .connect("127.0.0.1", port, sender_opts)
                 .await
                 .expect("connection not created");
 
@@ -160,10 +229,7 @@ fn multiple_clients() {
                 .expect("unable to create container")
                 .start();
 
-            let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
-            let port: u16 = 5672;
-
-            log::info!("{}: connecting", container.container_id());
+            log::info!("{}: connecting on port {}", container.container_id(), port);
             let connection = container
                 .connect("127.0.0.1", port, opts)
                 .await
