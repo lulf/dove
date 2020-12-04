@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.com/lulf/dove.svg?branch=master)](https://travis-ci.com/lulf/dove)
+![Build status](https://github.com/lulf/dove/workflows/Dove%20CI/badge.svg)
 
 # Dove - Rust AMQP 1.0 Library
 
