@@ -118,7 +118,7 @@ impl Container {
             poll: Mutex::new(p),
             connections: Mutex::new(HashMap::new()),
             token_generator: AtomicU32::new(0),
-            waker: waker,
+            waker,
             closed: AtomicBool::new(false),
         };
         Ok(Container {
@@ -149,14 +149,11 @@ impl Container {
             if !running.load(Ordering::SeqCst) {
                 return;
             }
-            match container.process() {
-                Err(e) => {
+            if let Err(e) = container.process() {
                     error!(
                         "{}: error while processing: {:?}",
                         container.container_id, e
                     );
-                }
-                _ => {}
             }
         }
     }
@@ -177,11 +174,8 @@ impl Container {
         self.container.close()?;
         self.running.store(false, Ordering::SeqCst);
         let thread = self.thread.take();
-        match thread {
-            Some(t) => {
+        if let Some(t) = thread {
                 t.join()?;
-            }
-            _ => {}
         }
         Ok(())
     }
@@ -193,9 +187,7 @@ impl Container {
 
 impl Drop for Container {
     fn drop(&mut self) {
-        match self.close() {
-            _ => {}
-        }
+        let _ = self.close();
     }
 }
 
@@ -247,7 +239,7 @@ impl ContainerInner {
                     // Populate remote properties
                     return Ok(Connection {
                         waker: self.waker.clone(),
-                        connection: conn.clone(),
+                        connection: conn,
                         container_id: self.container_id.clone(),
                         hostname: host.to_string(),
                         channel_max: std::u16::MAX,
@@ -313,11 +305,8 @@ impl ContainerInner {
 
             // Flush data
             let result = driver.flush();
-            match result {
-                Err(_) => {
+            if result.is_err() {
                     trace!("{}: error flushing driver for {:?}", self.container_id, id);
-                }
-                _ => {}
             }
         }
 
@@ -348,10 +337,9 @@ impl ContainerInner {
     fn process_connection(&self, id: Token) -> Result<()> {
         let connection = {
             let mut m = self.connections.lock().unwrap();
-            m.get_mut(&id).map(|c| c.clone())
+            m.get_mut(&id).cloned()
         };
-        match connection {
-            Some(c) => {
+        if let Some(c) = connection {
                 let result = c.process();
                 match result {
                     Err(AmqpError::Amqp(condition)) => {
@@ -362,8 +350,6 @@ impl ContainerInner {
                     }
                     _ => {}
                 }
-            }
-            _ => {}
         }
         Ok(())
     }
@@ -399,9 +385,7 @@ impl ContainerInner {
 
 impl Drop for ContainerInner {
     fn drop(&mut self) {
-        match self.close() {
-            _ => {}
-        }
+        let _ = self.close();
     }
 }
 
@@ -442,17 +426,13 @@ impl Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        match self.close(None) {
-            _ => {}
-        }
+        let _ = self.close(None);
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        match self.close(None) {
-            _ => {}
-        }
+        let _ = self.close(None);
     }
 }
 
@@ -472,7 +452,7 @@ impl Session {
                         waker: self.waker.clone(),
                         handle: link.handle,
                         connection: self.connection.clone(),
-                        link: link,
+                        link,
                         next_message_id: AtomicU64::new(0),
                     });
                 }
@@ -500,7 +480,7 @@ impl Session {
                         waker: self.waker.clone(),
                         handle: link.handle,
                         connection: self.connection.clone(),
-                        link: link,
+                        link,
                         next_message_id: AtomicU64::new(0),
                     });
                 }
@@ -563,7 +543,7 @@ impl Sender {
                         let last = disposition.last.unwrap_or(first);
                         if first <= delivery.id && last >= delivery.id {
                             // TODO: Better error checking
-                            return Ok(Disposition { delivery: delivery });
+                            return Ok(Disposition { delivery });
                         } else {
                             self.link.unrecv(frame)?;
                         }
@@ -575,7 +555,7 @@ impl Sender {
                 }
             }
         } else {
-            return Ok(Disposition { delivery: delivery });
+            Ok(Disposition { delivery })
         }
     }
 
@@ -589,9 +569,7 @@ impl Sender {
 
 impl Drop for Sender {
     fn drop(&mut self) {
-        match self.close(None) {
-            _ => {}
-        }
+        let _ = self.close(None);
     }
 }
 
@@ -619,13 +597,13 @@ impl Receiver {
                         id: transfer.delivery_id.unwrap(),
                         remotely_settled: transfer.settled.unwrap_or(false),
                         settled: false,
-                        message: message,
+                        message,
                     });
                     return Ok(Delivery {
                         waker: self.waker.clone(),
                         settled: false,
                         link: self.link.clone(),
-                        delivery: delivery,
+                        delivery,
                     });
                 }
                 _ => {
@@ -646,16 +624,14 @@ impl Receiver {
 
 impl Drop for Receiver {
     fn drop(&mut self) {
-        match self.close(None) {
-            _ => {}
-        }
+        let _ = self.close(None);
     }
 }
 
 impl Delivery {
     /// Retrieve the message associated with this delivery.
     pub fn message(&self) -> &Message {
-        return &self.delivery.message;
+        &self.delivery.message
     }
 
     /// Send a disposition for this delivery, indicating message settlement and delivery state.
@@ -673,15 +649,10 @@ impl Drop for Delivery {
     fn drop(&mut self) {
         if !self.settled {
             self.settled = true;
-            match self
+            let _ = self
                 .link
-                .disposition(&self.delivery, true, DeliveryState::Accepted)
-            {
-                _ => {}
-            }
-            match self.waker.wake() {
-                _ => {}
-            }
+                .disposition(&self.delivery, true, DeliveryState::Accepted);
+            let _ = self.waker.wake();
         }
     }
 }

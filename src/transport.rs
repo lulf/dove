@@ -34,10 +34,10 @@ const PROTOCOL_SASL: [u8; 5] = [65, 77, 81, 80, 3];
 impl ProtocolHeader {
     pub fn decode(reader: &mut dyn Read) -> Result<ProtocolHeader> {
         let mut protocol_type: [u8; 5] = [0; 5];
-        reader.read(&mut protocol_type)?;
+        reader.read_exact(&mut protocol_type)?;
 
         let mut protocol_version: [u8; 3] = [0; 3];
-        reader.read(&mut protocol_version)?;
+        reader.read_exact(&mut protocol_version)?;
 
         match protocol_type {
             PROTOCOL_AMQP => Ok(ProtocolHeader::AMQP(Version(
@@ -61,17 +61,13 @@ impl ProtocolHeader {
         let mut header: [u8; 8] = [0; 8];
         match self {
             ProtocolHeader::AMQP(Version(major, minor, micro)) => {
-                for i in 0..5 {
-                    header[i] = PROTOCOL_AMQP[i];
-                }
+                header[..5].clone_from_slice(&PROTOCOL_AMQP[..5]);
                 header[5] = *major;
                 header[6] = *minor;
                 header[7] = *micro;
             }
             ProtocolHeader::SASL(Version(major, minor, micro)) => {
-                for i in 0..5 {
-                    header[i] = PROTOCOL_SASL[i];
-                }
+                header[..5].clone_from_slice(&PROTOCOL_SASL[..5]);
                 header[5] = *major;
                 header[6] = *minor;
                 header[7] = *micro;
@@ -93,16 +89,16 @@ impl ReadBuffer {
     fn new(capacity: usize) -> ReadBuffer {
         ReadBuffer {
             buffer: vec![0; capacity],
-            capacity: capacity,
+            capacity,
             position: 0,
         }
     }
 
-    fn peek(self: &mut Self) -> &[u8] {
+    fn peek(&mut self) -> &[u8] {
         &self.buffer[0..self.position]
     }
 
-    fn fill(self: &mut Self, reader: &mut dyn Read) -> Result<&[u8]> {
+    fn fill(&mut self, reader: &mut dyn Read) -> Result<&[u8]> {
         if self.position < self.capacity {
             let len = reader.read(&mut self.buffer[self.position..self.capacity])?;
             self.position += len;
@@ -112,7 +108,7 @@ impl ReadBuffer {
         Ok(&self.buffer[0..self.position])
     }
 
-    fn consume(self: &mut Self, nbytes: usize) -> Result<()> {
+    fn consume(&mut self, nbytes: usize) -> Result<()> {
         self.buffer.drain(0..nbytes);
         self.buffer.resize(self.capacity, 0);
         self.position -= nbytes;
@@ -134,21 +130,21 @@ pub struct Transport {
 impl Transport {
     pub fn new(stream: TcpStream, max_frame_size: usize) -> Result<Transport> {
         Ok(Transport {
-            stream: stream,
+            stream,
             incoming: ReadBuffer::new(max_frame_size),
             outgoing: Vec::with_capacity(max_frame_size),
-            max_frame_size: max_frame_size,
+            max_frame_size,
             last_sent: Instant::now(),
             last_received: Instant::now(),
         })
     }
 
-    pub fn close(self: &mut Self) -> Result<()> {
+    pub fn close(&mut self) -> Result<()> {
         self.stream.shutdown(Shutdown::Both)?;
         Ok(())
     }
 
-    pub fn read_protocol_header(self: &mut Self) -> Result<Option<ProtocolHeader>> {
+    pub fn read_protocol_header(&mut self) -> Result<Option<ProtocolHeader>> {
         let mut buf = self.incoming.peek();
         if buf.len() >= 8 {
             let header = ProtocolHeader::decode(&mut buf)?;
@@ -160,12 +156,12 @@ impl Transport {
         }
     }
 
-    pub fn write_protocol_header(self: &mut Self, header: &ProtocolHeader) -> Result<()> {
+    pub fn write_protocol_header(&mut self, header: &ProtocolHeader) -> Result<()> {
         header.encode(&mut self.outgoing)?;
         Ok(())
     }
 
-    pub fn read_frame(self: &mut Self) -> Result<Frame> {
+    pub fn read_frame(&mut self) -> Result<Frame> {
         loop {
             let mut buf = self.incoming.peek();
             trace!("Filled {} bytes", buf.len());
@@ -193,31 +189,31 @@ impl Transport {
         }
     }
 
-    pub fn write_frame(self: &mut Self, frame: &Frame) -> Result<usize> {
+    pub fn write_frame(&mut self, frame: &Frame) -> Result<usize> {
         let sz = frame.encode(&mut self.outgoing)?;
         self.last_sent = Instant::now();
         self.flush()?;
         Ok(sz)
     }
 
-    pub fn write(self: &mut Self, data: &[u8]) -> Result<usize> {
+    pub fn write(&mut self, data: &[u8]) -> Result<usize> {
         self.outgoing.write_all(data)?;
         self.flush()?;
         Ok(data.len())
     }
 
-    pub fn flush(self: &mut Self) -> Result<usize> {
+    pub fn flush(&mut self) -> Result<usize> {
         let len = self.outgoing.len();
         self.stream.write_all(self.outgoing.as_mut())?;
         self.outgoing.clear();
         Ok(len)
     }
 
-    pub fn last_received(self: &Self) -> Instant {
+    pub fn last_received(&self) -> Instant {
         self.last_received
     }
 
-    pub fn last_sent(self: &Self) -> Instant {
+    pub fn last_sent(&self) -> Instant {
         self.last_sent
     }
 }

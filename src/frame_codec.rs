@@ -37,11 +37,11 @@ pub struct FrameDecoder<'a> {
 
 impl FrameEncoder {
     pub fn new(desc: Value) -> FrameEncoder {
-        return FrameEncoder {
-            desc: desc,
+        FrameEncoder {
+            desc,
             args: Vec::new(),
             nelems: 0,
-        };
+        }
     }
 
     pub fn encode_arg<T>(&mut self, arg: &T) -> Result<()>
@@ -57,19 +57,19 @@ impl FrameEncoder {
 impl<'a> FrameDecoder<'a> {
     pub fn new(desc: &'a Value, input: &'a mut Value) -> Result<FrameDecoder<'a>> {
         if let Value::List(args) = input {
-            return Ok(FrameDecoder {
-                desc: desc,
-                args: args,
-            });
+            Ok(FrameDecoder {
+                desc,
+                args,
+            })
         } else {
-            return Err(AmqpError::decode_error(Some(
+            Err(AmqpError::decode_error(Some(
                 format!("Error decoding frame arguments: {:?}", input).as_str(),
-            )));
+            )))
         }
     }
 
     pub fn get_descriptor(&self) -> &'a Value {
-        return self.desc;
+        self.desc
     }
 
     pub fn decode_required<T: TryFromValue>(&mut self, value: &mut T) -> Result<()> {
@@ -81,7 +81,7 @@ impl<'a> FrameDecoder<'a> {
     }
 
     pub fn decode<T: TryFromValue>(&mut self, value: &mut T, required: bool) -> Result<()> {
-        if self.args.len() == 0 {
+        if self.args.is_empty() {
             if required {
                 return Err(AmqpError::amqp_error(
                     condition::DECODE_ERROR,
@@ -123,12 +123,12 @@ impl Encoder for FrameEncoder {
             writer.write_u8(TypeCode::List32 as u8)?;
             writer.write_u32::<NetworkEndian>((4 + self.args.len()) as u32)?;
             writer.write_u32::<NetworkEndian>(self.nelems as u32)?;
-            writer.write(&self.args[..])?;
-        } else if self.args.len() > 0 {
+            writer.write_all(&self.args[..])?;
+        } else if !self.args.is_empty() {
             writer.write_u8(TypeCode::List8 as u8)?;
             writer.write_u8((1 + self.args.len()) as u8)?;
             writer.write_u8(self.nelems as u8)?;
-            writer.write(&self.args[..])?;
+            writer.write_all(&self.args[..])?;
         } else {
             writer.write_u8(TypeCode::List0 as u8)?;
         }

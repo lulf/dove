@@ -81,12 +81,12 @@ impl Url<'_> {
         };
 
         Ok(Url {
-            scheme: scheme,
-            username: username,
-            password: password,
-            hostname: hostname,
-            port: port,
-            address: address,
+            scheme,
+            username,
+            password,
+            hostname,
+            port,
+            address,
         })
     }
 }

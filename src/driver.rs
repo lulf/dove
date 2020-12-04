@@ -49,6 +49,7 @@ pub struct SessionDriver {
     local_channel: ChannelId,
     rx: Channel<AmqpFrame>,
     links: Mutex<HashMap<HandleId, Arc<LinkDriver>>>,
+    #[allow(clippy::type_complexity)]
     did_to_delivery: Arc<Mutex<HashMap<u32, (HandleId, Arc<DeliveryDriver>)>>>,
     handle_generator: AtomicU32,
     initial_outgoing_id: u32,
@@ -119,6 +120,7 @@ pub struct LinkDriver {
 
     session_flow_control: Arc<Mutex<SessionFlowControl>>,
 
+    #[allow(clippy::type_complexity)]
     did_to_delivery: Arc<Mutex<HashMap<u32, (HandleId, Arc<DeliveryDriver>)>>>,
     credit: AtomicU32,
     delivery_count: AtomicU32,
@@ -204,7 +206,7 @@ impl ConnectionDriver {
             return Ok(());
         }
         let mut driver = self.driver.lock().unwrap();
-        driver.close(Close { error: error })?;
+        driver.close(Close { error })?;
         driver.flush()?;
         driver.shutdown()?;
         Ok(())
@@ -239,7 +241,7 @@ impl ConnectionDriver {
             }
         }
 
-        if rx_frames.len() > 0 {
+        if !rx_frames.is_empty() {
             trace!("Dispatching {:?} frames", rx_frames.len());
         }
 
@@ -263,8 +265,7 @@ impl ConnectionDriver {
                         Performative::Begin(ref begin) => {
                             let m = self.sessions.lock().unwrap();
                             let s = m.get(&channel);
-                            match s {
-                                Some(s) => {
+                            if let Some(s) = s {
                                     {
                                         let mut f = s.flow_control.lock().unwrap();
                                         f.remote_outgoing_window = begin.outgoing_window;
@@ -272,8 +273,6 @@ impl ConnectionDriver {
                                     }
                                     s.rx.send(frame)?;
                                 }
-                                None => {}
-                            }
                         }
                         Performative::End(ref _end) => {
                             let mut m = self.sessions.lock().unwrap();
@@ -282,15 +281,12 @@ impl ConnectionDriver {
                         _ => {
                             let session = {
                                 let mut m = self.sessions.lock().unwrap();
-                                m.get_mut(&channel).map(|s| s.clone())
+                                m.get_mut(&channel).cloned()
                             };
 
-                            match session {
-                                Some(s) => {
+                            if let Some(s) = session {
                                     s.dispatch(frame)?;
                                 }
-                                _ => {}
-                            }
                         }
                     }
                 }
@@ -300,7 +296,7 @@ impl ConnectionDriver {
     }
 
     fn allocate_session(
-        self: &Self,
+        &self,
         remote_channel_id: Option<ChannelId>,
     ) -> Option<Arc<SessionDriver>> {
         let mut m = self.sessions.lock().unwrap();
@@ -390,16 +386,17 @@ impl SessionDriver {
                     m.get_mut(&transfer.handle).unwrap().clone()
                 };
 
-                // Link flow control
-                if link
-                    .credit
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
-                        if x <= 0 {
+                let count_down = |x| {
+                        if x == 0 {
                             Some(0)
                         } else {
                             Some(x - 1)
                         }
-                    })
+                    };
+                // Link flow control
+                if link
+                    .credit
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, count_down)
                     == Ok(0)
                 {
                     trace!("Transfer but no space left!");
@@ -464,7 +461,7 @@ impl SessionDriver {
 
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
         let mut driver = self.driver.lock().unwrap();
-        driver.end(self.local_channel, End { error: error })?;
+        driver.end(self.local_channel, End { error })?;
         driver.flush()
     }
 
@@ -472,10 +469,10 @@ impl SessionDriver {
         trace!("Creating new link!");
         let handle = self.handle_generator.fetch_add(1, Ordering::SeqCst);
         let link = Arc::new(LinkDriver {
-            role: role,
+            role,
             channel: self.local_channel,
             driver: self.driver.clone(),
-            handle: handle,
+            handle,
             rx: Channel::new(),
             session_flow_control: self.flow_control.clone(),
             did_to_delivery: self.did_to_delivery.clone(),
@@ -492,7 +489,7 @@ impl SessionDriver {
         let attach = Attach {
             name: addr.to_string(),
             handle: handle as u32,
-            role: role,
+            role,
             snd_settle_mode: None,
             rcv_settle_mode: None,
             source: Some(Source {
@@ -556,7 +553,7 @@ impl LinkDriver {
         settled: bool,
     ) -> Result<Arc<DeliveryDriver>> {
         let semaphore_fn = |x| {
-            if x <= 0 {
+            if x == 0 {
                 Some(0)
             } else {
                 Some(x - 1)
@@ -592,12 +589,12 @@ impl LinkDriver {
         self.delivery_count.fetch_add(1, Ordering::SeqCst);
         let delivery_tag = rand::thread_rng().gen::<[u8; 16]>().to_vec();
         let delivery = Arc::new(DeliveryDriver {
-            message: message,
+            message,
             id: next_outgoing_id,
             tag: delivery_tag.clone(),
             state: None,
             remotely_settled: false,
-            settled: settled,
+            settled,
         });
 
         if !settled {
@@ -666,7 +663,7 @@ impl LinkDriver {
             Detach {
                 handle: self.handle,
                 closed: Some(true),
-                error: error,
+                error,
             },
         )?;
         driver.flush()
@@ -712,12 +709,13 @@ pub struct Channel<T> {
 }
 
 impl<T> Channel<T> {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Channel<T> {
         let (tx, rx) = mpsc::channel();
-        return Channel {
+        Channel {
             tx: Mutex::new(tx),
             rx: Mutex::new(rx),
-        };
+        }
     }
 
     pub fn send(&self, value: T) -> Result<()> {

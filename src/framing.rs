@@ -150,6 +150,7 @@ pub struct AmqpFrame {
     pub payload: Option<Vec<u8>>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Performative {
     Open(Open),
@@ -441,9 +442,9 @@ impl Begin {
     pub fn new(next_outgoing_id: u32, incoming_window: u32, outgoing_window: u32) -> Begin {
         Begin {
             remote_channel: None,
-            next_outgoing_id: next_outgoing_id,
-            incoming_window: incoming_window,
-            outgoing_window: outgoing_window,
+            next_outgoing_id,
+            incoming_window,
+            outgoing_window,
             handle_max: None,
             offered_capabilities: None,
             desired_capabilities: None,
@@ -461,7 +462,7 @@ impl Begin {
         decoder.decode_optional(&mut begin.offered_capabilities)?;
         decoder.decode_optional(&mut begin.desired_capabilities)?;
         decoder.decode_optional(&mut begin.properties)?;
-        return Ok(begin);
+        Ok(begin)
     }
 }
 
@@ -500,8 +501,8 @@ impl Attach {
     pub fn new(name: &str, handle: u32, role: LinkRole) -> Attach {
         Attach {
             name: name.to_string(),
-            handle: handle,
-            role: role,
+            handle,
+            role,
             snd_settle_mode: None,
             rcv_settle_mode: None,
             source: None,
@@ -647,7 +648,7 @@ impl Encoder for Flow {
 impl Transfer {
     pub fn new(handle: u32) -> Transfer {
         Transfer {
-            handle: handle,
+            handle,
             delivery_id: None,
             delivery_tag: None,
             message_format: None,
@@ -797,6 +798,7 @@ impl Encoder for Source {
 }
 
 impl Target {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Target {
         Target {
             address: None,
@@ -1158,7 +1160,7 @@ impl FrameHeader {
         })
     }
 
-    pub fn encode(self: &Self, writer: &mut dyn Write) -> Result<()> {
+    pub fn encode(&self, writer: &mut dyn Write) -> Result<()> {
         writer.write_u32::<NetworkEndian>(self.size)?;
         writer.write_u8(self.doff)?;
         writer.write_u8(self.frame_type)?;
@@ -1168,7 +1170,7 @@ impl FrameHeader {
 }
 
 impl Frame {
-    pub fn encode(self: &Self, writer: &mut dyn Write) -> Result<usize> {
+    pub fn encode(&self, writer: &mut dyn Write) -> Result<usize> {
         let mut header: FrameHeader = FrameHeader {
             size: 8,
             doff: 2,
@@ -1315,7 +1317,7 @@ impl Frame {
 
             Ok(Frame::AMQP(AmqpFrame {
                 channel: header.ext,
-                performative: performative,
+                performative,
                 payload: Some(payload),
             }))
         } else if header.frame_type == 1 {
