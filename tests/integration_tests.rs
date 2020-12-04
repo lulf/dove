@@ -65,10 +65,22 @@ fn test_qpid_broker_j() {
         let mut config_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         config_dir.push("tests");
         config_dir.push("qpid-broker-j");
+        log::info!("Loaded config from {:?}", config_dir);
         let docker = clients::Cli::default();
+        let config_dir_path = config_dir.as_path().to_str().unwrap();
+
+        // Required to allow reading directory in container
+        let chcon_output = std::process::Command::new("chcon")
+            .arg("-t")
+            .arg("svirt_sandbox_file_t")
+            .arg(config_dir_path)
+            .output()
+            .expect("failed to run command");
+        log::info!("CHCON: {:?}", chcon_output);
+
         let node = docker.run(
             images::generic::GenericImage::new("docker.io/chrisob/qpid-broker-j-docker:8.0.0")
-                .with_volume(config_dir.as_path().to_str().unwrap(), "/usr/local/etc"),
+                .with_volume(config_dir_path, "/usr/local/etc"),
         );
         log::info!("Qpid Broker J Started");
         std::thread::sleep(Duration::from_millis(20000));
