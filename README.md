@@ -17,6 +17,15 @@ Dove exposes two different APIs:
 * An API for writing messaging applications using async rust.
 * A low level connection API that allows you to send and receive frames defined as rust types.
 
+## Examples
+
+Client examples can be found in the [examples/](https://github.com/lulf/dove/tree/master/examples) directory. You can run them like this:
+
+```
+cargo run --example send amqp://localhost:5672/myqueue "Hello, World"
+cargo run --example receive amqp://localhost:5672/myqueue
+```
+
 ## Building
 
 ```
@@ -31,18 +40,17 @@ Testing uses [testcontainers-rs](https://github.com/testcontainers/testcontainer
 RUST_LOG=info cargo test
 ```
 
-## TODO
+## Supported features
 
-See [TODO Issues](https://github.com/lulf/dove/issues?q=is%3Aissue+is%3Aopen+label%3Atodo)
+* Async-await API for creating connections, sessions and links.
+* Most of the AMQP 1.0 type system, but there are probably some edge cases that have not yet been tested.
+* SASL ANONYMOUS and PLAIN
+* Tested against Apache ActiveMQ Artemis, Apache Qpid Dispatch Router and Apache Qpid Broker J.
 
-## Examples
+## Not supported features
 
-Client examples can be found in the [examples/](https://github.com/lulf/dove/tree/master/examples) directory. You can run them like this:
+See [TODO Issues](https://github.com/lulf/dove/issues?q=is%3Aissue+is%3Aopen+label%3Atodo) for a list of features that are not yet implemented.
 
-```
-cargo run --example send amqp://localhost:5672/myqueue "Hello, World"
-cargo run --example receive amqp://localhost:5672/myqueue
-```
 
 ## Modules
 
