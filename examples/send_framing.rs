@@ -7,6 +7,7 @@ use dove::conn::*;
 use dove::framing::*;
 use dove::message::*;
 use dove::sasl::*;
+use dove::transport::*;
 use dove::types::*;
 use std::env;
 
@@ -27,7 +28,8 @@ fn main() {
     let message = Message::amqp_value(Value::String(args[4].to_string()));
 
     let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
-    let mut connection = connect(&host, port, opts).expect("Error opening connection");
+    let transport = Transport::connect(&host, port).expect("Error opening transport");
+    let mut connection = connect(transport, opts).expect("Error opening connection");
 
     connection.open(Open::new("example-send-minimal")).unwrap();
     connection

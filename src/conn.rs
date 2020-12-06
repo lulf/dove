@@ -8,9 +8,7 @@
 use log::{debug, trace};
 use mio::event::Source;
 use mio::net::TcpListener;
-use mio::net::TcpStream;
 use mio::{Interest, Registry, Token};
-use std::net::ToSocketAddrs;
 use std::time::Duration;
 use std::time::Instant;
 use std::vec::Vec;
@@ -58,7 +56,6 @@ pub struct ListenOptions {}
 
 #[derive(Debug)]
 pub struct Connection {
-    pub hostname: String,
     sasl: Option<Sasl>,
     state: ConnectionState,
     transport: Transport,
@@ -81,12 +78,8 @@ enum ConnectionState {
 const AMQP_10_HEADER: ProtocolHeader = ProtocolHeader::AMQP(Version(1, 0, 0));
 const SASL_10_HEADER: ProtocolHeader = ProtocolHeader::SASL(Version(1, 0, 0));
 
-pub fn connect(host: &str, port: u16, opts: ConnectionOptions) -> Result<Connection> {
-    let mut addrs = format!("{}:{}", host, port).to_socket_addrs().unwrap();
-    let stream = TcpStream::connect(addrs.next().unwrap())?;
-    let transport: Transport = Transport::new(stream, 1024)?;
-
-    let mut connection = Connection::new(host, transport);
+pub fn connect(transport: Transport, opts: ConnectionOptions) -> Result<Connection> {
+    let mut connection = Connection::new(transport);
     if opts.username.is_some() || opts.password.is_some() || opts.sasl_mechanism.is_some() {
         connection.sasl = Some(Sasl {
             role: SaslRole::Client(SaslClient {
@@ -118,19 +111,18 @@ pub fn listen(host: &str, port: u16, _opts: ListenOptions) -> Result<Listener> {
 
 impl Listener {
     pub fn accept(&mut self) -> Result<Connection> {
-        let (stream, addr) = self.listener.accept()?;
+        let (stream, _addr) = self.listener.accept()?;
         let transport: Transport = Transport::new(stream, 1024)?;
 
-        let mut connection = Connection::new(addr.ip().to_string().as_str(), transport);
+        let mut connection = Connection::new(transport);
         connection.state = ConnectionState::StartWait;
         Ok(connection)
     }
 }
 
 impl Connection {
-    pub fn new(hostname: &str, transport: Transport) -> Connection {
+    pub fn new(transport: Transport) -> Connection {
         Connection {
-            hostname: hostname.to_string(),
             transport,
             state: ConnectionState::Start,
             sasl: None,
@@ -288,7 +280,6 @@ impl Connection {
                             self.state = ConnectionState::Opened;
                         }
                         _ => {
-                            trace!("WHY ARE WE CLOSING1");
                             self.transport.close()?;
                             self.state = ConnectionState::Closed;
                         }
@@ -313,7 +304,6 @@ impl Connection {
                             self.transport.write_protocol_header(&AMQP_10_HEADER)?;
                             self.state = ConnectionState::Closed;
                             self.transport.flush()?;
-                            trace!("WHY ARE WE CLOSING2");
                             self.transport.close()?;
                         }
                     }
@@ -327,12 +317,11 @@ impl Connection {
                         self.state = ConnectionState::Start;
                     }
                     SaslState::Failed => {
-                        trace!("WHY ARE WE CLOSING3");
                         self.transport.close()?;
                         self.state = ConnectionState::Closed;
                     }
                     SaslState::InProgress => {
-                        sasl.perform_handshake(&self.hostname, &mut self.transport)?;
+                        sasl.perform_handshake(None, &mut self.transport)?;
                     }
                 }
             }
@@ -341,7 +330,6 @@ impl Connection {
                 frames.push(frame);
             }
             ConnectionState::Closed => {
-                trace!("WHY ARE WE CLOSING4");
                 return Err(AmqpError::amqp_error(
                     condition::connection::CONNECTION_FORCED,
                     None,
