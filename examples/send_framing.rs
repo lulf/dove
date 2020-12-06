@@ -4,10 +4,10 @@
  */
 
 use dove::conn::*;
-use dove::transport::*;
 use dove::framing::*;
 use dove::message::*;
 use dove::sasl::*;
+use dove::transport::*;
 use dove::types::*;
 use std::env;
 
