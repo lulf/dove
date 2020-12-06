@@ -13,6 +13,7 @@ use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
 use std::net::Shutdown;
+use std::net::ToSocketAddrs;
 use std::time::Instant;
 use std::vec::Vec;
 
@@ -128,6 +129,12 @@ pub struct Transport {
 }
 
 impl Transport {
+    pub fn connect(host: &str, port: u16) -> Result<Transport> {
+        let mut addrs = format!("{}:{}", host, port).to_socket_addrs().unwrap();
+        let stream = TcpStream::connect(addrs.next().unwrap())?;
+        Transport::new(stream, 1024)
+    }
+
     pub fn new(stream: TcpStream, max_frame_size: usize) -> Result<Transport> {
         Ok(Transport {
             stream,

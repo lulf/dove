@@ -11,6 +11,7 @@ use crate::driver::{
 };
 use crate::error::*;
 use crate::framing::{AmqpFrame, Close, LinkRole, Open, Performative};
+use crate::transport;
 
 use log::{error, trace};
 use mio::{Events, Poll, Token, Waker};
@@ -207,7 +208,8 @@ impl ContainerInner {
     }
 
     async fn connect(&self, host: &str, port: u16, opts: ConnectionOptions) -> Result<Connection> {
-        let mut driver = conn::connect(host, port, opts)?;
+        let transport = transport::Transport::connect(host, port)?;
+        let mut driver = conn::connect(transport, opts)?;
         trace!("{}: connected to {}:{}", self.container_id, host, port);
 
         let mut open = Open::new(self.container_id.as_str());
