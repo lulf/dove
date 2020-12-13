@@ -89,10 +89,10 @@ struct Buffer {
 }
 
 impl Buffer {
-    fn new() -> Buffer {
+    fn new(capacity: usize) -> Buffer {
         Buffer {
             buffer: [0; BUFFER_SIZE],
-            capacity: BUFFER_SIZE,
+            capacity: capacity,
             position: 0,
         }
     }
@@ -112,6 +112,8 @@ impl Buffer {
     }
 
     fn consume(&mut self, nbytes: usize) -> Result<()> {
+        // TODO: Should ideally avoid this copy by making this a circular buffer.
+        self.buffer.rotate_left(nbytes);
         self.position -= nbytes;
         // println!("(Consume) Position is now {}", self.position);
         Ok(())
@@ -199,8 +201,8 @@ impl<N: Network> Transport<N> {
         assert!(max_frame_size <= BUFFER_SIZE);
         Transport {
             network,
-            incoming: Buffer::new(),
-            outgoing: Buffer::new(),
+            incoming: Buffer::new(max_frame_size),
+            outgoing: Buffer::new(max_frame_size),
             max_frame_size,
             last_sent: Instant::now(),
             last_received: Instant::now(),
@@ -322,8 +324,7 @@ mod tests {
 
     #[test]
     fn readbuffer() {
-        let mut data = vec![6];
-        let mut buf = Buffer::new(&mut data[..]);
+        let mut buf = Buffer::new(6);
 
         let input: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
