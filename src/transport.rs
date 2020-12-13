@@ -118,7 +118,7 @@ impl Buffer {
     }
 
     fn written(&mut self) -> &[u8] {
-        return &self.buffer[0..self.position];
+        &self.buffer[0..self.position]
     }
 
     fn clear(&mut self) {
@@ -166,7 +166,7 @@ impl MioNetwork {
         let mut addrs = format!("{}:{}", host, port).to_socket_addrs().unwrap();
         let stream = TcpStream::connect(addrs.next().unwrap())?;
 
-        Ok(MioNetwork { stream: stream })
+        Ok(MioNetwork { stream })
     }
 }
 
