@@ -208,7 +208,8 @@ impl ContainerInner {
     }
 
     async fn connect(&self, host: &str, port: u16, opts: ConnectionOptions) -> Result<Connection> {
-        let transport = transport::Transport::connect(host, port)?;
+        let network = transport::MioNetwork::connect(host, port)?;
+        let transport = transport::Transport::new(network, 1024);
         let mut driver = conn::connect(transport, opts)?;
         trace!("{}: connected to {}:{}", self.container_id, host, port);
 

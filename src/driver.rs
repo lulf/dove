@@ -14,6 +14,7 @@ use crate::framing::{
     Performative, Source, Target, Transfer,
 };
 use crate::message::Message;
+use crate::transport::MioNetwork;
 use log::{trace, warn};
 use mio::{Interest, Poll, Token};
 use rand::Rng;
@@ -30,7 +31,7 @@ pub type HandleId = u32;
 pub struct ConnectionDriver {
     channel_max: u16,
     idle_timeout: Duration,
-    driver: Arc<Mutex<conn::Connection>>,
+    driver: Arc<Mutex<conn::Connection<MioNetwork>>>,
     sessions: Mutex<HashMap<ChannelId, Arc<SessionDriver>>>,
 
     // Frames received on this connection
@@ -45,7 +46,7 @@ pub struct ConnectionDriver {
 #[derive(Debug)]
 pub struct SessionDriver {
     // Frames received on this session
-    driver: Arc<Mutex<conn::Connection>>,
+    driver: Arc<Mutex<conn::Connection<MioNetwork>>>,
     local_channel: ChannelId,
     rx: Channel<AmqpFrame>,
     links: Mutex<HashMap<HandleId, Arc<LinkDriver>>>,
@@ -115,7 +116,7 @@ pub struct LinkDriver {
     pub handle: u32,
     pub role: LinkRole,
     pub channel: ChannelId,
-    driver: Arc<Mutex<conn::Connection>>,
+    driver: Arc<Mutex<conn::Connection<MioNetwork>>>,
     rx: Channel<AmqpFrame>,
 
     session_flow_control: Arc<Mutex<SessionFlowControl>>,
@@ -141,7 +142,7 @@ pub struct SessionOpts {
 }
 
 impl ConnectionDriver {
-    pub fn new(conn: conn::Connection) -> ConnectionDriver {
+    pub fn new(conn: conn::Connection<MioNetwork>) -> ConnectionDriver {
         ConnectionDriver {
             driver: Arc::new(Mutex::new(conn)),
             rx: Channel::new(),
@@ -156,16 +157,17 @@ impl ConnectionDriver {
 
     pub fn register(&self, id: Token, poll: &mut Poll) -> Result<()> {
         let mut d = self.driver.lock().unwrap();
+        let network = d.transport().network();
         poll.registry()
-            .register(&mut *d, id, Interest::READABLE | Interest::WRITABLE)?;
+            .register(&mut *network, id, Interest::READABLE | Interest::WRITABLE)?;
         Ok(())
     }
 
-    pub fn driver(&self) -> std::sync::MutexGuard<conn::Connection> {
+    pub fn driver(&self) -> std::sync::MutexGuard<conn::Connection<MioNetwork>> {
         self.driver.lock().unwrap()
     }
 
-    pub fn flowcontrol(&self, connection: &mut conn::Connection) -> Result<()> {
+    pub fn flowcontrol(&self, connection: &mut conn::Connection<MioNetwork>) -> Result<()> {
         let low_flow_watermark = 100;
         let high_flow_watermark = 1000;
 
@@ -182,7 +184,7 @@ impl ConnectionDriver {
         Ok(())
     }
 
-    pub fn keepalive(&self, connection: &mut conn::Connection) -> Result<()> {
+    pub fn keepalive(&self, connection: &mut conn::Connection<MioNetwork>) -> Result<()> {
         // Sent out keepalives...
         let now = Instant::now();
 
@@ -540,7 +542,7 @@ impl SessionDriver {
 }
 
 impl LinkDriver {
-    pub fn driver(&self) -> std::sync::MutexGuard<conn::Connection> {
+    pub fn driver(&self) -> std::sync::MutexGuard<conn::Connection<MioNetwork>> {
         self.driver.lock().unwrap()
     }
 
@@ -631,7 +633,11 @@ impl LinkDriver {
         self.flowcontrol(credit, &mut driver)
     }
 
-    fn flowcontrol(&self, credit: u32, connection: &mut conn::Connection) -> Result<()> {
+    fn flowcontrol(
+        &self,
+        credit: u32,
+        connection: &mut conn::Connection<MioNetwork>,
+    ) -> Result<()> {
         trace!("{}: issuing {} credits", self.handle, credit);
         self.credit.store(credit, Ordering::SeqCst);
         let props = { self.session_flow_control.lock().unwrap().clone() };
