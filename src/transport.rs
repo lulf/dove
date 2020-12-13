@@ -92,7 +92,7 @@ impl Buffer {
     fn new(capacity: usize) -> Buffer {
         Buffer {
             buffer: [0; BUFFER_SIZE],
-            capacity: capacity,
+            capacity,
             position: 0,
         }
     }
