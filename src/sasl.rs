@@ -88,10 +88,10 @@ impl Sasl {
         self.state == SaslState::Success || self.state == SaslState::Failed
     }
 
-    pub fn perform_handshake(
+    pub fn perform_handshake<N: Network>(
         &mut self,
         hostname: Option<&str>,
-        transport: &mut Transport,
+        transport: &mut Transport<N>,
     ) -> Result<()> {
         match &self.role {
             SaslRole::Client(sasl_client) => {

@@ -6,16 +6,13 @@
 //! The transport module contains the network connectivity transport for the upper layers. It is implemented using mio.
 
 use log::{debug, trace};
-use mio::event::Source;
-use mio::net::TcpStream;
-use mio::{Interest, Registry, Token};
+
+use std::fmt::Debug;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
-use std::net::Shutdown;
-use std::net::ToSocketAddrs;
+
 use std::time::Instant;
-use std::vec::Vec;
 
 use crate::error::*;
 use crate::framing::*;
@@ -79,17 +76,19 @@ impl ProtocolHeader {
     }
 }
 
+const BUFFER_SIZE: usize = 1024;
+
 #[derive(Debug)]
-struct ReadBuffer {
-    buffer: Vec<u8>,
+struct Buffer {
+    buffer: [u8; BUFFER_SIZE],
     capacity: usize,
     position: usize,
 }
 
-impl ReadBuffer {
-    fn new(capacity: usize) -> ReadBuffer {
-        ReadBuffer {
-            buffer: vec![0; capacity],
+impl Buffer {
+    fn new(capacity: usize) -> Buffer {
+        Buffer {
+            buffer: [0; BUFFER_SIZE],
             capacity,
             position: 0,
         }
@@ -110,44 +109,79 @@ impl ReadBuffer {
     }
 
     fn consume(&mut self, nbytes: usize) -> Result<()> {
-        self.buffer.drain(0..nbytes);
-        self.buffer.resize(self.capacity, 0);
+        // TODO: Should ideally avoid this copy by making this a circular buffer.
+        self.buffer.rotate_left(nbytes);
         self.position -= nbytes;
         // println!("(Consume) Position is now {}", self.position);
         Ok(())
     }
+
+    fn written(&mut self) -> &[u8] {
+        &self.buffer[0..self.position]
+    }
+
+    fn clear(&mut self) {
+        self.position = 0;
+    }
+
+    fn write_buf(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        if data.len() > self.capacity - self.position {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "written data is bigger than output buffer",
+            ));
+        }
+        // println!("Copying {} bytes into {}", data.len(), self.position);
+        self.buffer[self.position..(self.position + data.len())].clone_from_slice(data);
+        self.position += data.len();
+        Ok(data.len())
+    }
+}
+
+impl Write for Buffer {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        self.write_buf(data)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+pub trait Network: Read + Write + Debug {
+    fn close(&mut self) -> Result<()>;
 }
 
 #[derive(Debug)]
-pub struct Transport {
-    stream: TcpStream,
-    incoming: ReadBuffer,
-    outgoing: Vec<u8>,
+pub struct Transport<N: Network> {
+    network: N,
+    incoming: Buffer,
+    outgoing: Buffer,
     max_frame_size: usize,
     last_sent: Instant,
     last_received: Instant,
 }
 
-impl Transport {
-    pub fn connect(host: &str, port: u16) -> Result<Transport> {
-        let mut addrs = format!("{}:{}", host, port).to_socket_addrs().unwrap();
-        let stream = TcpStream::connect(addrs.next().unwrap())?;
-        Transport::new(stream, 1024)
-    }
-
-    pub fn new(stream: TcpStream, max_frame_size: usize) -> Result<Transport> {
-        Ok(Transport {
-            stream,
-            incoming: ReadBuffer::new(max_frame_size),
-            outgoing: Vec::with_capacity(max_frame_size),
+impl<N: Network> Transport<N> {
+    pub fn new(network: N, max_frame_size: usize) -> Transport<N> {
+        assert!(max_frame_size <= BUFFER_SIZE);
+        assert!(max_frame_size <= BUFFER_SIZE);
+        Transport {
+            network,
+            incoming: Buffer::new(max_frame_size),
+            outgoing: Buffer::new(max_frame_size),
             max_frame_size,
             last_sent: Instant::now(),
             last_received: Instant::now(),
-        })
+        }
+    }
+
+    pub fn network(&mut self) -> &mut N {
+        &mut self.network
     }
 
     pub fn close(&mut self) -> Result<()> {
-        self.stream.shutdown(Shutdown::Both)?;
+        self.network.close()?;
         Ok(())
     }
 
@@ -158,7 +192,7 @@ impl Transport {
             self.incoming.consume(8)?;
             Ok(Some(header))
         } else {
-            self.incoming.fill(&mut self.stream)?;
+            self.incoming.fill(&mut self.network)?;
             Ok(None)
         }
     }
@@ -188,10 +222,10 @@ impl Transport {
                     debug!("RX {:?}", frame);
                     return Ok(frame);
                 } else {
-                    self.incoming.fill(&mut self.stream)?;
+                    self.incoming.fill(&mut self.network)?;
                 }
             } else {
-                self.incoming.fill(&mut self.stream)?;
+                self.incoming.fill(&mut self.network)?;
             }
         }
     }
@@ -210,8 +244,9 @@ impl Transport {
     }
 
     pub fn flush(&mut self) -> Result<usize> {
-        let len = self.outgoing.len();
-        self.stream.write_all(self.outgoing.as_mut())?;
+        let data = self.outgoing.written();
+        let len = data.len();
+        self.network.write_all(data)?;
         self.outgoing.clear();
         Ok(len)
     }
@@ -225,38 +260,88 @@ impl Transport {
     }
 }
 
-impl Source for Transport {
-    fn register(
-        &mut self,
-        registry: &Registry,
-        token: Token,
-        interests: Interest,
-    ) -> std::io::Result<()> {
-        self.stream.register(registry, token, interests)
+pub mod mio {
+    use mio::event::Source;
+    use mio::net::TcpStream;
+    use mio::{Interest, Registry, Token};
+
+    use super::Network;
+    use crate::error::*;
+    use std::io::Read;
+    use std::io::Write;
+    use std::net::Shutdown;
+    use std::net::ToSocketAddrs;
+
+    #[derive(Debug)]
+    pub struct MioNetwork {
+        stream: TcpStream,
     }
 
-    fn reregister(
-        &mut self,
-        registry: &Registry,
-        token: Token,
-        interests: Interest,
-    ) -> std::io::Result<()> {
-        self.stream.reregister(registry, token, interests)
+    impl MioNetwork {
+        pub fn connect(host: &str, port: u16) -> Result<MioNetwork> {
+            let mut addrs = format!("{}:{}", host, port).to_socket_addrs().unwrap();
+            let stream = TcpStream::connect(addrs.next().unwrap())?;
+
+            Ok(MioNetwork { stream })
+        }
     }
 
-    fn deregister(&mut self, registry: &Registry) -> std::io::Result<()> {
-        self.stream.deregister(registry)
+    impl Network for MioNetwork {
+        fn close(&mut self) -> Result<()> {
+            self.stream.shutdown(Shutdown::Both)?;
+            Ok(())
+        }
+    }
+
+    impl Write for MioNetwork {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.stream.write(data)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.stream.flush()
+        }
+    }
+
+    impl Read for MioNetwork {
+        fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+            self.stream.read(b)
+        }
+    }
+
+    impl Source for MioNetwork {
+        fn register(
+            &mut self,
+            registry: &Registry,
+            token: Token,
+            interests: Interest,
+        ) -> std::io::Result<()> {
+            self.stream.register(registry, token, interests)
+        }
+
+        fn reregister(
+            &mut self,
+            registry: &Registry,
+            token: Token,
+            interests: Interest,
+        ) -> std::io::Result<()> {
+            self.stream.reregister(registry, token, interests)
+        }
+
+        fn deregister(&mut self, registry: &Registry) -> std::io::Result<()> {
+            self.stream.deregister(registry)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
 
-    use super::ReadBuffer;
+    use super::Buffer;
 
     #[test]
     fn readbuffer() {
-        let mut buf = ReadBuffer::new(6);
+        let mut buf = Buffer::new(6);
 
         let input: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
@@ -274,5 +359,27 @@ mod tests {
         let data = buf.fill(&mut &input[6..]).expect("Unable to fill buffer");
         assert_eq!(6, data.len());
         assert_eq!([2, 3, 4, 5, 6, 7], data);
+    }
+
+    #[test]
+    fn writebuffer() {
+        let mut buf = Buffer::new(6);
+        let result = buf.write_buf(&[1, 2, 3, 4, 5, 6, 7]);
+        assert!(result.is_err());
+        assert_eq!([0, 0, 0, 0, 0, 0], &buf.buffer[..buf.capacity]);
+
+        let result = buf.write_buf(&[1, 2, 3, 4]);
+        assert!(result.is_ok());
+        assert_eq!(4, result.unwrap());
+        assert_eq!([1, 2, 3, 4, 0, 0], &buf.buffer[..buf.capacity]);
+
+        let result = buf.write_buf(&[5, 6]);
+        assert!(result.is_ok());
+        assert_eq!(2, result.unwrap());
+        assert_eq!([1, 2, 3, 4, 5, 6], &buf.buffer[..buf.capacity]);
+
+        let result = buf.write_buf(&[7]);
+        assert!(result.is_err());
+        assert_eq!([1, 2, 3, 4, 5, 6], &buf.buffer[..buf.capacity]);
     }
 }

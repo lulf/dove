@@ -6,9 +6,6 @@
 //! The conn module contains basic primitives for establishing and accepting AMQP connections and performing the initial handshake. Once handshake is complete, the connection can be used to send and receive frames.
 
 use log::{debug, trace};
-use mio::event::Source;
-use mio::net::TcpListener;
-use mio::{Interest, Registry, Token};
 use std::time::Duration;
 use std::time::Instant;
 use std::vec::Vec;
@@ -51,14 +48,17 @@ impl ConnectionOptions {
     }
 }
 
+/*
+// TODO: Listener
 #[derive(Debug)]
 pub struct ListenOptions {}
+*/
 
 #[derive(Debug)]
-pub struct Connection {
+pub struct Connection<N: Network> {
     sasl: Option<Sasl>,
     state: ConnectionState,
-    transport: Transport,
+    transport: Transport<N>,
     tx_frames: Vec<Frame>,
     header_sent: bool,
 }
@@ -69,7 +69,8 @@ pub type HandleId = u32;
 #[derive(Debug)]
 enum ConnectionState {
     Start,
-    StartWait,
+    // TODO: Listener
+    // StartWait,
     Sasl,
     Opened,
     Closed,
@@ -78,7 +79,10 @@ enum ConnectionState {
 const AMQP_10_HEADER: ProtocolHeader = ProtocolHeader::AMQP(Version(1, 0, 0));
 const SASL_10_HEADER: ProtocolHeader = ProtocolHeader::SASL(Version(1, 0, 0));
 
-pub fn connect(transport: Transport, opts: ConnectionOptions) -> Result<Connection> {
+pub fn connect<N: Network>(
+    transport: Transport<N>,
+    opts: ConnectionOptions,
+) -> Result<Connection<N>> {
     let mut connection = Connection::new(transport);
     if opts.username.is_some() || opts.password.is_some() || opts.sasl_mechanism.is_some() {
         connection.sasl = Some(Sasl {
@@ -95,6 +99,7 @@ pub fn connect(transport: Transport, opts: ConnectionOptions) -> Result<Connecti
     Ok(connection)
 }
 
+/*
 pub struct Listener {
     pub listener: TcpListener,
     pub sasl_mechanisms: Option<Vec<SaslMechanism>>,
@@ -119,9 +124,10 @@ impl Listener {
         Ok(connection)
     }
 }
+*/
 
-impl Connection {
-    pub fn new(transport: Transport) -> Connection {
+impl<N: Network> Connection<N> {
+    pub fn new(transport: Transport<N>) -> Connection<N> {
         Connection {
             transport,
             state: ConnectionState::Start,
@@ -258,6 +264,10 @@ impl Connection {
         Ok(())
     }
 
+    pub fn transport(&mut self) -> &mut Transport<N> {
+        &mut self.transport
+    }
+
     pub fn process(&mut self, frames: &mut Vec<Frame>) -> Result<()> {
         match self.state {
             ConnectionState::Start => {
@@ -286,6 +296,8 @@ impl Connection {
                     }
                 }
             }
+            /*
+            TODO: Listener
             ConnectionState::StartWait => {
                 let header = self.transport.read_protocol_header()?;
                 if let Some(header) = header {
@@ -309,6 +321,7 @@ impl Connection {
                     }
                 }
             }
+            */
             ConnectionState::Sasl => {
                 let sasl = self.sasl.as_mut().unwrap();
                 match sasl.state {
@@ -337,29 +350,5 @@ impl Connection {
             }
         }
         Ok(())
-    }
-}
-
-impl Source for Connection {
-    fn register(
-        &mut self,
-        registry: &Registry,
-        token: Token,
-        interests: Interest,
-    ) -> std::io::Result<()> {
-        self.transport.register(registry, token, interests)
-    }
-
-    fn reregister(
-        &mut self,
-        registry: &Registry,
-        token: Token,
-        interests: Interest,
-    ) -> std::io::Result<()> {
-        self.transport.reregister(registry, token, interests)
-    }
-
-    fn deregister(&mut self, registry: &Registry) -> std::io::Result<()> {
-        self.transport.deregister(registry)
     }
 }
