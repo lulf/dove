@@ -134,7 +134,7 @@ impl Buffer {
                 "written data is bigger than output buffer",
             ));
         }
-        println!("Copying {} bytes into {}", data.len(), self.position);
+        // println!("Copying {} bytes into {}", data.len(), self.position);
         self.buffer[self.position..(self.position + data.len())].clone_from_slice(data);
         self.position += data.len();
         Ok(data.len())
