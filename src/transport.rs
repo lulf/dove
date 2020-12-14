@@ -6,15 +6,12 @@
 //! The transport module contains the network connectivity transport for the upper layers. It is implemented using mio.
 
 use log::{debug, trace};
-use mio::event::Source;
-use mio::net::TcpStream;
-use mio::{Interest, Registry, Token};
+
 use std::fmt::Debug;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
-use std::net::Shutdown;
-use std::net::ToSocketAddrs;
+
 use std::time::Instant;
 
 use crate::error::*;
@@ -165,43 +162,6 @@ pub struct Transport<N: Network> {
     last_received: Instant,
 }
 
-#[derive(Debug)]
-pub struct MioNetwork {
-    stream: TcpStream,
-}
-
-impl MioNetwork {
-    pub fn connect(host: &str, port: u16) -> Result<MioNetwork> {
-        let mut addrs = format!("{}:{}", host, port).to_socket_addrs().unwrap();
-        let stream = TcpStream::connect(addrs.next().unwrap())?;
-
-        Ok(MioNetwork { stream })
-    }
-}
-
-impl Network for MioNetwork {
-    fn close(&mut self) -> Result<()> {
-        self.stream.shutdown(Shutdown::Both)?;
-        Ok(())
-    }
-}
-
-impl Write for MioNetwork {
-    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-        self.stream.write(data)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.stream.flush()
-    }
-}
-
-impl Read for MioNetwork {
-    fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
-        self.stream.read(b)
-    }
-}
-
 impl<N: Network> Transport<N> {
     pub fn new(network: N, max_frame_size: usize) -> Transport<N> {
         assert!(max_frame_size <= BUFFER_SIZE);
@@ -300,27 +260,77 @@ impl<N: Network> Transport<N> {
     }
 }
 
-impl Source for MioNetwork {
-    fn register(
-        &mut self,
-        registry: &Registry,
-        token: Token,
-        interests: Interest,
-    ) -> std::io::Result<()> {
-        self.stream.register(registry, token, interests)
+pub mod mio {
+    use mio::event::Source;
+    use mio::net::TcpStream;
+    use mio::{Interest, Registry, Token};
+
+    use super::Network;
+    use crate::error::*;
+    use std::io::Read;
+    use std::io::Write;
+    use std::net::Shutdown;
+    use std::net::ToSocketAddrs;
+
+    #[derive(Debug)]
+    pub struct MioNetwork {
+        stream: TcpStream,
     }
 
-    fn reregister(
-        &mut self,
-        registry: &Registry,
-        token: Token,
-        interests: Interest,
-    ) -> std::io::Result<()> {
-        self.stream.reregister(registry, token, interests)
+    impl MioNetwork {
+        pub fn connect(host: &str, port: u16) -> Result<MioNetwork> {
+            let mut addrs = format!("{}:{}", host, port).to_socket_addrs().unwrap();
+            let stream = TcpStream::connect(addrs.next().unwrap())?;
+
+            Ok(MioNetwork { stream })
+        }
     }
 
-    fn deregister(&mut self, registry: &Registry) -> std::io::Result<()> {
-        self.stream.deregister(registry)
+    impl Network for MioNetwork {
+        fn close(&mut self) -> Result<()> {
+            self.stream.shutdown(Shutdown::Both)?;
+            Ok(())
+        }
+    }
+
+    impl Write for MioNetwork {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.stream.write(data)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.stream.flush()
+        }
+    }
+
+    impl Read for MioNetwork {
+        fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+            self.stream.read(b)
+        }
+    }
+
+    impl Source for MioNetwork {
+        fn register(
+            &mut self,
+            registry: &Registry,
+            token: Token,
+            interests: Interest,
+        ) -> std::io::Result<()> {
+            self.stream.register(registry, token, interests)
+        }
+
+        fn reregister(
+            &mut self,
+            registry: &Registry,
+            token: Token,
+            interests: Interest,
+        ) -> std::io::Result<()> {
+            self.stream.reregister(registry, token, interests)
+        }
+
+        fn deregister(&mut self, registry: &Registry) -> std::io::Result<()> {
+            self.stream.deregister(registry)
+        }
     }
 }
 

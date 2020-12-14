@@ -14,7 +14,7 @@ use crate::framing::{
     Performative, Source, Target, Transfer,
 };
 use crate::message::Message;
-use crate::transport::MioNetwork;
+use crate::transport::mio::MioNetwork;
 use log::{trace, warn};
 use mio::{Interest, Poll, Token};
 use rand::Rng;
