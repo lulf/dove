@@ -126,17 +126,24 @@ impl Buffer {
     fn clear(&mut self) {
         self.position = 0;
     }
-}
 
-impl Write for Buffer {
-    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-        if data.len() > self.buffer.len() - self.position {
+    fn write_buf(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        if data.len() > self.capacity - self.position {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "written data is bigger than output buffer",
             ));
         }
-        Ok(0)
+        println!("Copying {} bytes into {}", data.len(), self.position);
+        self.buffer[self.position..(self.position + data.len())].clone_from_slice(data);
+        self.position += data.len();
+        Ok(data.len())
+    }
+}
+
+impl Write for Buffer {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        self.write_buf(data)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -342,5 +349,27 @@ mod tests {
         let data = buf.fill(&mut &input[6..]).expect("Unable to fill buffer");
         assert_eq!(6, data.len());
         assert_eq!([2, 3, 4, 5, 6, 7], data);
+    }
+
+    #[test]
+    fn writebuffer() {
+        let mut buf = Buffer::new(6);
+        let result = buf.write_buf(&[1, 2, 3, 4, 5, 6, 7]);
+        assert!(result.is_err());
+        assert_eq!([0, 0, 0, 0, 0, 0], &buf.buffer[..buf.capacity]);
+
+        let result = buf.write_buf(&[1, 2, 3, 4]);
+        assert!(result.is_ok());
+        assert_eq!(4, result.unwrap());
+        assert_eq!([1, 2, 3, 4, 0, 0], &buf.buffer[..buf.capacity]);
+
+        let result = buf.write_buf(&[5, 6]);
+        assert!(result.is_ok());
+        assert_eq!(2, result.unwrap());
+        assert_eq!([1, 2, 3, 4, 5, 6], &buf.buffer[..buf.capacity]);
+
+        let result = buf.write_buf(&[7]);
+        assert!(result.is_err());
+        assert_eq!([1, 2, 3, 4, 5, 6], &buf.buffer[..buf.capacity]);
     }
 }
