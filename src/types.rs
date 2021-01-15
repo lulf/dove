@@ -6,7 +6,6 @@
 //! The types module contains the AMQP 1.0 types system encoders and decoders. By using these types you can enforce a certain encoding for your data.
 
 use log::trace;
-use std::collections::BTreeMap;
 use std::io::Write;
 use std::vec::Vec;
 
@@ -82,10 +81,10 @@ pub enum ValueRef<'a> {
     SymbolRef(&'a str),
     Array(&'a Vec<Value>),
     List(&'a Vec<Value>),
-    Map(&'a BTreeMap<Value, Value>),
+    Map(&'a Vec<(Value, Value)>),
     ArrayRef(&'a Vec<ValueRef<'a>>),
     ListRef(&'a Vec<ValueRef<'a>>),
-    MapRef(&'a BTreeMap<ValueRef<'a>, ValueRef<'a>>),
+    MapRef(&'a Vec<(ValueRef<'a>, ValueRef<'a>)>),
 }
 
 /**
@@ -109,7 +108,7 @@ pub enum Value {
     Symbol(Vec<u8>),
     Array(Vec<Value>),
     List(Vec<Value>),
-    Map(BTreeMap<Value, Value>),
+    Map(Vec<(Value, Value)>),
 }
 
 impl Value {

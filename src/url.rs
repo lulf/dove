@@ -71,7 +71,7 @@ impl Url<'_> {
                 (&input[pos + 1..], (&input[0..pos]).parse::<u16>()?)
             }
         } else {
-            (input, 5672 as u16)
+            (input, 5672_u16)
         };
 
         let address = if let Some(pos) = input.find('/') {
