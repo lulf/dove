@@ -441,43 +441,60 @@ impl<T: Encoder> Encoder for Option<T> {
 
 impl Encoder for Vec<(String, Value)> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let m = self.iter().map(|(k, v)| (ValueRef::String(k), v.value_ref())).collect();
+        let m = self
+            .iter()
+            .map(|(k, v)| (ValueRef::String(k), v.value_ref()))
+            .collect();
         ValueRef::MapRef(&m).encode(writer)
     }
 }
 
 impl Encoder for Vec<(Value, Value)> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let m = self.iter().map(|(k, v)| (k.value_ref(), v.value_ref())).collect();
+        let m = self
+            .iter()
+            .map(|(k, v)| (k.value_ref(), v.value_ref()))
+            .collect();
         ValueRef::MapRef(&m).encode(writer)
     }
 }
 
 impl Encoder for Vec<(Symbol, Value)> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let m = self.iter()
-                .map(|(k, v)| (ValueRef::Symbol(k.to_slice()), v.value_ref())).collect();
+        let m = self
+            .iter()
+            .map(|(k, v)| (ValueRef::Symbol(k.to_slice()), v.value_ref()))
+            .collect();
         ValueRef::MapRef(&m).encode(writer)
     }
 }
 
 impl Encoder for BTreeMap<String, Value> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let m = self.iter() .map(|(k, v)| (ValueRef::String(k), v.value_ref())).collect();
+        let m = self
+            .iter()
+            .map(|(k, v)| (ValueRef::String(k), v.value_ref()))
+            .collect();
         ValueRef::MapRef(&m).encode(writer)
     }
 }
 
 impl Encoder for BTreeMap<Value, Value> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let m = self.iter().map(|(k, v)| (k.value_ref(), v.value_ref())).collect();
+        let m = self
+            .iter()
+            .map(|(k, v)| (k.value_ref(), v.value_ref()))
+            .collect();
         ValueRef::MapRef(&m).encode(writer)
     }
 }
 
 impl Encoder for BTreeMap<Symbol, Value> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let m = self.iter().map(|(k, v)| (ValueRef::Symbol(k.to_slice()), v.value_ref())).collect();
+        let m = self
+            .iter()
+            .map(|(k, v)| (ValueRef::Symbol(k.to_slice()), v.value_ref()))
+            .collect();
         ValueRef::MapRef(&m).encode(writer)
     }
 }
