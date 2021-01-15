@@ -6,7 +6,6 @@
 //! The message module implements the AMQP 1.0 message format encoding and decoding.
 
 use byteorder::WriteBytesExt;
-use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::io::Write;
 use std::vec::Vec;
@@ -20,12 +19,12 @@ use crate::types::*;
 #[derive(Debug, Clone)]
 pub struct Message {
     pub header: Option<MessageHeader>,
-    pub delivery_annotations: Option<BTreeMap<Value, Value>>,
-    pub message_annotations: Option<BTreeMap<Value, Value>>,
+    pub delivery_annotations: Option<Vec<(Value, Value)>>,
+    pub message_annotations: Option<Vec<(Value, Value)>>,
     pub properties: Option<MessageProperties>,
-    pub application_properties: Option<BTreeMap<Value, Value>>,
+    pub application_properties: Option<Vec<(Value, Value)>>,
     pub body: MessageBody,
-    pub footer: Option<BTreeMap<Value, Value>>,
+    pub footer: Option<Vec<(Value, Value)>>,
 }
 
 #[derive(Debug, Clone)]

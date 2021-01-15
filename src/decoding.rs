@@ -7,7 +7,6 @@
 
 use byteorder::NetworkEndian;
 use byteorder::ReadBytesExt;
-use std::collections::BTreeMap;
 use std::io::Read;
 use std::vec::Vec;
 
@@ -176,22 +175,22 @@ fn decode_value_with_ctor(raw_code: u8, reader: &mut dyn Read) -> Result<Value> 
         TypeCode::Map8 => {
             let _sz = reader.read_u8()? as usize;
             let count = reader.read_u8()? as usize / 2;
-            let mut data: BTreeMap<Value, Value> = BTreeMap::new();
+            let mut data: Vec<(Value, Value)> = Vec::new();
             for _num in 0..count {
                 let key = decode_value(reader)?;
                 let value = decode_value(reader)?;
-                data.insert(key, value);
+                data.push((key, value));
             }
             Ok(Value::Map(data))
         }
         TypeCode::Map32 => {
             let _sz = reader.read_u32::<NetworkEndian>()? as usize;
             let count = reader.read_u32::<NetworkEndian>()? as usize / 2;
-            let mut data: BTreeMap<Value, Value> = BTreeMap::new();
+            let mut data: Vec<(Value, Value)> = Vec::new();
             for _num in 0..count {
                 let key = decode_value(reader)?;
                 let value = decode_value(reader)?;
-                data.insert(key, value);
+                data.push((key, value));
             }
             Ok(Value::Map(data))
         }
