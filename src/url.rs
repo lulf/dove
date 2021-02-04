@@ -53,25 +53,18 @@ impl Url<'_> {
             (input, None, None)
         };
 
-        let (input, hostname) = if let Some(pos) = input.find(':') {
-            (&input[pos + 1..], &input[0..pos])
-        } else if let Some(pos) = input.find('/') {
-            (&input[pos + 1..], &input[0..pos])
-        } else {
-            ("", input)
-        };
-
-        let (input, port) = if let Some(pos) = input.find(':') {
-            if let Some(end_pos) = input.find('/') {
-                (
-                    &input[end_pos + 1..],
-                    (&input[pos..end_pos]).parse::<u16>()?,
-                )
+        let (input, hostname, port) = if let Some(pos) = input.find(':') {
+            let (hostname, input) = (&input[0..pos], &input[pos + 1..]);
+            let (input, port) = if let Some(end_pos) = input.find('/') {
+                (&input[end_pos + 1..], (&input[..end_pos]).parse::<u16>()?)
             } else {
-                (&input[pos + 1..], (&input[0..pos]).parse::<u16>()?)
-            }
+                ("", input.parse::<u16>()?)
+            };
+            (input, hostname, port)
+        } else if let Some(pos) = input.find('/') {
+            (&input[pos + 1..], &input[0..pos], 5672 as u16)
         } else {
-            (input, 5672_u16)
+            ("", input, 5672_u16)
         };
 
         let address = if let Some(pos) = input.find('/') {
@@ -120,6 +113,9 @@ mod tests {
     fn test_port() {
         let url = Url::parse(r"amqp://localhost:56722/myqueue").expect("error parsing");
         assert_eq!(UrlScheme::AMQP, url.scheme);
+        assert_eq!(56722, url.port);
+        assert_eq!("localhost", url.hostname);
+        assert_eq!("myqueue", url.address);
     }
 
     #[test]
