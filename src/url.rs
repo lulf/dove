@@ -62,7 +62,7 @@ impl Url<'_> {
             };
             (input, hostname, port)
         } else if let Some(pos) = input.find('/') {
-            (&input[pos + 1..], &input[0..pos], 5672 as u16)
+            (&input[pos + 1..], &input[0..pos], 5672_u16)
         } else {
             ("", input, 5672_u16)
         };
