@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use uuid::Uuid;
 
 pub type DeliveryTag = Vec<u8>;
 pub type HandleId = u32;
@@ -378,11 +379,20 @@ impl SessionDriver {
         match frame.performative {
             Some(Performative::Attach(ref attach)) => {
                 {
+                    log::debug!(
+                        "Received attach on link {} with incoming id {}",
+                        attach.name,
+                        attach.handle
+                    );
                     let mut m = self.links.lock().unwrap();
                     let link = {
                         let mut link = None;
                         for l in m.values() {
                             if l.name == attach.name {
+                                log::debug!(
+                                    "Found outgoing link with same name with handle {}",
+                                    l.handle
+                                );
                                 link = Some(l.clone());
                                 break;
                             }
@@ -514,8 +524,10 @@ impl SessionDriver {
             }
             handle
         };
+        let link_name = format!("dove-{}-{}", Uuid::new_v4().to_string(), role.to_string());
+        log::debug!("Creating link {} with handle id {}", link_name, handle);
         let link = Arc::new(LinkDriver {
-            name: addr.to_string(),
+            name: link_name.clone(),
             role,
             channel: self.local_channel,
             driver: self.driver.clone(),
@@ -532,10 +544,9 @@ impl SessionDriver {
             m.insert(handle, link.clone());
         }
 
-        log::debug!("Attaching link with local handle {}", handle);
         // Send attach frame
         let attach = Attach {
-            name: addr.to_string(),
+            name: link_name,
             handle: handle as u32,
             role,
             snd_settle_mode: None,
@@ -697,7 +708,7 @@ impl LinkDriver {
                 incoming_window: props.incoming_window,
                 next_outgoing_id: props.next_outgoing_id,
                 outgoing_window: props.outgoing_window,
-                handle: None,
+                handle: Some(self.handle as u32),
                 delivery_count: Some(self.delivery_count.load(Ordering::SeqCst)),
                 link_credit: Some(credit),
                 available: None,
