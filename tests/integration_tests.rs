@@ -46,6 +46,7 @@ async fn test_artemis() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_qpid_dispatch() {
+
     timeout(Duration::from_secs(120), async move {
         setup();
         let docker = clients::Cli::default();

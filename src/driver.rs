@@ -113,6 +113,7 @@ impl SessionFlowControl {
 
 #[derive(Debug)]
 pub struct LinkDriver {
+    pub name: String,
     pub handle: u32,
     pub role: LinkRole,
     pub channel: ChannelId,
@@ -375,7 +376,23 @@ impl ConnectionDriver {
 impl SessionDriver {
     pub fn dispatch(&self, frame: AmqpFrame) -> Result<()> {
         match frame.performative {
-            Some(Performative::Attach(ref _attach)) => {
+            Some(Performative::Attach(ref attach)) => {
+                {
+                    let mut m = self.links.lock().unwrap();
+                    let link = {
+                        let mut link = None;
+                        for l in m.values() {
+                            if l.name == attach.name {
+                                link = Some(l.clone());
+                                break;
+                            }
+                        }
+                        link
+                    };
+                    if let Some(link) = link {
+                        m.insert(attach.handle, link);
+                    }
+                }
                 self.rx.send(frame)?;
             }
             Some(Performative::Detach(ref _detach)) => {
@@ -486,8 +503,19 @@ impl SessionDriver {
     }
 
     pub fn new_link(&self, addr: &str, role: LinkRole) -> Result<Arc<LinkDriver>> {
-        let handle = self.handle_generator.fetch_add(1, Ordering::SeqCst);
+        let handle: HandleId = {
+            let m = self.links.lock().unwrap();
+            let mut handle;
+            loop {
+                handle = self.handle_generator.fetch_add(1, Ordering::SeqCst);
+                if !m.contains_key(&handle) {
+                    break;
+                }
+            }
+            handle
+        };
         let link = Arc::new(LinkDriver {
+            name: addr.to_string(),
             role,
             channel: self.local_channel,
             driver: self.driver.clone(),
@@ -498,7 +526,7 @@ impl SessionDriver {
             credit: AtomicU32::new(0),
             delivery_count: AtomicU32::new(0),
         });
-        // TODO: Increment id
+
         {
             let mut m = self.links.lock().unwrap();
             m.insert(handle, link.clone());
@@ -669,7 +697,7 @@ impl LinkDriver {
                 incoming_window: props.incoming_window,
                 next_outgoing_id: props.next_outgoing_id,
                 outgoing_window: props.outgoing_window,
-                handle: Some(self.handle as u32),
+                handle: None,
                 delivery_count: Some(self.delivery_count.load(Ordering::SeqCst)),
                 link_credit: Some(credit),
                 available: None,
