@@ -22,7 +22,7 @@ fn setup() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_artemis() {
-    timeout(Duration::from_secs(60), async move {
+    timeout(Duration::from_secs(120), async move {
         setup();
         let docker = clients::Cli::default();
         let node = docker.run(
@@ -31,7 +31,7 @@ async fn test_artemis() {
                 .with_env_var("ARTEMIS_PASSWORD", "test"),
         );
         log::info!("ActiveMQ Artemis Started");
-        sleep(Duration::from_millis(20000)).await;
+        sleep(Duration::from_millis(30000)).await;
         let port: u16 = node.get_host_port(5672).unwrap();
         let opts = ConnectionOptions::new()
             .sasl_mechanism(SaslMechanism::Plain)
