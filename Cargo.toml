@@ -13,15 +13,15 @@ include = ["README.md", "LICENSE", "src/*.rs", "tests/*.rs", "examples/*.rs"]
 repository = "https://github.com/lulf/dove/"
 
 [dependencies]
-byteorder = "1.3.2"
+byteorder = "1.4"
 mio = { version = "0.7", features = ["tcp", "os-poll"] }
-uuid = { version = "0.7.4", features = ["v4"] }
-rand = "0.7.3"
-log = "0.4.11"
+uuid = { version = "0.8", features = ["v4"] }
+rand = "0.8"
+log = "0.4"
 
 [dev-dependencies]
-futures = "0.3.6"
+futures = "0.3"
 tokio = { version = "1", features = ["full"] }
-env_logger = "0.8.2"
-testcontainers = "0.11.0"
-reqwest = { version = "0.10", features = ["blocking"] }
+env_logger = "0.8"
+testcontainers = "0.12"
+reqwest = { version = "0.11" }
