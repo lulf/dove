@@ -74,13 +74,15 @@ async fn test_qpid_broker_j() {
         let config_dir_path = config_dir.as_path().to_str().unwrap();
 
         // Required to allow reading directory in container
-        let chcon_output = std::process::Command::new("chcon")
-            .arg("-t")
-            .arg("svirt_sandbox_file_t")
-            .arg(config_dir_path)
-            .output()
-            .expect("failed to run command");
-        log::info!("CHCON: {:?}", chcon_output);
+        if std::env::consts::OS == "linux" {
+            let chcon_output = std::process::Command::new("chcon")
+                .arg("-t")
+                .arg("svirt_sandbox_file_t")
+                .arg(config_dir_path)
+                .output()
+                .expect("failed to run command");
+            log::info!("CHCON: {:?}", chcon_output);
+        }
 
         let node = docker.run(
             images::generic::GenericImage::new("docker.io/chrisob/qpid-broker-j-docker:8.0.0")
