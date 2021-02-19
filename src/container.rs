@@ -142,12 +142,15 @@ impl Container {
 
     /// Process connections for this container.
     pub fn run(&self) {
+        self.running.store(true, Ordering::SeqCst);
         Container::do_work(self.running.clone(), self.container.clone());
     }
 
     fn do_work(running: Arc<AtomicBool>, container: Arc<ContainerInner>) {
+        log::debug!("Starting container processing loop");
         loop {
             if !running.load(Ordering::SeqCst) {
+                log::debug!("Stopping container processing loop");
                 return;
             }
             if let Err(e) = container.process() {
