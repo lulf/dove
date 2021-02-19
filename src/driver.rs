@@ -272,22 +272,40 @@ impl ConnectionDriver {
                                     let mut f = s.flow_control.lock().unwrap();
                                     f.remote_outgoing_window = begin.outgoing_window;
                                     f.remote_incoming_window = begin.incoming_window;
+                                    if let Some(remote_channel) = begin.remote_channel {
+                                        let mut cm = self.remote_channel_map.lock().unwrap();
+                                        cm.insert(channel, remote_channel);
+                                    }
                                 }
                                 s.rx.send(frame)?;
                             }
                         }
                         Performative::End(ref _end) => {
-                            let mut m = self.sessions.lock().unwrap();
-                            m.get_mut(&channel).map(|s| s.rx.send(frame));
-                        }
-                        _ => {
-                            let session = {
-                                let mut m = self.sessions.lock().unwrap();
-                                m.get_mut(&channel).cloned()
+                            let local_channel: Option<ChannelId> = {
+                                let cm = self.remote_channel_map.lock().unwrap();
+                                cm.get(&channel).cloned()
                             };
 
-                            if let Some(s) = session {
-                                s.dispatch(frame)?;
+                            if let Some(local_channel) = local_channel {
+                                let mut m = self.sessions.lock().unwrap();
+                                m.get_mut(&local_channel).map(|s| s.rx.send(frame));
+                            }
+                        }
+                        _ => {
+                            let local_channel: Option<ChannelId> = {
+                                let cm = self.remote_channel_map.lock().unwrap();
+                                cm.get(&channel).cloned()
+                            };
+
+                            if let Some(local_channel) = local_channel {
+                                let session = {
+                                    let mut m = self.sessions.lock().unwrap();
+                                    m.get_mut(&local_channel).cloned()
+                                };
+
+                                if let Some(s) = session {
+                                    s.dispatch(frame)?;
+                                }
                             }
                         }
                     }
@@ -297,7 +315,7 @@ impl ConnectionDriver {
         Ok(())
     }
 
-    fn allocate_session(&self, remote_channel_id: Option<ChannelId>) -> Option<Arc<SessionDriver>> {
+    fn allocate_session(&self) -> Option<Arc<SessionDriver>> {
         let mut m = self.sessions.lock().unwrap();
         for i in 0..self.channel_max {
             let chan = i as ChannelId;
@@ -314,7 +332,6 @@ impl ConnectionDriver {
                     did_to_delivery: Arc::new(Mutex::new(HashMap::new())),
                 });
                 m.insert(chan, session.clone());
-                remote_channel_id.map(|c| self.remote_channel_map.lock().unwrap().insert(c, chan));
                 return Some(session);
             }
         }
@@ -322,7 +339,7 @@ impl ConnectionDriver {
     }
 
     pub async fn new_session(&self, _opts: Option<SessionOpts>) -> Result<Arc<SessionDriver>> {
-        let session = self.allocate_session(None).unwrap();
+        let session = self.allocate_session().unwrap();
         let flow_control: SessionFlowControl = { session.flow_control.lock().unwrap().clone() };
         let begin = Begin {
             remote_channel: None,
@@ -334,6 +351,10 @@ impl ConnectionDriver {
             desired_capabilities: None,
             properties: None,
         };
+        log::debug!(
+            "Creating session with local channel {}",
+            session.local_channel
+        );
         self.driver
             .lock()
             .unwrap()
@@ -465,7 +486,6 @@ impl SessionDriver {
     }
 
     pub fn new_link(&self, addr: &str, role: LinkRole) -> Result<Arc<LinkDriver>> {
-        trace!("Creating new link!");
         let handle = self.handle_generator.fetch_add(1, Ordering::SeqCst);
         let link = Arc::new(LinkDriver {
             role,
@@ -484,6 +504,7 @@ impl SessionDriver {
             m.insert(handle, link.clone());
         }
 
+        log::debug!("Attaching link with local handle {}", handle);
         // Send attach frame
         let attach = Attach {
             name: addr.to_string(),
@@ -735,4 +756,10 @@ impl<T> Channel<T> {
         let r = self.rx.lock().unwrap().recv()?;
         Ok(r)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn check_handle_map() {}
 }

@@ -20,9 +20,9 @@ fn setup() {
     });
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_artemis() {
-    timeout(Duration::from_secs(120), async move {
+    timeout(Duration::from_secs(60), async move {
         setup();
         let docker = clients::Cli::default();
         let node = docker.run(
@@ -44,7 +44,6 @@ async fn test_artemis() {
     .expect("test timed out");
 }
 
-#[tokio::test]
 async fn test_qpid_dispatch() {
     timeout(Duration::from_secs(120), async move {
         setup();
@@ -62,7 +61,6 @@ async fn test_qpid_dispatch() {
     .expect("test timed out");
 }
 
-#[tokio::test]
 async fn test_qpid_broker_j() {
     timeout(Duration::from_secs(120), async move {
         setup();

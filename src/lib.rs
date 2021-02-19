@@ -22,6 +22,7 @@
 //! use dove::container::*;
 //! use futures::executor::block_on;
 //! use testcontainers::{clients, images, Docker};
+//! env_logger::init();
 //!
 //! // Start a broker that we can run the client against.
 //! let docker = clients::Cli::default();
