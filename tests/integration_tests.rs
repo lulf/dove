@@ -7,6 +7,7 @@ use dove::container::*;
 use dove::message::MessageBody;
 
 use futures::future::join_all;
+use std::process::Command;
 use std::sync::Once;
 use std::time::Duration;
 use testcontainers::{clients, images, Docker};
@@ -22,16 +23,18 @@ fn setup() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_artemis() {
+    setup();
+    let docker = clients::Cli::default();
+    let node = docker.run(
+        images::generic::GenericImage::new("docker.io/vromero/activemq-artemis:2-latest")
+            .with_env_var("ARTEMIS_USERNAME", "test")
+            .with_env_var("ARTEMIS_PASSWORD", "test"),
+    );
+    let id = node.id().to_string();
+    log::info!("ActiveMQ Artemis container started with id {}", id);
+    sleep(Duration::from_millis(30000)).await;
+
     timeout(Duration::from_secs(120), async move {
-        setup();
-        let docker = clients::Cli::default();
-        let node = docker.run(
-            images::generic::GenericImage::new("docker.io/vromero/activemq-artemis:2-latest")
-                .with_env_var("ARTEMIS_USERNAME", "test")
-                .with_env_var("ARTEMIS_PASSWORD", "test"),
-        );
-        log::info!("ActiveMQ Artemis Started");
-        sleep(Duration::from_millis(30000)).await;
         let port: u16 = node.get_host_port(5672).unwrap();
         let opts = ConnectionOptions::new()
             .sasl_mechanism(SaslMechanism::Plain)
@@ -41,56 +44,65 @@ async fn test_artemis() {
         multiple_clients(port, opts).await;
     })
     .await
-    .expect("test timed out");
+    .unwrap_or_else(|_| {
+        log::info!("ActiveMQ Artemis test timed out");
+        print_docker_log(id);
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_qpid_dispatch() {
+    setup();
+    let docker = clients::Cli::default();
+    let node = docker.run(images::generic::GenericImage::new(
+        "quay.io/interconnectedcloud/qdrouterd:1.12.0",
+    ));
+    let id = node.id().to_string();
+    log::info!("Router container started with id {}", id);
+    sleep(Duration::from_millis(10000)).await;
     timeout(Duration::from_secs(120), async move {
-        setup();
-        let docker = clients::Cli::default();
-        let node = docker.run(images::generic::GenericImage::new(
-            "quay.io/interconnectedcloud/qdrouterd:1.12.0",
-        ));
-        log::info!("Router Started");
-        sleep(Duration::from_millis(10000)).await;
         let port: u16 = node.get_host_port(5672).unwrap();
         let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
         multiple_clients(port, opts).await;
     })
     .await
-    .expect("test timed out");
+    .unwrap_or_else(|_| {
+        log::info!("Router test timed out");
+        print_docker_log(id);
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_qpid_broker_j() {
+    setup();
+
+    let mut config_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    config_dir.push("tests");
+    config_dir.push("qpid-broker-j");
+    log::info!("Loaded config from {:?}", config_dir);
+    let docker = clients::Cli::default();
+    let config_dir_path = config_dir.as_path().to_str().unwrap();
+
+    // Required to allow reading directory in container
+    if std::env::consts::OS == "linux" {
+        let chcon_output = std::process::Command::new("chcon")
+            .arg("-t")
+            .arg("svirt_sandbox_file_t")
+            .arg(config_dir_path)
+            .output()
+            .expect("failed to run command");
+        log::info!("CHCON: {:?}", chcon_output);
+    }
+
+    let node = docker.run(
+        images::generic::GenericImage::new("docker.io/chrisob/qpid-broker-j-docker:8.0.0")
+            .with_volume(config_dir_path, "/usr/local/etc"),
+    );
+    let id = node.id().to_string();
+    log::info!("Qpid Broker J container started with id {}", id);
+
+    sleep(Duration::from_millis(20000)).await;
     timeout(Duration::from_secs(120), async move {
-        setup();
-        let mut config_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        config_dir.push("tests");
-        config_dir.push("qpid-broker-j");
-        log::info!("Loaded config from {:?}", config_dir);
-        let docker = clients::Cli::default();
-        let config_dir_path = config_dir.as_path().to_str().unwrap();
-
-        // Required to allow reading directory in container
-        if std::env::consts::OS == "linux" {
-            let chcon_output = std::process::Command::new("chcon")
-                .arg("-t")
-                .arg("svirt_sandbox_file_t")
-                .arg(config_dir_path)
-                .output()
-                .expect("failed to run command");
-            log::info!("CHCON: {:?}", chcon_output);
-        }
-
-        let node = docker.run(
-            images::generic::GenericImage::new("docker.io/chrisob/qpid-broker-j-docker:8.0.0")
-                .with_volume(config_dir_path, "/usr/local/etc"),
-        );
-        log::info!("Qpid Broker J Started");
-        sleep(Duration::from_millis(20000)).await;
-
         // Create queues used by tests
         let client = reqwest::Client::new();
         let http_port: u16 = node.get_host_port(8080).unwrap();
@@ -103,7 +115,19 @@ async fn test_qpid_broker_j() {
         multiple_clients(port, opts).await;
     })
     .await
-    .expect("test timed out");
+    .unwrap_or_else(|_| {
+        log::info!("Qpid Broker J test timed out");
+        print_docker_log(id);
+    });
+}
+
+fn print_docker_log(id: String) {
+    let command = Command::new("docker")
+        .arg("logs")
+        .arg(id)
+        .output()
+        .expect("failed to execute docker logs");
+    log::info!("{}", String::from_utf8(command.stdout).unwrap());
 }
 
 async fn single_client(port: u16, opts: ConnectionOptions) {
