@@ -18,7 +18,7 @@
 
 //! # Example
 //!
-//! ```
+//! ```ignore
 //! use dove::container::*;
 //! use futures::executor::block_on;
 //! use testcontainers::{clients, images, Docker};
