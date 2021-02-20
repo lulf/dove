@@ -18,10 +18,11 @@
 
 //! # Example
 //!
-//! ```
+//! ```ignore
 //! use dove::container::*;
 //! use futures::executor::block_on;
 //! use testcontainers::{clients, images, Docker};
+//! env_logger::init();
 //!
 //! // Start a broker that we can run the client against.
 //! let docker = clients::Cli::default();
@@ -30,7 +31,7 @@
 //!         .with_env_var("ARTEMIS_USERNAME", "test")
 //!         .with_env_var("ARTEMIS_PASSWORD", "test")
 //! );
-//! std::thread::sleep(std::time::Duration::from_millis(10000));
+//! std::thread::sleep(std::time::Duration::from_millis(30000));
 //! let port: u16 = node.get_host_port(5672).unwrap();
 //!
 //! // Create client and connect

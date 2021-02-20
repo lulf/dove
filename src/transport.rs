@@ -108,12 +108,11 @@ impl Buffer {
         Ok(&self.buffer[0..self.position])
     }
 
-    fn consume(&mut self, nbytes: usize) -> Result<()> {
+    fn consume(&mut self, nbytes: usize) {
         // TODO: Should ideally avoid this copy by making this a circular buffer.
         self.buffer.rotate_left(nbytes);
         self.position -= nbytes;
         // println!("(Consume) Position is now {}", self.position);
-        Ok(())
     }
 
     fn written(&mut self) -> &[u8] {
@@ -189,7 +188,7 @@ impl<N: Network> Transport<N> {
         let mut buf = self.incoming.peek();
         if buf.len() >= 8 {
             let header = ProtocolHeader::decode(&mut buf)?;
-            self.incoming.consume(8)?;
+            self.incoming.consume(8);
             Ok(Some(header))
         } else {
             self.incoming.fill(&mut self.network)?;
@@ -217,7 +216,7 @@ impl<N: Network> Transport<N> {
                 if buf.len() >= frame_size - 8 {
                     let mut cursor = Cursor::new(&mut buf);
                     let frame = Frame::decode(header, &mut cursor)?;
-                    self.incoming.consume(frame_size)?;
+                    self.incoming.consume(frame_size);
                     self.last_received = Instant::now();
                     debug!("RX {:?}", frame);
                     return Ok(frame);
@@ -354,7 +353,7 @@ mod tests {
         assert_eq!(6, data.len());
         assert_eq!([1, 2, 3, 4, 5, 6], data);
 
-        buf.consume(1).expect("Unable to consume bytes");
+        buf.consume(1);
 
         let data = buf.fill(&mut &input[6..]).expect("Unable to fill buffer");
         assert_eq!(6, data.len());

@@ -324,6 +324,15 @@ pub enum LinkRole {
     Receiver,
 }
 
+impl LinkRole {
+    pub fn to_string(&self) -> &str {
+        match self {
+            LinkRole::Sender => "sender",
+            LinkRole::Receiver => "received",
+        }
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum SenderSettleMode {
