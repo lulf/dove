@@ -30,12 +30,12 @@ async fn test_artemis() {
             .with_env_var("ARTEMIS_USERNAME", "test")
             .with_env_var("ARTEMIS_PASSWORD", "test"),
     );
-    let id = node.id().to_string();
+    let id = node.id();
     log::info!("ActiveMQ Artemis container started with id {}", id);
     sleep(Duration::from_millis(30000)).await;
+    let port: u16 = node.get_host_port(5672).unwrap();
 
     timeout(Duration::from_secs(120), async move {
-        let port: u16 = node.get_host_port(5672).unwrap();
         let opts = ConnectionOptions::new()
             .sasl_mechanism(SaslMechanism::Plain)
             .username("test")
@@ -57,11 +57,12 @@ async fn test_qpid_dispatch() {
     let node = docker.run(images::generic::GenericImage::new(
         "quay.io/interconnectedcloud/qdrouterd:1.12.0",
     ));
-    let id = node.id().to_string();
+    let id = node.id();
     log::info!("Router container started with id {}", id);
     sleep(Duration::from_millis(10000)).await;
+    let port: u16 = node.get_host_port(5672).unwrap();
+
     timeout(Duration::from_secs(120), async move {
-        let port: u16 = node.get_host_port(5672).unwrap();
         let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
         multiple_clients(port, opts).await;
     })
@@ -98,18 +99,19 @@ async fn test_qpid_broker_j() {
         images::generic::GenericImage::new("docker.io/chrisob/qpid-broker-j-docker:8.0.0")
             .with_volume(config_dir_path, "/usr/local/etc"),
     );
-    let id = node.id().to_string();
+    let id = node.id();
     log::info!("Qpid Broker J container started with id {}", id);
 
     sleep(Duration::from_millis(20000)).await;
+    let http_port: u16 = node.get_host_port(8080).unwrap();
+    let port: u16 = node.get_host_port(5672).unwrap();
+
     timeout(Duration::from_secs(120), async move {
         // Create queues used by tests
         let client = reqwest::Client::new();
-        let http_port: u16 = node.get_host_port(8080).unwrap();
         create_queue(&client, http_port, "myqueue").await;
         create_queue(&client, http_port, "queue2").await;
 
-        let port: u16 = node.get_host_port(5672).unwrap();
         let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
         single_client(port, opts.clone()).await;
         multiple_clients(port, opts).await;
@@ -121,7 +123,7 @@ async fn test_qpid_broker_j() {
     });
 }
 
-fn print_docker_log(id: String) {
+fn print_docker_log(id: &str) {
     let command = Command::new("docker")
         .arg("logs")
         .arg(id)
