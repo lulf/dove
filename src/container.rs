@@ -15,6 +15,7 @@ use crate::transport;
 
 use log::{error, trace};
 use mio::{Events, Poll, Token, Waker};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -38,7 +39,7 @@ pub struct Container {
 
 struct ContainerInner {
     container_id: String,
-    poll: Mutex<Poll>,
+    poll: RefCell<Poll>,
     incoming: Channel<Token>,
     connections: Mutex<HashMap<Token, Arc<ConnectionDriver>>>,
     token_generator: AtomicU32,
@@ -102,6 +103,8 @@ pub struct Delivery {
     delivery: Arc<DeliveryDriver>,
 }
 
+unsafe impl std::marker::Sync for ContainerInner {}
+
 impl Container {
     /// Creates a new container that can be used to connect to AMQP endpoints.
     /// use the start() method to launch a worker thread that handles the connection processing,
@@ -116,7 +119,7 @@ impl Container {
         let inner = ContainerInner {
             container_id: container_id.to_string(),
             incoming: Channel::new(),
-            poll: Mutex::new(p),
+            poll: RefCell::new(p),
             connections: Mutex::new(HashMap::new()),
             token_generator: AtomicU32::new(0),
             waker,
@@ -291,6 +294,7 @@ impl ContainerInner {
     }
 
     fn process(&self) -> Result<()> {
+        let mut poll = self.poll.borrow_mut();
         // Register new connections
         loop {
             let result = self.incoming.try_recv();
@@ -300,7 +304,6 @@ impl ContainerInner {
                     let mut m = self.connections.lock().unwrap();
                     let conn = m.get_mut(&id);
                     if let Some(conn) = conn {
-                        let mut poll = self.poll.lock().unwrap();
                         conn.register(id, &mut poll)?;
                     }
                 }
@@ -326,10 +329,7 @@ impl ContainerInner {
         // Poll for new events
         let mut events = Events::with_capacity(1024);
         {
-            self.poll
-                .lock()
-                .unwrap()
-                .poll(&mut events, Some(Duration::from_millis(2000)))?;
+            poll.poll(&mut events, Some(Duration::from_millis(2000)))?;
         }
 
         let waker_token = Token(std::u32::MAX as usize);
