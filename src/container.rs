@@ -97,6 +97,7 @@ pub struct Disposition {
 /// Represent a delivery
 pub struct Delivery {
     settled: bool,
+    message: Option<Message>,
     waker: Arc<Waker>,
     link: Arc<LinkDriver>,
     delivery: Arc<DeliveryDriver>,
@@ -609,13 +610,14 @@ impl Receiver {
                         tag: transfer.delivery_tag.clone().unwrap(),
                         id: transfer.delivery_id.unwrap(),
                         remotely_settled: transfer.settled.unwrap_or(false),
+                        message: None,
                         settled: false,
-                        message,
                     });
                     return Ok(Delivery {
                         waker: self.waker.clone(),
                         settled: false,
                         link: self.link.clone(),
+                        message: Some(message),
                         delivery,
                     });
                 }
@@ -642,9 +644,14 @@ impl Drop for Receiver {
 }
 
 impl Delivery {
-    /// Retrieve the message associated with this delivery.
+    /// Retrieve reference to the message associated with this delivery.
     pub fn message(&self) -> &Message {
-        &self.delivery.message
+        &self.message.as_ref().unwrap()
+    }
+
+    // Take the message from the delivery to
+    pub fn take_message(&mut self) -> Option<Message> {
+        self.message.take()
     }
 
     /// Send a disposition for this delivery, indicating message settlement and delivery state.
