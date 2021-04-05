@@ -131,7 +131,7 @@ pub struct LinkDriver {
 
 #[derive(Debug)]
 pub struct DeliveryDriver {
-    pub message: Message,
+    pub message: Option<Message>,
     pub remotely_settled: bool,
     pub settled: bool,
     pub state: Option<DeliveryState>,
@@ -648,7 +648,7 @@ impl LinkDriver {
         self.delivery_count.fetch_add(1, Ordering::SeqCst);
         let delivery_tag = rand::thread_rng().gen::<[u8; 16]>().to_vec();
         let delivery = Arc::new(DeliveryDriver {
-            message,
+            message: Some(message),
             id: next_outgoing_id,
             tag: delivery_tag.clone(),
             state: None,
@@ -678,7 +678,9 @@ impl LinkDriver {
         };
 
         let mut msgbuf = Vec::new();
-        delivery.message.encode(&mut msgbuf)?;
+        if let Some(message) = delivery.message.as_ref() {
+            message.encode(&mut msgbuf)?;
+        }
 
         self.driver
             .lock()
