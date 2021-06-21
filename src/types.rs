@@ -125,7 +125,6 @@ impl Value {
             Value::Bool(ref value) => ValueRef::Bool(value),
             Value::String(ref value) => ValueRef::String(value),
             Value::Symbol(ref value) => ValueRef::Symbol(&value[..]),
-            Value::List(ref value) => ValueRef::List(value),
             Value::Ubyte(ref value) => ValueRef::Ubyte(value),
             Value::Ushort(ref value) => ValueRef::Ushort(value),
             Value::Uint(ref value) => ValueRef::Uint(value),
@@ -134,9 +133,12 @@ impl Value {
             Value::Short(ref value) => ValueRef::Short(value),
             Value::Int(ref value) => ValueRef::Int(value),
             Value::Long(ref value) => ValueRef::Long(value),
+            Value::Array(ref value) => ValueRef::Array(value),
+            Value::List(ref value) => ValueRef::List(value),
+            Value::Map(ref value) => ValueRef::Map(value),
             v => {
                 trace!("Cannot convert value ref {:?}", v);
-                panic!(format!("Cannot convert value ref {:?}", v));
+                panic!("Cannot convert value ref {:?}", v);
             }
         }
     }
