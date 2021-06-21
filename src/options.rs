@@ -89,13 +89,39 @@ impl ApplyOptionsTo<Attach> for ReceiverOptions {
     }
 }
 
+/// Sets the filter to be applied by the broker before sending the message
+/// through the link. Be aware, that some filters do nothing unless the correct
+/// exchange type is set.
 pub enum ReceiverFilter {
+    /// Filters for exact matches on `message.properties.subject`.
+    /// See 'apache.org:legacy-amqp-direct-binding:string'
+    /// # WARN
+    /// Requires exchange type 'direct'
+    ApacheLegacyExchangeDirectBinding(apache_legacy_exchange_direct_binding::Options),
+
+    /// Filters for pattern matches on `message.properties.subject`.
+    /// See 'apache.org:legacy-amqp-topic-binding:string'
+    /// # WARN
+    /// Requires exchange type 'topic'
+    ApacheLegacyExchangeTopicBinding(apache_legacy_exchange_topic_binding::Options),
+
+    /// Complex filter based on values set in `message.application_properties.*`.
+    /// See 'apache.org:legacy-amqp-headers-binding:map'
+    ///
+    /// # WARN
+    /// Requires exchange type 'headers'
     ApacheLegacyExchangeHeaderFilter(apache_legacy_exchange_headers_filter::Options),
 }
 
 impl ApplyOptionsTo<Attach> for ReceiverFilter {
     fn apply_options_to(&self, target: &mut Attach) {
         match self {
+            ReceiverFilter::ApacheLegacyExchangeDirectBinding(filter) => {
+                filter.apply_options_to(target)
+            }
+            ReceiverFilter::ApacheLegacyExchangeTopicBinding(filter) => {
+                filter.apply_options_to(target)
+            }
             ReceiverFilter::ApacheLegacyExchangeHeaderFilter(filter) => {
                 filter.apply_options_to(target)
             }
@@ -104,25 +130,62 @@ impl ApplyOptionsTo<Attach> for ReceiverFilter {
 }
 
 impl ReceiverFilter {
-    pub fn apache_legacy_exchange_headers_match_any<A: Into<String>, B: Into<String>>(
+    /// Filters for exact matches on `message.properties.subject`.
+    /// See 'apache.org:legacy-amqp-direct-binding:string'
+    ///
+    /// # WARN
+    /// Requires exchange type 'direct'
+    pub fn apache_legacy_exchange_direct_binding(value: impl Into<String>) -> Self {
+        Self::ApacheLegacyExchangeDirectBinding(
+            apache_legacy_exchange_direct_binding::Options::from(value),
+        )
+    }
+
+    /// Filters for pattern matches on `message.properties.subject`.
+    /// See 'apache.org:legacy-amqp-topic-binding:string'
+    ///
+    /// # WARN
+    /// Requires exchange type 'topic'
+    pub fn apache_legacy_exchange_topic_binding(pattern: impl Into<String>) -> Self {
+        Self::ApacheLegacyExchangeTopicBinding(apache_legacy_exchange_topic_binding::Options::from(
+            pattern,
+        ))
+    }
+
+    /// Complex filter based on values set in `message.application_properties.*`.
+    /// See 'apache.org:legacy-amqp-headers-binding:map'
+    ///
+    /// # WARN
+    /// Requires exchange type 'headers'
+    pub fn apache_legacy_exchange_header_binding_match_any<A: Into<String>, B: Into<String>>(
         kv_pairs: impl Iterator<Item = (A, B)>,
     ) -> Self {
-        Self::apache_legacy_exchange_headers(
+        Self::apache_legacy_exchange_header_binding(
             apache_legacy_exchange_headers_filter::MatchMode::Any,
             kv_pairs,
         )
     }
 
-    pub fn apache_legacy_exchange_headers_match_all<A: Into<String>, B: Into<String>>(
+    /// Complex filter based on values set in `message.application_properties.*`.
+    /// See 'apache.org:legacy-amqp-headers-binding:map'
+    ///
+    /// # WARN
+    /// Requires exchange type 'headers'
+    pub fn apache_legacy_exchange_header_binding_match_all<A: Into<String>, B: Into<String>>(
         kv_pairs: impl Iterator<Item = (A, B)>,
     ) -> Self {
-        Self::apache_legacy_exchange_headers(
+        Self::apache_legacy_exchange_header_binding(
             apache_legacy_exchange_headers_filter::MatchMode::All,
             kv_pairs,
         )
     }
 
-    fn apache_legacy_exchange_headers<A: Into<String>, B: Into<String>>(
+    /// Complex filter based on values set in `message.application_properties.*`.
+    /// See 'apache.org:legacy-amqp-headers-binding:map'
+    ///
+    /// # WARN
+    /// Requires exchange type 'headers'
+    fn apache_legacy_exchange_header_binding<A: Into<String>, B: Into<String>>(
         mode: apache_legacy_exchange_headers_filter::MatchMode,
         kv_pairs: impl Iterator<Item = (A, B)>,
     ) -> Self {
@@ -132,6 +195,78 @@ impl ReceiverFilter {
                 .map(|(key, value)| (key.into(), value.into()))
                 .collect(),
         })
+    }
+}
+
+pub mod apache_legacy_exchange_direct_binding {
+    use super::*;
+    use crate::symbol::Symbol;
+    use crate::types::Value;
+    use std::collections::{BTreeMap, HashMap};
+
+    pub struct Options(String);
+
+    impl<T: Into<String>> From<T> for Options {
+        fn from(value: T) -> Self {
+            Self(value.into())
+        }
+    }
+
+    impl ApplyOptionsTo<Attach> for Options {
+        fn apply_options_to(&self, target: &mut Attach) {
+            if let Some(source) = target.source.as_mut() {
+                source.filter = Some({
+                    let filter_symbol = "apache.org:legacy-amqp-direct-binding:string";
+                    let mut map = BTreeMap::new();
+                    map.insert(
+                        Symbol::from_string(filter_symbol),
+                        Value::Described(
+                            Box::new(Value::Symbol(
+                                Symbol::from_string(filter_symbol).to_slice().to_vec(),
+                            )),
+                            Box::new(Value::String(self.0.clone())),
+                        ),
+                    );
+                    map
+                });
+            }
+        }
+    }
+}
+
+pub mod apache_legacy_exchange_topic_binding {
+    use super::*;
+    use crate::symbol::Symbol;
+    use crate::types::Value;
+    use std::collections::{BTreeMap, HashMap};
+
+    pub struct Options(String);
+
+    impl<T: Into<String>> From<T> for Options {
+        fn from(value: T) -> Self {
+            Self(value.into())
+        }
+    }
+
+    impl ApplyOptionsTo<Attach> for Options {
+        fn apply_options_to(&self, target: &mut Attach) {
+            if let Some(source) = target.source.as_mut() {
+                source.filter = Some({
+                    let filter_symbol = "apache.org:legacy-amqp-topic-binding:string";
+                    let mut map = BTreeMap::new();
+                    map.insert(
+                        Symbol::from_string(filter_symbol),
+                        Value::Described(
+                            Box::new(Value::Symbol(
+                                Symbol::from_string(filter_symbol).to_slice().to_vec(),
+                            )),
+                            Box::new(Value::String(self.0.clone())),
+                        ),
+                    );
+                    map
+                });
+            }
+        }
     }
 }
 
