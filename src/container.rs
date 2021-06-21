@@ -27,6 +27,7 @@ use uuid::Uuid;
 pub use crate::conn::ConnectionOptions;
 pub use crate::framing::DeliveryState;
 pub use crate::message::{Message, MessageProperties};
+use crate::options::{LinkOptions, ReceiverOptions};
 pub use crate::sasl::SaslMechanism;
 pub use crate::types::{Value, ValueRef};
 
@@ -482,7 +483,27 @@ impl Session {
     /// Create a new receiving link for a given address cross this session. The
     /// is returned when the other side have confirmed its existence.
     pub async fn new_receiver(&self, addr: &str) -> Result<Receiver> {
-        let link = self.session.new_link(addr, LinkRole::Receiver)?;
+        self.new_receiver_with_link_options(addr, LinkRole::Receiver)
+            .await
+    }
+
+    /// Create a new receiving link for a given address cross this session. The
+    /// is returned when the other side have confirmed its existence.
+    pub async fn new_receiver_with_options<T: Into<ReceiverOptions>>(
+        &self,
+        addr: &str,
+        options: T,
+    ) -> Result<Receiver> {
+        self.new_receiver_with_link_options(addr, options.into())
+            .await
+    }
+
+    async fn new_receiver_with_link_options<T: Into<LinkOptions>>(
+        &self,
+        addr: &str,
+        options: T,
+    ) -> Result<Receiver> {
+        let link = self.session.new_link_with_options(addr, options.into())?;
         trace!("Created link, waiting for attach frame");
         self.waker.wake()?;
         loop {

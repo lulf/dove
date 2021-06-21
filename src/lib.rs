@@ -88,6 +88,7 @@ pub mod error;
 pub mod frame_codec;
 pub mod framing;
 pub mod message;
+pub mod options;
 pub mod sasl;
 pub mod symbol;
 pub mod transport;

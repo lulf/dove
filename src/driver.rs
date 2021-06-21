@@ -14,6 +14,7 @@ use crate::framing::{
     Performative, Source, Target, Transfer,
 };
 use crate::message::Message;
+use crate::options::LinkOptions;
 use crate::transport::mio::MioNetwork;
 use log::{trace, warn};
 use mio::{Interest, Poll, Token};
@@ -513,6 +514,15 @@ impl SessionDriver {
     }
 
     pub fn new_link(&self, addr: &str, role: LinkRole) -> Result<Arc<LinkDriver>> {
+        self.new_link_with_options(addr, LinkOptions::from(role))
+    }
+
+    pub fn new_link_with_options(
+        &self,
+        addr: &str,
+        options: LinkOptions,
+    ) -> Result<Arc<LinkDriver>> {
+        let role = options.role();
         let handle: HandleId = {
             let m = self.links.lock().unwrap();
             let mut handle;
@@ -588,7 +598,7 @@ impl SessionDriver {
         self.driver
             .lock()
             .unwrap()
-            .attach(self.local_channel, attach)?;
+            .attach(self.local_channel, options.applied_on_attach(attach))?;
         Ok(link)
     }
 
