@@ -110,7 +110,7 @@ pub enum ReceiverFilter {
     ///
     /// # WARN
     /// Requires exchange type 'headers'
-    ApacheLegacyExchangeHeaderFilter(apache_legacy_exchange_headers_filter::Options),
+    ApacheLegacyExchangeHeadersBinding(apache_legacy_exchange_headers_filter::Options),
 }
 
 impl ApplyOptionsTo<Attach> for ReceiverFilter {
@@ -122,7 +122,7 @@ impl ApplyOptionsTo<Attach> for ReceiverFilter {
             ReceiverFilter::ApacheLegacyExchangeTopicBinding(filter) => {
                 filter.apply_options_to(target)
             }
-            ReceiverFilter::ApacheLegacyExchangeHeaderFilter(filter) => {
+            ReceiverFilter::ApacheLegacyExchangeHeadersBinding(filter) => {
                 filter.apply_options_to(target)
             }
         }
@@ -157,10 +157,10 @@ impl ReceiverFilter {
     ///
     /// # WARN
     /// Requires exchange type 'headers'
-    pub fn apache_legacy_exchange_header_binding_match_any<A: Into<String>, B: Into<String>>(
+    pub fn apache_legacy_exchange_headers_binding_match_any<A: Into<String>, B: Into<String>>(
         kv_pairs: impl Iterator<Item = (A, B)>,
     ) -> Self {
-        Self::apache_legacy_exchange_header_binding(
+        Self::apache_legacy_exchange_headers_binding(
             apache_legacy_exchange_headers_filter::MatchMode::Any,
             kv_pairs,
         )
@@ -171,10 +171,10 @@ impl ReceiverFilter {
     ///
     /// # WARN
     /// Requires exchange type 'headers'
-    pub fn apache_legacy_exchange_header_binding_match_all<A: Into<String>, B: Into<String>>(
+    pub fn apache_legacy_exchange_headers_binding_match_all<A: Into<String>, B: Into<String>>(
         kv_pairs: impl Iterator<Item = (A, B)>,
     ) -> Self {
-        Self::apache_legacy_exchange_header_binding(
+        Self::apache_legacy_exchange_headers_binding(
             apache_legacy_exchange_headers_filter::MatchMode::All,
             kv_pairs,
         )
@@ -185,11 +185,11 @@ impl ReceiverFilter {
     ///
     /// # WARN
     /// Requires exchange type 'headers'
-    fn apache_legacy_exchange_header_binding<A: Into<String>, B: Into<String>>(
+    fn apache_legacy_exchange_headers_binding<A: Into<String>, B: Into<String>>(
         mode: apache_legacy_exchange_headers_filter::MatchMode,
         kv_pairs: impl Iterator<Item = (A, B)>,
     ) -> Self {
-        Self::ApacheLegacyExchangeHeaderFilter(apache_legacy_exchange_headers_filter::Options {
+        Self::ApacheLegacyExchangeHeadersBinding(apache_legacy_exchange_headers_filter::Options {
             mode,
             headers: kv_pairs
                 .map(|(key, value)| (key.into(), value.into()))
