@@ -161,8 +161,13 @@ impl Message {
         if let Some(ref properties) = self.properties {
             properties.encode(writer)?;
         }
+
         if let Some(ref application_properties) = self.application_properties {
-            application_properties.encode(writer)?;
+            ValueRef::Described(
+                Box::new(DESC_MESSAGE_APPLICATION_PROPERTIES.value_ref()),
+                Box::new(ValueRef::Map(application_properties)),
+            )
+            .encode(writer)?;
         }
 
         self.body.encode(writer)?;
