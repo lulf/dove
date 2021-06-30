@@ -202,7 +202,7 @@ pub mod apache_legacy_exchange_direct_binding {
     use super::*;
     use crate::symbol::Symbol;
     use crate::types::Value;
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
 
     pub struct Options(String);
 
@@ -238,7 +238,7 @@ pub mod apache_legacy_exchange_topic_binding {
     use super::*;
     use crate::symbol::Symbol;
     use crate::types::Value;
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
 
     pub struct Options(String);
 

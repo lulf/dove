@@ -224,7 +224,7 @@ impl ConnectionDriver {
 
         // Read frames until we're blocked
         let mut rx_frames = Vec::new();
-        {
+        let result = {
             let mut driver = self.driver.lock().unwrap();
             loop {
                 if self.closed.load(Ordering::SeqCst) {
@@ -237,20 +237,21 @@ impl ConnectionDriver {
                     Err(AmqpError::IoError(ref e))
                         if e.kind() == std::io::ErrorKind::WouldBlock =>
                     {
-                        break;
+                        break Ok(());
                     }
-                    Err(e) => {
-                        return Err(e);
+                    Err(_) => {
+                        break result;
                     }
                 }
             }
-        }
+        };
 
         if !rx_frames.is_empty() {
             trace!("Dispatching {:?} frames", rx_frames.len());
         }
 
-        self.dispatch(rx_frames)
+        let dispatch_result = self.dispatch(rx_frames);
+        result.and_then(|_| dispatch_result)
     }
 
     fn dispatch(&self, mut frames: Vec<Frame>) -> Result<()> {

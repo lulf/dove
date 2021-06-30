@@ -101,6 +101,11 @@ impl Buffer {
     fn fill(&mut self, reader: &mut dyn Read) -> Result<&[u8]> {
         if self.position < self.capacity {
             let len = reader.read(&mut self.buffer[self.position..self.capacity])?;
+            if len == 0 && self.capacity.saturating_sub(self.position) > 0 {
+                return Err(AmqpError::IoError(std::io::Error::from(
+                    std::io::ErrorKind::UnexpectedEof,
+                )));
+            }
             self.position += len;
             // println!("Filled {} bytes", len);
         }

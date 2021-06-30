@@ -163,7 +163,15 @@ impl Container {
                     "{}: error while processing: {:?}",
                     container.container_id, e
                 );
+                break;
             }
+        }
+        running.store(false, Ordering::SeqCst);
+        if let Err(e) = container.close() {
+            error!(
+                "{}: failed to properly close: {:?}",
+                container.container_id, e
+            );
         }
     }
 
@@ -359,9 +367,15 @@ impl ContainerInner {
             match result {
                 Err(AmqpError::Amqp(condition)) => {
                     self.close_connection(id, &c, Some(condition))?;
+                    return Err(AmqpError::IoError(std::io::Error::from(
+                        std::io::ErrorKind::UnexpectedEof,
+                    )));
                 }
                 Err(_) => {
                     self.close_connection(id, &c, None)?;
+                    return Err(AmqpError::IoError(std::io::Error::from(
+                        std::io::ErrorKind::UnexpectedEof,
+                    )));
                 }
                 _ => {}
             }
