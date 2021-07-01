@@ -234,10 +234,10 @@ fn decode_type(code: u8) -> Result<TypeCode> {
         0xD1 => Ok(TypeCode::Map32),
         0xE0 => Ok(TypeCode::Array8),
         0xF0 => Ok(TypeCode::Array32),
-        _ => Err(AmqpError::amqp_error(
-            condition::DECODE_ERROR,
-            Some(format!("Unknown type code: 0x{:X}", code).as_str()),
-        )),
+        _ => Err(AmqpError::AmqpDecodeError(Some(format!(
+            "Unknown type code: 0x{:X}",
+            code
+        )))),
     }
 }
 

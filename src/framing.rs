@@ -1348,22 +1348,16 @@ impl Frame {
                         None => Err(AmqpError::decode_error(Some("Error decoding sasl frame"))),
                     }
                 } else {
-                    Err(AmqpError::amqp_error(
-                        condition::connection::FRAMING_ERROR,
-                        Some("Sasl frame not matched"),
-                    ))
+                    Err(AmqpError::framing_error(Some("Sasl frame not matched")))
                 }
             } else {
-                Err(AmqpError::amqp_error(
-                    condition::connection::FRAMING_ERROR,
-                    Some("Sasl frame not matched"),
-                ))
+                Err(AmqpError::framing_error(Some("Sasl frame not matched")))
             }
         } else {
-            Err(AmqpError::amqp_error(
-                condition::connection::FRAMING_ERROR,
-                Some(format!("Unknown frame type {}", header.frame_type).as_str()),
-            ))
+            Err(AmqpError::AmqpConnectionFramingError(Some(format!(
+                "Unknown frame type {}",
+                header.frame_type
+            ))))
         }
     }
 }

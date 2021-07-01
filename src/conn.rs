@@ -238,10 +238,7 @@ impl<N: Network> Connection<N> {
                 frames.push(frame);
             }
             ConnectionState::Closed => {
-                return Err(AmqpError::amqp_error(
-                    condition::connection::CONNECTION_FORCED,
-                    None,
-                ));
+                return Err(AmqpError::AmqpConnectionForced);
             }
         }
         Ok(())

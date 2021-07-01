@@ -79,10 +79,7 @@ impl<'a> FrameDecoder<'a> {
     pub fn decode<T: TryFromValue>(&mut self, value: &mut T, required: bool) -> Result<()> {
         if self.args.is_empty() {
             if required {
-                return Err(AmqpError::amqp_error(
-                    condition::DECODE_ERROR,
-                    Some("Unexpected end of list"),
-                ));
+                return Err(AmqpError::decode_error(Some("Unexpected end of list")));
             } else {
                 return Ok(());
             }
@@ -93,10 +90,9 @@ impl<'a> FrameDecoder<'a> {
             let v = arg;
             *value = T::try_from(v)?;
         } else if required {
-            return Err(AmqpError::amqp_error(
-                condition::DECODE_ERROR,
-                Some("Decoded null value for required argument"),
-            ));
+            return Err(AmqpError::decode_error(Some(
+                "Decoded null value for required argument",
+            )));
         }
         Ok(())
     }
@@ -111,10 +107,9 @@ impl Encoder for FrameEncoder {
         writer.write_u8(0)?;
         self.desc.encode(writer)?;
         if self.args.len() > LIST32_MAX {
-            return Err(AmqpError::amqp_error(
-                condition::DECODE_ERROR,
-                Some("Encoded list size cannot be longer than 4294967291 bytes"),
-            ));
+            return Err(AmqpError::decode_error(Some(
+                "Encoded list size cannot be longer than 4294967291 bytes",
+            )));
         } else if self.args.len() > LIST8_MAX {
             writer.write_u8(TypeCode::List32 as u8)?;
             writer.write_u32::<NetworkEndian>((4 + self.args.len()) as u32)?;

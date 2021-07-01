@@ -4,6 +4,7 @@
  */
 
 use dove::container::*;
+use dove::error::AmqpError;
 use dove::message::MessageBody;
 
 use futures::future::join_all;
@@ -170,20 +171,22 @@ async fn single_client(port: u16, opts: ConnectionOptions) {
     let mut messages = Vec::new();
     log::info!("{}: sending messages", container.container_id());
     for i in 0..to_send {
-        let message =
+        let mut message =
             Message::amqp_value(Value::String(format!("Hello, World: {}", i).to_string()));
 
         let start = Instant::now();
         messages.push(loop {
             // a future does nothing unless polled / awaited ...
-            match sender.send(message.clone()).await {
-                Err(e) => {
+            match sender.send(message).await {
+                Err(AmqpError::NotEnoughCreditsToSend(m)) => {
                     if start.elapsed() > Duration::from_secs(5) {
-                        panic!("Failed to send message: {:?}", e);
+                        panic!("Did not receive enough credits within timeout to send message",);
                     } else {
                         sleep(Duration::from_millis(100)).await;
+                        message = *m;
                     }
                 }
+                Err(e) => panic!("Failed to send message: {:?}", e),
                 Ok(result) => break result,
             }
         });

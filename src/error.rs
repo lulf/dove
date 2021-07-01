@@ -5,20 +5,47 @@
 
 //! The error module implements all AMQP 1.0 error types that is supported by dove. Conversion from many different error types are supported.
 
+use crate::message::Message;
 use async_channel::{RecvError, SendError, TryRecvError, TrySendError};
-use std::error;
-use std::fmt;
 use std::io;
 
 pub type Result<T> = std::result::Result<T, AmqpError>;
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum AmqpError {
-    IoError(io::Error),
+    #[error("IoError: {0:?}")]
+    IoError(#[from] io::Error),
+    #[error("AmqpError: {0:?}")]
     Amqp(ErrorCondition),
+    #[error("GenericError: {0:?}")]
     Generic(String),
+    #[error("SendError")]
     SendError,
+    #[error("ReceiveError: {0:?}")]
     ReceiveError(TryRecvError),
+
+    #[error("amqp:internal-error")]
+    AmqpInternalError,
+    #[error("amqp:not-found")]
+    AmqpNotFound,
+    #[error("amqp:decode-error (description: {0:?})")]
+    AmqpDecodeError(Option<String>),
+    #[error("amqp:not-implemented")]
+    AmqpNotImplemented,
+    #[error("amqp:resource-limit-exceeded")]
+    AmqpResourceLimitExceeded,
+
+    #[error("amqp:connection:forced")]
+    AmqpConnectionForced,
+    #[error("amqp:connection:framing-error (description: {0:?})")]
+    AmqpConnectionFramingError(Option<String>),
+    #[error("amqp:connection:redirect")]
+    AmqpConnectionRedirect,
+
+    /// `Message` is 456 bytes large, the second-largest variant
+    /// is `ErrorCondition` with 48 bytes, therefore `Message` is boxed
+    #[error("The link does not have enough credits to send a message")]
+    NotEnoughCreditsToSend(Box<Message>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,50 +73,19 @@ impl AmqpError {
         AmqpError::Generic(s.to_string())
     }
     pub fn internal_error() -> AmqpError {
-        AmqpError::amqp_error(condition::INTERNAL_ERROR, None)
+        AmqpError::AmqpInternalError
     }
 
-    pub fn framing_error() -> AmqpError {
-        AmqpError::amqp_error(condition::connection::FRAMING_ERROR, None)
+    pub fn framing_error(description: Option<&str>) -> AmqpError {
+        AmqpError::AmqpConnectionFramingError(description.map(ToString::to_string))
     }
 
     pub fn not_implemented() -> AmqpError {
-        AmqpError::amqp_error(condition::NOT_IMPLEMENTED, None)
+        AmqpError::AmqpNotImplemented
     }
 
     pub fn decode_error(description: Option<&str>) -> AmqpError {
-        AmqpError::amqp_error(condition::DECODE_ERROR, description)
-    }
-
-    pub fn amqp_error(condition: &'static str, description: Option<&str>) -> AmqpError {
-        AmqpError::Amqp(ErrorCondition {
-            condition: condition.to_string(),
-            description: description.unwrap_or("").to_string(),
-        })
-    }
-}
-
-impl error::Error for AmqpError {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        None
-    }
-}
-
-impl fmt::Display for AmqpError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            AmqpError::IoError(e) => write!(f, "{}", e.to_string()),
-            AmqpError::Amqp(s) => write!(f, "{:?}", s),
-            AmqpError::Generic(s) => write!(f, "{}", s),
-            AmqpError::SendError => write!(f, "Failed to send, channel full or closed"),
-            AmqpError::ReceiveError(e) => write!(f, "Failed to receive: {}", e),
-        }
-    }
-}
-
-impl std::convert::From<io::Error> for AmqpError {
-    fn from(error: io::Error) -> Self {
-        AmqpError::IoError(error)
+        AmqpError::AmqpDecodeError(description.map(ToString::to_string))
     }
 }
 

@@ -137,7 +137,7 @@ impl Message {
                         }
                     }
                     _ => {
-                        return Err(AmqpError::framing_error());
+                        return Err(AmqpError::framing_error(None));
                     }
                 }
             } else {
