@@ -5,8 +5,6 @@
 
 //! The transport module contains the network connectivity transport for the upper layers. It is implemented using mio.
 
-use log::{debug, trace};
-
 use std::fmt::Debug;
 use std::io::Cursor;
 use std::io::Read;
@@ -16,6 +14,7 @@ use std::time::Instant;
 
 use crate::error::*;
 use crate::framing::*;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Version(pub u8, pub u8, pub u8);
@@ -101,6 +100,7 @@ impl Buffer {
     fn fill(&mut self, reader: &mut dyn Read) -> Result<&[u8]> {
         if self.position < self.capacity {
             let len = reader.read(&mut self.buffer[self.position..self.capacity])?;
+
             if len == 0 && self.capacity.saturating_sub(self.position) > 0 {
                 return Err(AmqpError::IoError(std::io::Error::from(
                     std::io::ErrorKind::UnexpectedEof,
@@ -156,14 +156,55 @@ pub trait Network: Read + Write + Debug {
     fn close(&mut self) -> Result<()>;
 }
 
+pub struct TransportInfo {
+    last_sent: Mutex<Instant>,
+    last_received: Mutex<Instant>,
+}
+
+impl TransportInfo {
+    fn update_last_sent(&self) {
+        *self.last_sent.lock().unwrap() = Instant::now();
+    }
+
+    pub fn last_sent(&self) -> Instant {
+        *self.last_sent.lock().unwrap()
+    }
+
+    fn update_last_received(&self) {
+        *self.last_received.lock().unwrap() = Instant::now();
+    }
+
+    pub fn last_received(&self) -> Instant {
+        *self.last_received.lock().unwrap()
+    }
+}
+
+impl Debug for TransportInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("TransportInfo")
+            .field("last_sent", &self.last_sent())
+            .field("last_received", &self.last_received())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for TransportInfo {
+    fn default() -> Self {
+        let now = Instant::now();
+        TransportInfo {
+            last_sent: Mutex::new(now),
+            last_received: Mutex::new(now),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Transport<N: Network> {
     network: N,
     incoming: Buffer,
     outgoing: Buffer,
     max_frame_size: usize,
-    last_sent: Instant,
-    last_received: Instant,
+    info: Arc<TransportInfo>,
 }
 
 impl<N: Network> Transport<N> {
@@ -175,9 +216,12 @@ impl<N: Network> Transport<N> {
             incoming: Buffer::new(max_frame_size),
             outgoing: Buffer::new(max_frame_size),
             max_frame_size,
-            last_sent: Instant::now(),
-            last_received: Instant::now(),
+            info: Arc::new(TransportInfo::default()),
         }
+    }
+
+    pub fn info(&self) -> &Arc<TransportInfo> {
+        &self.info
     }
 
     pub fn network(&mut self) -> &mut N {
@@ -222,7 +266,7 @@ impl<N: Network> Transport<N> {
                     let mut cursor = Cursor::new(&mut buf);
                     let frame = Frame::decode(header, &mut cursor)?;
                     self.incoming.consume(frame_size);
-                    self.last_received = Instant::now();
+                    self.info.update_last_received();
                     debug!("RX {:?}", frame);
                     return Ok(frame);
                 } else {
@@ -236,7 +280,7 @@ impl<N: Network> Transport<N> {
 
     pub fn write_frame(&mut self, frame: &Frame) -> Result<usize> {
         let sz = frame.encode(&mut self.outgoing)?;
-        self.last_sent = Instant::now();
+        self.info.update_last_sent();
         self.flush()?;
         Ok(sz)
     }
@@ -254,20 +298,12 @@ impl<N: Network> Transport<N> {
         self.outgoing.clear();
         Ok(len)
     }
-
-    pub fn last_received(&self) -> Instant {
-        self.last_received
-    }
-
-    pub fn last_sent(&self) -> Instant {
-        self.last_sent
-    }
 }
 
 pub mod mio {
     use mio::event::Source;
     use mio::net::TcpStream;
-    use mio::{Interest, Registry, Token};
+    use mio::{Interest, Poll, Registry, Token};
 
     use super::Network;
     use crate::error::*;
@@ -287,6 +323,15 @@ pub mod mio {
             let stream = TcpStream::connect(addrs.next().unwrap())?;
 
             Ok(MioNetwork { stream })
+        }
+
+        pub fn register(&mut self, id: Token, poll: &mut Poll) -> Result<()> {
+            poll.registry().register(
+                &mut self.stream,
+                id,
+                Interest::READABLE | Interest::WRITABLE,
+            )?;
+            Ok(())
         }
     }
 

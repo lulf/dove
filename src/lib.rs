@@ -78,7 +78,12 @@
 //!
 //! });
 //! ```
+
+#[macro_use]
+extern crate log;
+
 pub mod conn;
+pub mod connection;
 pub mod container;
 pub mod convert;
 pub mod decoding;

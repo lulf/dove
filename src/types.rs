@@ -5,7 +5,6 @@
 
 //! The types module contains the AMQP 1.0 types system encoders and decoders. By using these types you can enforce a certain encoding for your data.
 
-use log::trace;
 use std::io::Write;
 use std::vec::Vec;
 
@@ -19,10 +18,10 @@ pub trait Encoder {
 }
 
 // Various constants used in encoding and decoding.
-pub const U8_MAX: usize = std::u8::MAX as usize;
+pub const U8_MAX: usize = u8::MAX as usize;
 pub const I8_MAX: usize = std::i8::MAX as usize;
-pub const LIST8_MAX: usize = (std::u8::MAX as usize) - 1;
-pub const LIST32_MAX: usize = (std::u32::MAX as usize) - 4;
+pub const LIST8_MAX: usize = (u8::MAX as usize) - 1;
+pub const LIST32_MAX: usize = (u32::MAX as usize) - 4;
 
 pub const DESC_OPEN: Value = Value::Ulong(0x10);
 pub const DESC_BEGIN: Value = Value::Ulong(0x11);

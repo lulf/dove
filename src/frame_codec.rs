@@ -7,7 +7,6 @@
 
 use byteorder::NetworkEndian;
 use byteorder::WriteBytesExt;
-use log::trace;
 use std::io::Write;
 use std::vec::Vec;
 

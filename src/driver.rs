@@ -5,23 +5,19 @@
 
 //! The driver module is an intermediate layer with the core logic for interacting with different AMQP 1.0 endpoint entities (connections, sessions, links).
 
-use crate::conn;
 use crate::conn::ChannelId;
+use crate::connection::ConnectionHandle;
 use crate::error::*;
 use crate::framing;
 use crate::framing::{
-    AmqpFrame, Attach, Begin, Close, DeliveryState, Detach, End, Flow, Frame, LinkRole,
+    AmqpFrame, Attach, Begin, Close, DeliveryState, Detach, End, Flow, Frame, LinkRole, Open,
     Performative, Source, Target, Transfer,
 };
 use crate::message::Message;
 use crate::options::LinkOptions;
-use crate::transport::mio::MioNetwork;
-use log::{trace, warn};
-use mio::{Interest, Poll, Token};
 use rand::Rng;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -33,7 +29,7 @@ pub type HandleId = u32;
 pub struct ConnectionDriver {
     channel_max: u16,
     idle_timeout: Duration,
-    driver: Arc<Mutex<conn::Connection<MioNetwork>>>,
+    connection: ConnectionHandle,
     sessions: Mutex<HashMap<ChannelId, Arc<SessionDriver>>>,
 
     // Frames received on this connection
@@ -48,7 +44,7 @@ pub struct ConnectionDriver {
 #[derive(Debug)]
 pub struct SessionDriver {
     // Frames received on this session
-    driver: Arc<Mutex<conn::Connection<MioNetwork>>>,
+    connection: ConnectionHandle,
     local_channel: ChannelId,
     rx: Channel<AmqpFrame>,
     links: Mutex<HashMap<HandleId, Arc<LinkDriver>>>,
@@ -119,7 +115,7 @@ pub struct LinkDriver {
     pub handle: u32,
     pub role: LinkRole,
     pub channel: ChannelId,
-    driver: Arc<Mutex<conn::Connection<MioNetwork>>>,
+    connection: ConnectionHandle,
     rx: Channel<AmqpFrame>,
 
     session_flow_control: Arc<Mutex<SessionFlowControl>>,
@@ -145,32 +141,28 @@ pub struct SessionOpts {
 }
 
 impl ConnectionDriver {
-    pub fn new(conn: conn::Connection<MioNetwork>) -> ConnectionDriver {
+    pub fn new(connection: ConnectionHandle) -> ConnectionDriver {
         ConnectionDriver {
-            driver: Arc::new(Mutex::new(conn)),
+            connection,
             rx: Channel::new(),
             sessions: Mutex::new(HashMap::new()),
             remote_channel_map: Mutex::new(HashMap::new()),
             idle_timeout: Duration::from_secs(5),
             remote_idle_timeout: Duration::from_secs(0),
-            channel_max: std::u16::MAX,
+            channel_max: u16::MAX,
             closed: AtomicBool::new(false),
         }
     }
 
-    pub fn register(&self, id: Token, poll: &mut Poll) -> Result<()> {
-        let mut d = self.driver.lock().unwrap();
-        let network = d.transport().network();
-        poll.registry()
-            .register(&mut *network, id, Interest::READABLE | Interest::WRITABLE)?;
-        Ok(())
+    pub fn closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
     }
 
-    pub fn driver(&self) -> std::sync::MutexGuard<conn::Connection<MioNetwork>> {
-        self.driver.lock().unwrap()
+    pub fn connection(&self) -> &ConnectionHandle {
+        &self.connection
     }
 
-    pub fn flowcontrol(&self, connection: &mut conn::Connection<MioNetwork>) -> Result<()> {
+    pub fn flowcontrol(&self) -> Result<()> {
         let low_flow_watermark = 100;
         let high_flow_watermark = 1000;
 
@@ -179,7 +171,7 @@ impl ConnectionDriver {
                 if link.role == LinkRole::Receiver {
                     let credit = link.credit.load(Ordering::SeqCst);
                     if credit <= low_flow_watermark {
-                        link.flowcontrol(high_flow_watermark, connection)?;
+                        link.flow(high_flow_watermark)?;
                     }
                 }
             }
@@ -187,23 +179,30 @@ impl ConnectionDriver {
         Ok(())
     }
 
-    pub fn keepalive(&self, connection: &mut conn::Connection<MioNetwork>) -> Result<()> {
-        // Sent out keepalives...
+    pub fn keepalive(&self) -> Result<()> {
         let now = Instant::now();
+        let last_received = self.connection.keepalive(self.remote_idle_timeout, now)?;
 
-        let last_received = connection.keepalive(self.remote_idle_timeout, now)?;
         if self.idle_timeout.as_millis() > 0 {
             // Ensure our peer honors our keepalive
             if now - last_received > self.idle_timeout * 2 {
-                connection.close(Close {
+                self.connection.close(Close {
                     error: Some(ErrorCondition {
                         condition: condition::RESOURCE_LIMIT_EXCEEDED.to_string(),
                         description: "local-idle-timeout expired".to_string(),
                     }),
                 })?;
+                warn!("Connection timed out");
+                return Err(AmqpError::IoError(std::io::Error::from(
+                    std::io::ErrorKind::TimedOut,
+                )));
             }
         }
         Ok(())
+    }
+
+    pub fn open(&self, open: Open) -> Result<()> {
+        self.connection.open(open)
     }
 
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
@@ -211,60 +210,19 @@ impl ConnectionDriver {
             return Ok(());
         }
 
-        for session in self.sessions.lock().unwrap().values() {
+        for (_id, session) in core::mem::take(&mut *self.sessions.lock().unwrap()) {
             session.rx.close();
-            for link in session.links.lock().unwrap().values() {
+            for (_id, link) in core::mem::take(&mut *session.links.lock().unwrap()) {
                 link.rx.close();
             }
         }
 
-        let mut driver = self.driver.lock().unwrap();
-        driver.close(Close { error })?;
-        driver.flush()?;
-        driver.shutdown()?;
-        Ok(())
+        self.rx.close();
+        self.connection.close(Close { error })
     }
 
-    pub fn process(&self) -> Result<()> {
-        if self.closed.load(Ordering::SeqCst) {
-            return Ok(());
-        }
-
-        // Read frames until we're blocked
-        let mut rx_frames = Vec::new();
-        let result = {
-            let mut driver = self.driver.lock().unwrap();
-            loop {
-                if self.closed.load(Ordering::SeqCst) {
-                    return Ok(());
-                }
-                let result = driver.process(&mut rx_frames);
-                match result {
-                    Ok(_) => {}
-                    // This means that we should poll again to await further I/O action for this driver.
-                    Err(AmqpError::IoError(ref e))
-                        if e.kind() == std::io::ErrorKind::WouldBlock =>
-                    {
-                        break Ok(());
-                    }
-                    Err(_) => {
-                        break result;
-                    }
-                }
-            }
-        };
-
-        if !rx_frames.is_empty() {
-            trace!("Dispatching {:?} frames", rx_frames.len());
-        }
-
-        let dispatch_result = self.dispatch(rx_frames);
-        result.and_then(|_| dispatch_result)
-    }
-
-    fn dispatch(&self, mut frames: Vec<Frame>) -> Result<()> {
-        // Process received frames.
-        for frame in frames.drain(..) {
+    pub(crate) fn dispatch(&self, frames: Vec<Frame>) -> Result<()> {
+        for frame in frames {
             if let Frame::AMQP(frame) = frame {
                 trace!("Got AMQP frame: {:?}", frame.performative);
                 if let Some(ref performative) = frame.performative {
@@ -333,7 +291,7 @@ impl ConnectionDriver {
             let chan = i as ChannelId;
             if !m.contains_key(&chan) {
                 let session = Arc::new(SessionDriver {
-                    driver: self.driver.clone(),
+                    connection: self.connection.clone(),
                     local_channel: chan,
                     rx: Channel::new(),
                     links: Mutex::new(HashMap::new()),
@@ -363,15 +321,12 @@ impl ConnectionDriver {
             desired_capabilities: None,
             properties: None,
         };
-        log::debug!(
+        debug!(
             "Creating session with local channel {}",
             session.local_channel
         );
-        self.driver
-            .lock()
-            .unwrap()
-            .begin(session.local_channel, begin)?;
 
+        self.connection.begin(session.local_channel, begin)?;
         Ok(session)
     }
 
@@ -391,17 +346,16 @@ impl SessionDriver {
         match frame.performative {
             Some(Performative::Attach(ref attach)) => {
                 {
-                    log::debug!(
+                    debug!(
                         "Received attach on link {} with incoming id {}",
-                        attach.name,
-                        attach.handle
+                        attach.name, attach.handle
                     );
                     let mut m = self.links.lock().unwrap();
                     let link = {
                         let mut link = None;
                         for l in m.values() {
                             if l.name == attach.name {
-                                log::debug!(
+                                debug!(
                                     "Found outgoing link with same name with handle {}",
                                     l.handle
                                 );
@@ -519,9 +473,7 @@ impl SessionDriver {
     }
 
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
-        let mut driver = self.driver.lock().unwrap();
-        driver.end(self.local_channel, End { error })?;
-        driver.flush()
+        self.connection.end(self.local_channel, End { error })
     }
 
     pub fn new_link(&self, addr: &str, role: LinkRole) -> Result<Arc<LinkDriver>> {
@@ -546,12 +498,12 @@ impl SessionDriver {
             handle
         };
         let link_name = format!("dove-{}-{}", Uuid::new_v4().to_string(), role.to_string());
-        log::debug!("Creating link {} with handle id {}", link_name, handle);
+        debug!("Creating link {} with handle id {}", link_name, handle);
         let link = Arc::new(LinkDriver {
             name: link_name.clone(),
             role,
             channel: self.local_channel,
-            driver: self.driver.clone(),
+            connection: self.connection.clone(),
             handle,
             rx: Channel::new(),
             session_flow_control: self.flow_control.clone(),
@@ -606,9 +558,7 @@ impl SessionDriver {
             desired_capabilities: None,
             properties: None,
         };
-        self.driver
-            .lock()
-            .unwrap()
+        self.connection
             .attach(self.local_channel, options.applied_on_attach(attach))?;
         Ok(link)
     }
@@ -625,8 +575,8 @@ impl SessionDriver {
 }
 
 impl LinkDriver {
-    pub fn driver(&self) -> std::sync::MutexGuard<conn::Connection<MioNetwork>> {
-        self.driver.lock().unwrap()
+    pub fn connection(&self) -> &ConnectionHandle {
+        &self.connection
     }
 
     pub async fn send_message(
@@ -648,13 +598,11 @@ impl LinkDriver {
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, semaphore_fn)
             == Ok(0)
         {
-            std::thread::sleep(Duration::from_millis(500));
-            /*
+            // std::thread::sleep(Duration::from_millis(500));
             return Err(AmqpError::amqp_error(
                 "not enough available credits to send message",
                 None,
             ));
-            */
         }
 
         // Session flow control
@@ -665,7 +613,7 @@ impl LinkDriver {
                 next_outgoing_id = props.next_outgoing_id;
                 break;
             }
-            std::thread::sleep(Duration::from_millis(500));
+            // std::thread::sleep(Duration::from_millis(500));
         }
 
         self.delivery_count.fetch_add(1, Ordering::SeqCst);
@@ -705,28 +653,17 @@ impl LinkDriver {
             message.encode(&mut msgbuf)?;
         }
 
-        self.driver
-            .lock()
-            .unwrap()
+        self.connection
             .transfer(self.channel, transfer, Some(msgbuf))?;
 
         Ok(delivery)
     }
 
-    pub async fn flow(&self, credit: u32) -> Result<()> {
-        let mut driver = self.driver.lock().unwrap();
-        self.flowcontrol(credit, &mut driver)
-    }
-
-    fn flowcontrol(
-        &self,
-        credit: u32,
-        connection: &mut conn::Connection<MioNetwork>,
-    ) -> Result<()> {
+    pub fn flow(&self, credit: u32) -> Result<()> {
         trace!("{}: issuing {} credits", self.handle, credit);
         self.credit.store(credit, Ordering::SeqCst);
         let props = { self.session_flow_control.lock().unwrap().clone() };
-        connection.flow(
+        self.connection.flow(
             self.channel,
             Flow {
                 next_incoming_id: Some(props.next_incoming_id),
@@ -745,16 +682,14 @@ impl LinkDriver {
     }
 
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
-        let mut driver = self.driver.lock().unwrap();
-        driver.detach(
+        self.connection.detach(
             self.channel,
             Detach {
                 handle: self.handle,
                 closed: Some(true),
                 error,
             },
-        )?;
-        driver.flush()
+        )
     }
 
     #[inline]
@@ -787,7 +722,7 @@ impl LinkDriver {
             batchable: None,
         };
 
-        self.driver().disposition(self.channel, disposition)?;
+        self.connection().disposition(self.channel, disposition)?;
         Ok(())
     }
 }
@@ -823,6 +758,14 @@ impl<T> Channel<T> {
     pub fn close(&self) {
         self.tx.close();
         self.rx.close();
+    }
+
+    pub fn handle<H: From<async_channel::Sender<T>>>(&self) -> H {
+        H::from(self.tx.clone())
+    }
+
+    pub fn handle_with<P, H: From<(async_channel::Sender<T>, P)>>(&self, param: P) -> H {
+        H::from((self.tx.clone(), param))
     }
 }
 

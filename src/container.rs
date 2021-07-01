@@ -10,10 +10,8 @@ use crate::driver::{
     Channel, ConnectionDriver, DeliveryDriver, LinkDriver, SessionDriver, SessionOpts,
 };
 use crate::error::*;
-use crate::framing::{AmqpFrame, Close, LinkRole, Open, Performative};
+use crate::framing::{LinkRole, Open, Performative};
 use crate::transport;
-
-use log::{error, trace};
 use mio::{Events, Poll, Token, Waker};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -29,6 +27,7 @@ pub use crate::framing::DeliveryState;
 pub use crate::message::{Message, MessageProperties};
 use crate::options::{LinkOptions, ReceiverOptions};
 pub use crate::sasl::SaslMechanism;
+use crate::transport::mio::MioNetwork;
 pub use crate::types::{Value, ValueRef};
 
 /// Represents an AMQP 1.0 container that can manage multiple connections.
@@ -41,8 +40,8 @@ pub struct Container {
 struct ContainerInner {
     container_id: String,
     poll: RefCell<Poll>,
-    incoming: Channel<Token>,
-    connections: Mutex<HashMap<Token, Arc<ConnectionDriver>>>,
+    incoming: Channel<(Token, Arc<ConnectionDriver>, conn::Connection<MioNetwork>)>,
+    connections: Mutex<HashMap<Token, (Arc<ConnectionDriver>, conn::Connection<MioNetwork>)>>,
     token_generator: AtomicU32,
     waker: Arc<Waker>,
     closed: AtomicBool,
@@ -65,17 +64,12 @@ pub struct Connection {
 
 /// Represents an AMQP session.
 pub struct Session {
-    waker: Arc<Waker>,
-    connection: Arc<ConnectionDriver>,
     session: Arc<SessionDriver>,
 }
 
 /// Represents a sender link.
 #[allow(dead_code)]
 pub struct Sender {
-    handle: u32,
-    waker: Arc<Waker>,
-    connection: Arc<ConnectionDriver>,
     link: Arc<LinkDriver>,
     next_message_id: AtomicU64,
 }
@@ -83,9 +77,6 @@ pub struct Sender {
 /// Represents a receiver link.
 #[allow(dead_code)]
 pub struct Receiver {
-    waker: Arc<Waker>,
-    handle: u32,
-    connection: Arc<ConnectionDriver>,
     link: Arc<LinkDriver>,
     next_message_id: AtomicU64,
 }
@@ -100,7 +91,6 @@ pub struct Disposition {
 pub struct Delivery {
     settled: bool,
     message: Option<Message>,
-    waker: Arc<Waker>,
     link: Arc<LinkDriver>,
     delivery: Arc<DeliveryDriver>,
 }
@@ -117,7 +107,7 @@ impl Container {
 
     pub fn with_id(container_id: &str) -> Result<Container> {
         let p = Poll::new()?;
-        let waker = Arc::new(Waker::new(p.registry(), Token(std::u32::MAX as usize))?);
+        let waker = Arc::new(Waker::new(p.registry(), Token(u32::MAX as usize))?);
         let inner = ContainerInner {
             container_id: container_id.to_string(),
             incoming: Channel::new(),
@@ -152,10 +142,10 @@ impl Container {
     }
 
     fn do_work(running: Arc<AtomicBool>, container: Arc<ContainerInner>) {
-        log::debug!("Starting container processing loop");
+        debug!("Starting container processing loop");
         loop {
             if !running.load(Ordering::SeqCst) {
-                log::debug!("Stopping container processing loop");
+                debug!("Stopping container processing loop");
                 return;
             }
             if let Err(e) = container.process() {
@@ -215,9 +205,12 @@ impl ContainerInner {
         }
         trace!("{}: shutting down container", self.container_id);
 
-        for (_id, connection) in self.connections.lock().unwrap().drain() {
-            connection.close(None)?;
+        for (_id, (driver, mut connection)) in self.connections.lock().unwrap().drain() {
+            let r1 = driver.close(None);
+            let r2 = connection.flush();
+            connection.shutdown().and(r1).and(r2)?;
         }
+
         self.waker.wake()?;
         trace!("{}: container is shut down", self.container_id);
         Ok(())
@@ -226,34 +219,34 @@ impl ContainerInner {
     async fn connect(&self, host: &str, port: u16, opts: ConnectionOptions) -> Result<Connection> {
         let network = transport::mio::MioNetwork::connect(host, port)?;
         let transport = transport::Transport::new(network, 1024);
-        let mut driver = conn::connect(transport, opts)?;
+        let connection = conn::connect(transport, opts)?;
         trace!("{}: connected to {}:{}", self.container_id, host, port);
 
-        let mut open = Open::new(self.container_id.as_str());
-        open.hostname = Some(host.to_string());
-        open.channel_max = Some(std::u16::MAX);
-        open.idle_timeout = Some(5000);
-        driver.open(open)?;
-
         let id = Token(self.token_generator.fetch_add(1, Ordering::SeqCst) as usize);
-        log::debug!(
+        debug!(
             "{}: created connection to {}:{} with local id {:?}",
-            self.container_id,
-            host,
-            port,
-            id,
+            self.container_id, host, port, id,
         );
-        let conn = {
-            let conn = Arc::new(ConnectionDriver::new(driver));
-            let mut m = self.connections.lock().unwrap();
-            m.insert(id, conn.clone());
-            conn
+        let driver = {
+            let handle = connection.handle(self.waker.clone());
+            let driver = Arc::new(ConnectionDriver::new(handle));
+
+            driver.open({
+                let mut open = Open::new(&self.container_id);
+                open.hostname = Some(host.to_string());
+                open.channel_max = Some(u16::MAX);
+                open.idle_timeout = Some(5_000);
+                open
+            })?;
+
+            driver
         };
-        self.incoming.send(id)?;
+
+        self.incoming.send((id, driver.clone(), connection))?;
         self.waker.wake()?;
 
         loop {
-            let frame = conn.recv().await?;
+            let frame = driver.recv().await?;
             match frame.performative {
                 Some(Performative::Open(o)) => {
                     trace!(
@@ -265,14 +258,14 @@ impl ContainerInner {
                     // Populate remote properties
                     return Ok(Connection {
                         waker: self.waker.clone(),
-                        connection: conn,
+                        connection: driver,
                         container_id: self.container_id.clone(),
                         hostname: host.to_string(),
-                        channel_max: std::u16::MAX,
+                        channel_max: u16::MAX,
                         idle_timeout: Duration::from_secs(5),
 
                         remote_container_id: o.container_id.clone(),
-                        remote_channel_max: o.channel_max.unwrap_or(std::u16::MAX),
+                        remote_channel_max: o.channel_max.unwrap_or(u16::MAX),
                         remote_idle_timeout: Duration::from_millis(
                             o.idle_timeout.unwrap_or(0) as u64
                         ),
@@ -297,7 +290,7 @@ impl ContainerInner {
                 _ => {
                     // Push it back into the queue
                     // TODO: Prevent reordering
-                    conn.unrecv(frame)?;
+                    driver.unrecv(frame)?;
                 }
             }
         }
@@ -306,33 +299,45 @@ impl ContainerInner {
     fn process(&self) -> Result<()> {
         let mut poll = self.poll.borrow_mut();
         // Register new connections
-        loop {
-            let result = self.incoming.try_recv();
-            match result {
-                Err(_) => break,
-                Ok(id) => {
-                    let mut m = self.connections.lock().unwrap();
-                    let conn = m.get_mut(&id);
-                    if let Some(conn) = conn {
-                        conn.register(id, &mut poll)?;
-                    }
-                }
+        while let Ok((id, driver, mut connection)) = self.incoming.try_recv() {
+            if let Err(e) = connection.transport().network().register(id, &mut poll) {
+                let _ = driver.close(None);
+                let _ = connection.shutdown();
+                error!("Failed to register connection {:?}: {}", id, e);
+                continue;
+            } else {
+                let mut connections = self.connections.lock().unwrap();
+                connections.insert(id, (driver, connection));
             }
         }
 
         // Push connection frames on the wire
-        for (id, connection) in self.connections.lock().unwrap().iter_mut() {
-            let mut driver = connection.driver();
+        {
+            let mut connections = self.connections.lock().unwrap();
+            let to_remove = connections
+                .iter_mut()
+                .filter_map(|(id, (driver, connection))| {
+                    let result: Result<()> = (|| {
+                        // Handle keepalive
+                        driver.keepalive()?;
+                        driver.flowcontrol()?;
 
-            // Handle keepalive
-            connection.keepalive(&mut driver)?;
+                        // Flush data
+                        connection.flush()?;
+                        Ok(())
+                    })();
 
-            connection.flowcontrol(&mut driver)?;
+                    result.err().map(|e| {
+                        error!("Driver failed for container {:?}: {}", self.container_id, e);
+                        let _ = driver.close(None);
+                        let _ = connection.shutdown();
+                        *id
+                    })
+                })
+                .collect::<Vec<Token>>();
 
-            // Flush data
-            let result = driver.flush();
-            if result.is_err() {
-                trace!("{}: error flushing driver for {:?}", self.container_id, id);
+            for token in to_remove {
+                let _ = connections.remove(&token);
             }
         }
 
@@ -342,73 +347,90 @@ impl ContainerInner {
             poll.poll(&mut events, Some(Duration::from_millis(2000)))?;
         }
 
-        let waker_token = Token(std::u32::MAX as usize);
+        let waker_token = Token(u32::MAX as usize);
         for event in &events {
-            let id = event.token();
-            if id == waker_token {
-                let ids: Vec<Token> = self.connections.lock().unwrap().keys().cloned().collect();
-                for id in ids.iter() {
-                    self.process_connection(*id)?;
-                }
+            let ids = if event.token() == waker_token {
+                self.connections.lock().unwrap().keys().cloned().collect()
             } else {
-                self.process_connection(id)?;
+                vec![event.token()]
+            };
+
+            for id in ids {
+                if let Err(e) = self.process_connection_by_id(id) {
+                    error!("Connection with {:?} failed: {}", id, e);
+                }
             }
         }
         Ok(())
     }
 
-    fn process_connection(&self, id: Token) -> Result<()> {
-        let connection = {
-            let mut m = self.connections.lock().unwrap();
-            m.get_mut(&id).cloned()
-        };
-        if let Some(c) = connection {
-            let result = c.process();
+    fn process_connection_by_id(&self, id: Token) -> Result<()> {
+        let mut m = self.connections.lock().unwrap();
+        if let Some((driver, connection)) = m.get_mut(&id) {
+            let close = match self.process_connection(driver, connection) {
+                Err(AmqpError::Amqp(condition)) => Some(Some(condition)),
+                Err(_) => Some(None),
+                _ => None,
+            };
+
+            if let Some(condition) = close {
+                trace!(
+                    "{}: closing connection and removing reference to {:?}: {:?}",
+                    self.container_id,
+                    id,
+                    condition
+                );
+
+                if let Err(e) = driver.close(condition.clone()) {
+                    error!("Closing connection {:?} failed: {}", id, e);
+                }
+
+                if let Some((_, mut connection)) = m.remove(&id) {
+                    let _ = connection.shutdown();
+                }
+
+                return Err(AmqpError::IoError(std::io::Error::from(
+                    std::io::ErrorKind::UnexpectedEof,
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn process_connection(
+        &self,
+        driver: &ConnectionDriver,
+        connection: &mut conn::Connection<MioNetwork>,
+    ) -> Result<()> {
+        if driver.closed() {
+            return Ok(());
+        }
+
+        // Read frames until we're blocked
+        let mut rx_frames = Vec::new();
+        let result = loop {
+            if driver.closed() {
+                return Ok(());
+            }
+            let result = connection.process(&mut rx_frames);
             match result {
-                Err(AmqpError::Amqp(condition)) => {
-                    self.close_connection(id, &c, Some(condition))?;
-                    return Err(AmqpError::IoError(std::io::Error::from(
-                        std::io::ErrorKind::UnexpectedEof,
-                    )));
+                Ok(_) => {}
+                // This means that we should poll again to await further I/O action for this driver.
+                Err(AmqpError::IoError(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    break Ok(());
                 }
                 Err(_) => {
-                    self.close_connection(id, &c, None)?;
-                    return Err(AmqpError::IoError(std::io::Error::from(
-                        std::io::ErrorKind::UnexpectedEof,
-                    )));
+                    break result;
                 }
-                _ => {}
             }
-        }
-        Ok(())
-    }
+        };
 
-    fn close_connection(
-        &self,
-        id: Token,
-        connection: &ConnectionDriver,
-        condition: Option<ErrorCondition>,
-    ) -> Result<()> {
-        trace!(
-            "{}: closing connection and removing reference to {:?}: {:?}",
-            self.container_id,
-            id,
-            condition
-        );
-        let result = connection.close(condition.clone());
-        match result {
-            // Socket error is ignored
-            Err(AmqpError::IoError(_)) => {}
-            Err(e) => return Err(e),
-            _ => {}
+        if !rx_frames.is_empty() {
+            trace!("Dispatching {:?} frames", rx_frames.len());
         }
-        connection.unrecv(AmqpFrame {
-            channel: 0,
-            performative: Some(Performative::Close(Close { error: condition })),
-            payload: None,
-        })?;
-        self.connections.lock().unwrap().remove(&id);
-        Ok(())
+
+        let dispatch_result = driver.dispatch(rx_frames);
+        result.and_then(|_| dispatch_result)
     }
 }
 
@@ -430,11 +452,7 @@ impl Connection {
             match frame.performative {
                 Some(Performative::Begin(_b)) => {
                     // Populate remote properties
-                    return Ok(Session {
-                        waker: self.waker.clone(),
-                        connection: self.connection.clone(),
-                        session: s,
-                    });
+                    return Ok(Session { session: s });
                 }
                 _ => {
                     // Push it back into the queue
@@ -471,16 +489,12 @@ impl Session {
     pub async fn new_sender(&self, addr: &str) -> Result<Sender> {
         let link = self.session.new_link(addr, LinkRole::Sender)?;
         trace!("Created link, waiting for attach frame");
-        self.waker.wake()?;
         loop {
             let frame = self.session.recv().await?;
             match frame.performative {
                 Some(Performative::Attach(_a)) => {
                     // Populate remote properties
                     return Ok(Sender {
-                        waker: self.waker.clone(),
-                        handle: link.handle,
-                        connection: self.connection.clone(),
                         link,
                         next_message_id: AtomicU64::new(0),
                     });
@@ -519,16 +533,12 @@ impl Session {
     ) -> Result<Receiver> {
         let link = self.session.new_link_with_options(addr, options.into())?;
         trace!("Created link, waiting for attach frame");
-        self.waker.wake()?;
         loop {
             let frame = self.session.recv().await?;
             match frame.performative {
                 Some(Performative::Attach(_a)) => {
                     // Populate remote properties
                     return Ok(Receiver {
-                        waker: self.waker.clone(),
-                        handle: link.handle,
-                        connection: self.connection.clone(),
                         link,
                         next_message_id: AtomicU64::new(0),
                     });
@@ -544,9 +554,7 @@ impl Session {
 
     /// Close a session, ending the end performative.
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
-        self.session.close(error)?;
-        self.waker.wake()?;
-        Ok(())
+        self.session.close(error)
     }
 }
 
@@ -581,7 +589,6 @@ impl Sender {
         );
         let settled = false;
         let delivery = self.link.send_message(message, settled).await?;
-        self.waker.wake()?;
 
         if !settled {
             loop {
@@ -610,9 +617,7 @@ impl Sender {
 
     /// Close the sender link, sending the detach performative.
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
-        self.link.close(error)?;
-        self.waker.wake()?;
-        Ok(())
+        self.link.close(error)
     }
 }
 
@@ -625,10 +630,8 @@ impl Drop for Sender {
 impl Receiver {
     /// Issue credits to the remote sender link, signalling that the receiver canaldigital
     /// accept more messages.
-    pub async fn flow(&self, credit: u32) -> Result<()> {
-        self.link.flow(credit).await?;
-        self.waker.wake()?;
-        Ok(())
+    pub fn flow(&self, credit: u32) -> Result<()> {
+        self.link.flow(credit)
     }
 
     /// Receive a single message across the link. The delivery is returned
@@ -649,7 +652,6 @@ impl Receiver {
                         settled: false,
                     });
                     return Ok(Delivery {
-                        waker: self.waker.clone(),
                         settled: false,
                         link: self.link.clone(),
                         message: Some(message),
@@ -658,6 +660,7 @@ impl Receiver {
                 }
                 _ => {
                     // TODO: Prevent reordering
+                    warn!("unreceive: {:?}", frame);
                     self.link.unrecv(frame)?;
                 }
             }
@@ -666,9 +669,7 @@ impl Receiver {
 
     /// Close the sender link, sending the detach performative.
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
-        self.link.close(error)?;
-        self.waker.wake()?;
-        Ok(())
+        self.link.close(error)
     }
 }
 
@@ -694,7 +695,6 @@ impl Delivery {
         if !self.settled {
             self.link.disposition(&self.delivery, settled, state)?;
             self.settled = settled;
-            self.waker.wake()?;
         }
         Ok(())
     }
@@ -704,10 +704,15 @@ impl Drop for Delivery {
     fn drop(&mut self) {
         if !self.settled {
             self.settled = true;
-            let _ = self
+            if let Err(e) = self
                 .link
-                .disposition(&self.delivery, true, DeliveryState::Accepted);
-            let _ = self.waker.wake();
+                .disposition(&self.delivery, true, DeliveryState::Accepted)
+            {
+                error!(
+                    "Disposition failed for delivery with id {}: {:?}",
+                    self.delivery.id, e
+                );
+            }
         }
     }
 }

@@ -3,6 +3,9 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+use ::mio::Poll;
+use ::mio::Token;
+use ::mio::Waker;
 use dove::conn::*;
 use dove::framing::*;
 use dove::message::*;
@@ -10,6 +13,7 @@ use dove::sasl::*;
 use dove::transport::*;
 use dove::types::*;
 use std::env;
+use std::sync::Arc;
 
 /**
  * Example client that sends a single message to an AMQP endpoint with minimal dependencies and sending
@@ -32,11 +36,17 @@ fn main() {
     let transport = Transport::new(net, 1024);
     let mut connection = connect(transport, opts).expect("Error opening connection");
 
-    connection.open(Open::new("example-send-minimal")).unwrap();
-    connection
+    let p = Poll::new().expect("Failed to create poll");
+    let waker = Arc::new(
+        Waker::new(p.registry(), Token(u32::MAX as usize)).expect("Failed to create waker"),
+    );
+    let handle = connection.handle(waker);
+
+    handle.open(Open::new("example-send-minimal")).unwrap();
+    handle
         .begin(0, Begin::new(0, std::u32::MAX, std::u32::MAX))
         .unwrap();
-    connection
+    handle
         .attach(
             0,
             Attach::new(address, 0, LinkRole::Sender)
@@ -62,7 +72,7 @@ fn main() {
                             payload: _,
                         }) => match performative {
                             Some(Performative::Flow(_)) => {
-                                connection
+                                handle
                                     .transfer(
                                         0,
                                         Transfer::new(0)
@@ -72,7 +82,7 @@ fn main() {
                                         Some(buffer.clone()),
                                     )
                                     .unwrap();
-                                connection.close(Close { error: None }).unwrap();
+                                handle.close(Close { error: None }).unwrap();
                             }
                             Some(Performative::Close(_)) => {
                                 done = true;

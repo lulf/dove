@@ -148,7 +148,7 @@ impl<T> From<TrySendError<T>> for AmqpError {
 }
 
 impl From<RecvError> for AmqpError {
-    fn from(err: RecvError) -> Self {
+    fn from(_: RecvError) -> Self {
         AmqpError::ReceiveError(TryRecvError::Closed)
     }
 }

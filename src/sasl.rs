@@ -5,7 +5,6 @@
 
 //! The sasl module implements the SASL support in dove.
 
-use log::trace;
 use std::str::FromStr;
 
 use crate::error::*;

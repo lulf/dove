@@ -5,15 +5,15 @@
 
 //! The conn module contains basic primitives for establishing and accepting AMQP connections and performing the initial handshake. Once handshake is complete, the connection can be used to send and receive frames.
 
-use log::{debug, trace};
-use std::time::Duration;
-use std::time::Instant;
-use std::vec::Vec;
-
+use crate::connection::ConnectionHandle;
+use crate::driver::Channel;
 use crate::error::*;
 use crate::framing::*;
 use crate::sasl::*;
 use crate::transport::*;
+use async_channel::Sender;
+use std::sync::Arc;
+use std::vec::Vec;
 
 #[derive(Debug, Clone)]
 pub struct ConnectionOptions {
@@ -59,7 +59,7 @@ pub struct Connection<N: Network> {
     sasl: Option<Sasl>,
     state: ConnectionState,
     transport: Transport<N>,
-    tx_frames: Vec<Frame>,
+    tx_frames: Channel<Frame>,
     header_sent: bool,
 }
 
@@ -132,114 +132,9 @@ impl<N: Network> Connection<N> {
             transport,
             state: ConnectionState::Start,
             sasl: None,
-            tx_frames: Vec::new(),
+            tx_frames: Channel::new(),
             header_sent: false,
         }
-    }
-
-    pub fn open(&mut self, open: Open) -> Result<()> {
-        self.tx_frames.push(Frame::AMQP(AmqpFrame {
-            channel: 0,
-            performative: Some(Performative::Open(open)),
-            payload: None,
-        }));
-        Ok(())
-    }
-
-    pub fn begin(&mut self, channel: ChannelId, begin: Begin) -> Result<()> {
-        self.tx_frames.push(Frame::AMQP(AmqpFrame {
-            channel: channel as u16,
-            performative: Some(Performative::Begin(begin)),
-            payload: None,
-        }));
-        Ok(())
-    }
-
-    pub fn attach(&mut self, channel: ChannelId, attach: Attach) -> Result<()> {
-        self.tx_frames.push(Frame::AMQP(AmqpFrame {
-            channel: channel as u16,
-            performative: Some(Performative::Attach(attach)),
-            payload: None,
-        }));
-        Ok(())
-    }
-
-    pub fn flow(&mut self, channel: ChannelId, flow: Flow) -> Result<()> {
-        self.tx_frames.push(Frame::AMQP(AmqpFrame {
-            channel: channel as u16,
-            performative: Some(Performative::Flow(flow)),
-            payload: None,
-        }));
-        Ok(())
-    }
-
-    pub fn transfer(
-        &mut self,
-        channel: ChannelId,
-        transfer: Transfer,
-        payload: Option<Vec<u8>>,
-    ) -> Result<()> {
-        self.tx_frames.push(Frame::AMQP(AmqpFrame {
-            channel: channel as u16,
-            performative: Some(Performative::Transfer(transfer)),
-            payload,
-        }));
-        Ok(())
-    }
-
-    pub fn disposition(&mut self, channel: ChannelId, disposition: Disposition) -> Result<()> {
-        self.tx_frames.push(Frame::AMQP(AmqpFrame {
-            channel: channel as u16,
-            performative: Some(Performative::Disposition(disposition)),
-            payload: None,
-        }));
-        Ok(())
-    }
-
-    pub fn keepalive(&mut self, remote_idle_timeout: Duration, now: Instant) -> Result<Instant> {
-        if remote_idle_timeout.as_millis() > 0 {
-            trace!(
-                "Remote idle timeout millis: {:?}. Last sent: {:?}",
-                remote_idle_timeout.as_millis(),
-                now - self.transport.last_sent()
-            );
-
-            if now - self.transport.last_sent() >= remote_idle_timeout {
-                self.tx_frames.push(Frame::AMQP(AmqpFrame {
-                    channel: 0,
-                    performative: None,
-                    payload: None,
-                }));
-            }
-        }
-        Ok(self.transport.last_received())
-    }
-
-    pub fn detach(&mut self, channel: ChannelId, detach: Detach) -> Result<()> {
-        self.tx_frames.push(Frame::AMQP(AmqpFrame {
-            channel: channel as u16,
-            performative: Some(Performative::Detach(detach)),
-            payload: None,
-        }));
-        Ok(())
-    }
-
-    pub fn end(&mut self, channel: ChannelId, end: End) -> Result<()> {
-        self.tx_frames.push(Frame::AMQP(AmqpFrame {
-            channel: channel as u16,
-            performative: Some(Performative::End(end)),
-            payload: None,
-        }));
-        Ok(())
-    }
-
-    pub fn close(&mut self, close: Close) -> Result<()> {
-        self.tx_frames.push(Frame::AMQP(AmqpFrame {
-            channel: 0,
-            performative: Some(Performative::Close(close)),
-            payload: None,
-        }));
-        Ok(())
     }
 
     pub fn shutdown(&mut self) -> Result<()> {
@@ -254,7 +149,7 @@ impl<N: Network> Connection<N> {
     pub fn flush(&mut self) -> Result<()> {
         match self.state {
             ConnectionState::Opened | ConnectionState::Closed => {
-                for frame in self.tx_frames.drain(..) {
+                while let Ok(frame) = self.tx_frames.try_recv() {
                     debug!("TX {:?}", frame);
                     self.transport.write_frame(&frame)?;
                 }
@@ -350,5 +245,13 @@ impl<N: Network> Connection<N> {
             }
         }
         Ok(())
+    }
+
+    pub fn handle<T>(&self, param: T) -> ConnectionHandle
+    where
+        ConnectionHandle: From<(Sender<Frame>, (Arc<TransportInfo>, T))>,
+    {
+        self.tx_frames
+            .handle_with((Arc::clone(self.transport.info()), param))
     }
 }
