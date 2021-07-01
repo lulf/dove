@@ -217,9 +217,23 @@ impl ContainerInner {
     }
 
     async fn connect(&self, host: &str, port: u16, opts: ConnectionOptions) -> Result<Connection> {
-        let network = transport::mio::MioNetwork::connect(host, port)?;
-        let transport = transport::Transport::new(network, 1024);
-        let connection = conn::connect(transport, opts)?;
+        let (tx, rx) = async_channel::bounded(1);
+
+        // mio connects in blocking mode -> new thread to not block in async context
+        thread::spawn({
+            let host = host.to_string();
+            move || {
+                let result: Result<_> = (|| {
+                    let network = transport::mio::MioNetwork::connect(&host, port)?;
+                    let transport = transport::Transport::new(network, 1024);
+                    let connection = conn::connect(transport, opts)?;
+                    Ok(connection)
+                })();
+                let _ = tx.try_send(result);
+            }
+        });
+
+        let connection = rx.recv().await??;
         trace!("{}: connected to {}:{}", self.container_id, host, port);
 
         let id = Token(self.token_generator.fetch_add(1, Ordering::SeqCst) as usize);
