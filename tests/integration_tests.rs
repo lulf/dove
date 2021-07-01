@@ -4,12 +4,13 @@
  */
 
 use dove::container::*;
+use dove::error::AmqpError;
 use dove::message::MessageBody;
 
 use futures::future::join_all;
 use std::process::Command;
 use std::sync::Once;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use testcontainers::{clients, images, Docker};
 use tokio::time::{sleep, timeout};
 
@@ -170,24 +171,31 @@ async fn single_client(port: u16, opts: ConnectionOptions) {
     let mut messages = Vec::new();
     log::info!("{}: sending messages", container.container_id());
     for i in 0..to_send {
-        let message =
+        let mut message =
             Message::amqp_value(Value::String(format!("Hello, World: {}", i).to_string()));
-        messages.push(sender.send(message));
+
+        let start = Instant::now();
+        messages.push(loop {
+            // a future does nothing unless polled / awaited ...
+            match sender.send(message).await {
+                Err(AmqpError::NotEnoughCreditsToSend(m)) => {
+                    if start.elapsed() > Duration::from_secs(5) {
+                        panic!("Did not receive enough credits within timeout to send message",);
+                    } else {
+                        sleep(Duration::from_millis(100)).await;
+                        message = *m;
+                    }
+                }
+                Err(e) => panic!("Failed to send message: {:?}", e),
+                Ok(result) => break result,
+            }
+        });
     }
 
     log::info!("{}: receiving messages", container.container_id());
     let mut deliveries = Vec::new();
     for _ in messages.iter() {
         deliveries.push(receiver.receive());
-    }
-
-    // Making sure messages are sent
-    log::info!(
-        "{}: waiting for message confirmation",
-        container.container_id()
-    );
-    for message in messages.drain(..) {
-        message.await.expect("error awaiting message");
     }
 
     // Verify results

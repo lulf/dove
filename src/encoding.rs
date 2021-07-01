@@ -178,10 +178,9 @@ impl Encoder for ValueRef<'_> {
                 }
 
                 if arraybuf.len() > LIST32_MAX {
-                    Err(AmqpError::amqp_error(
-                        condition::DECODE_ERROR,
-                        Some("Encoded array size cannot be longer than 4294967291 bytes"),
-                    ))
+                    Err(AmqpError::decode_error(Some(
+                        "Encoded array size cannot be longer than 4294967291 bytes",
+                    )))
                 } else if arraybuf.len() > LIST8_MAX {
                     writer.write_u8(TypeCode::Array32 as u8)?;
                     writer.write_u32::<NetworkEndian>((5 + arraybuf.len()) as u32)?;
@@ -208,10 +207,9 @@ impl Encoder for ValueRef<'_> {
                 }
 
                 if listbuf.len() > LIST32_MAX {
-                    Err(AmqpError::amqp_error(
-                        condition::DECODE_ERROR,
-                        Some("Encoded list size cannot be longer than 4294967291 bytes"),
-                    ))
+                    Err(AmqpError::decode_error(Some(
+                        "Encoded list size cannot be longer than 4294967291 bytes",
+                    )))
                 } else if listbuf.len() > LIST8_MAX {
                     writer.write_u8(TypeCode::List32 as u8)?;
                     writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
@@ -239,10 +237,9 @@ impl Encoder for ValueRef<'_> {
                 let n_items = m.len() * 2;
 
                 if listbuf.len() > LIST32_MAX {
-                    Err(AmqpError::amqp_error(
-                        condition::DECODE_ERROR,
-                        Some("Encoded map size cannot be longer than 4294967291 bytes"),
-                    ))
+                    Err(AmqpError::decode_error(Some(
+                        "Encoded map size cannot be longer than 4294967291 bytes",
+                    )))
                 } else if listbuf.len() > LIST8_MAX || n_items > U8_MAX {
                     writer.write_u8(TypeCode::Map32 as u8)?;
                     writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
@@ -270,10 +267,9 @@ impl Encoder for ValueRef<'_> {
                 }
 
                 if arraybuf.len() > LIST32_MAX {
-                    Err(AmqpError::amqp_error(
-                        condition::DECODE_ERROR,
-                        Some("Encoded array size cannot be longer than 4294967291 bytes"),
-                    ))
+                    Err(AmqpError::decode_error(Some(
+                        "Encoded array size cannot be longer than 4294967291 bytes",
+                    )))
                 } else if arraybuf.len() > LIST8_MAX {
                     writer.write_u8(TypeCode::Array32 as u8)?;
                     writer.write_u32::<NetworkEndian>((5 + arraybuf.len()) as u32)?;
@@ -300,10 +296,9 @@ impl Encoder for ValueRef<'_> {
                 }
 
                 if listbuf.len() > LIST32_MAX {
-                    Err(AmqpError::amqp_error(
-                        condition::DECODE_ERROR,
-                        Some("Encoded list size cannot be longer than 4294967291 bytes"),
-                    ))
+                    Err(AmqpError::decode_error(Some(
+                        "Encoded list size cannot be longer than 4294967291 bytes",
+                    )))
                 } else if listbuf.len() > LIST8_MAX {
                     writer.write_u8(TypeCode::List32 as u8)?;
                     writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;
@@ -331,10 +326,9 @@ impl Encoder for ValueRef<'_> {
                 let n_items = m.len() * 2;
 
                 if listbuf.len() > LIST32_MAX {
-                    Err(AmqpError::amqp_error(
-                        condition::DECODE_ERROR,
-                        Some("Encoded map size cannot be longer than 4294967291 bytes"),
-                    ))
+                    Err(AmqpError::decode_error(Some(
+                        "Encoded map size cannot be longer than 4294967291 bytes",
+                    )))
                 } else if listbuf.len() > LIST8_MAX || n_items > U8_MAX {
                     writer.write_u8(TypeCode::Map32 as u8)?;
                     writer.write_u32::<NetworkEndian>((4 + listbuf.len()) as u32)?;

@@ -99,10 +99,9 @@ impl TryFromValue for u32 {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Uint(v) => Ok(v),
-            _ => Err(AmqpError::amqp_error(
-                condition::DECODE_ERROR,
-                Some("Error converting value to u32"),
-            )),
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to u32",
+            ))),
         }
     }
 }
@@ -111,10 +110,9 @@ impl TryFromValue for u16 {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Ushort(v) => Ok(v),
-            _ => Err(AmqpError::amqp_error(
-                condition::DECODE_ERROR,
-                Some("Error converting value to u32"),
-            )),
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to u32",
+            ))),
         }
     }
 }
@@ -136,10 +134,9 @@ impl TryFromValue for String {
         match value {
             Value::Symbol(v) => Ok(String::from_utf8_lossy(&v[..]).to_string()),
             Value::String(v) => Ok(v),
-            _ => Err(AmqpError::amqp_error(
-                condition::DECODE_ERROR,
-                Some("Error converting value to String"),
-            )),
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to String",
+            ))),
         }
     }
 }
@@ -172,10 +169,9 @@ impl TryFromValue for Symbol {
     fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Symbol(v) => Ok(Symbol::from_vec(v)),
-            _ => Err(AmqpError::amqp_error(
-                condition::DECODE_ERROR,
-                Some("Error converting value to Symbol"),
-            )),
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to Symbol",
+            ))),
         }
     }
 }

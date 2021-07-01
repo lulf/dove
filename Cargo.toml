@@ -19,6 +19,7 @@ uuid = { version = "0.8", features = ["v4"] }
 rand = "0.8"
 log = "0.4"
 async-channel = "1.6.1"
+thiserror = "1.0.25"
 
 [dev-dependencies]
 futures = "0.3"

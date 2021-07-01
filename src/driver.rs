@@ -86,7 +86,7 @@ impl SessionFlowControl {
 
     fn accept(&mut self, delivery_id: u32) -> Result<bool> {
         if delivery_id + 1 < self.next_incoming_id || self.remote_outgoing_window == 0 {
-            Err(AmqpError::framing_error())
+            Err(AmqpError::framing_error(None))
         } else if self.incoming_window == 0 {
             Ok(false)
         } else {
@@ -599,11 +599,7 @@ impl LinkDriver {
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, semaphore_fn)
             == Ok(0)
         {
-            // std::thread::sleep(Duration::from_millis(500));
-            return Err(AmqpError::amqp_error(
-                "not enough available credits to send message",
-                None,
-            ));
+            return Err(AmqpError::NotEnoughCreditsToSend(Box::new(message)));
         }
 
         // Session flow control
