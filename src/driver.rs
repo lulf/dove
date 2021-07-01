@@ -210,6 +210,14 @@ impl ConnectionDriver {
         if self.closed.fetch_or(true, Ordering::SeqCst) {
             return Ok(());
         }
+
+        for session in self.sessions.lock().unwrap().values() {
+            session.rx.close();
+            for link in session.links.lock().unwrap().values() {
+                link.rx.close();
+            }
+        }
+
         let mut driver = self.driver.lock().unwrap();
         driver.close(Close { error })?;
         driver.flush()?;
@@ -812,6 +820,10 @@ impl<T> Channel<T> {
         Ok(self.rx.recv().await?)
     }
 
+    pub fn close(&self) {
+        self.tx.close();
+        self.rx.close();
+    }
 }
 
 #[cfg(test)]
