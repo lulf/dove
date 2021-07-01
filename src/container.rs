@@ -41,6 +41,7 @@ struct ContainerInner {
     container_id: String,
     poll: RefCell<Poll>,
     incoming: Channel<(Token, Arc<ConnectionDriver>, conn::Connection<MioNetwork>)>,
+    #[allow(clippy::type_complexity)] // subjective judgement: complexity is reasonable
     connections: Mutex<HashMap<Token, (Arc<ConnectionDriver>, conn::Connection<MioNetwork>)>>,
     token_generator: AtomicU32,
     waker: Arc<Waker>,
@@ -395,7 +396,7 @@ impl ContainerInner {
                     condition
                 );
 
-                if let Err(e) = driver.close(condition.clone()) {
+                if let Err(e) = driver.close(condition) {
                     error!("Closing connection {:?} failed: {}", id, e);
                 }
 
@@ -444,7 +445,7 @@ impl ContainerInner {
         }
 
         let dispatch_result = driver.dispatch(rx_frames);
-        result.and_then(|_| dispatch_result)
+        result.and(dispatch_result)
     }
 }
 

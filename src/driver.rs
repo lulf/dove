@@ -16,6 +16,7 @@ use crate::framing::{
 use crate::message::Message;
 use crate::options::LinkOptions;
 use rand::Rng;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -289,7 +290,7 @@ impl ConnectionDriver {
         let mut m = self.sessions.lock().unwrap();
         for i in 0..self.channel_max {
             let chan = i as ChannelId;
-            if !m.contains_key(&chan) {
+            if let Entry::Vacant(entry) = m.entry(chan) {
                 let session = Arc::new(SessionDriver {
                     connection: self.connection.clone(),
                     local_channel: chan,
@@ -301,7 +302,7 @@ impl ConnectionDriver {
 
                     did_to_delivery: Arc::new(Mutex::new(HashMap::new())),
                 });
-                m.insert(chan, session.clone());
+                entry.insert(session.clone());
                 return Some(session);
             }
         }
@@ -497,7 +498,7 @@ impl SessionDriver {
             }
             handle
         };
-        let link_name = format!("dove-{}-{}", Uuid::new_v4().to_string(), role.to_string());
+        let link_name = format!("dove-{}-{}", Uuid::new_v4().to_string(), role.as_str());
         debug!("Creating link {} with handle id {}", link_name, handle);
         let link = Arc::new(LinkDriver {
             name: link_name.clone(),
@@ -593,7 +594,7 @@ impl LinkDriver {
         };
 
         // Link flow control
-        while self
+        if self
             .credit
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, semaphore_fn)
             == Ok(0)

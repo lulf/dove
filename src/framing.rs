@@ -325,7 +325,7 @@ pub enum LinkRole {
 }
 
 impl LinkRole {
-    pub fn to_string(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         match self {
             LinkRole::Sender => "sender",
             LinkRole::Receiver => "received",
@@ -1109,14 +1109,14 @@ impl Encoder for Vec<Outcome> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let mut values = Vec::new();
         for outcome in self.iter() {
-            values.push(ValueRef::SymbolRef(outcome.to_str()));
+            values.push(ValueRef::SymbolRef(outcome.as_str()));
         }
         ValueRef::ArrayRef(&values).encode(writer)
     }
 }
 
 impl Outcome {
-    pub fn to_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match *self {
             Outcome::Accepted => "Accepted",
             Outcome::Rejected => "Rejected",
@@ -1127,12 +1127,12 @@ impl Outcome {
 }
 impl Encoder for Outcome {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        ValueRef::SymbolRef(self.to_str()).encode(writer)
+        ValueRef::SymbolRef(self.as_str()).encode(writer)
     }
 }
 
 impl TerminusExpiryPolicy {
-    pub fn to_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match *self {
             TerminusExpiryPolicy::LinkDetach => "link-detach",
             TerminusExpiryPolicy::SessionEnd => "session-end",
@@ -1155,7 +1155,7 @@ impl Encoder for TerminusDurability {
 
 impl Encoder for TerminusExpiryPolicy {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        ValueRef::SymbolRef(self.to_str()).encode(writer)
+        ValueRef::SymbolRef(self.as_str()).encode(writer)
     }
 }
 
