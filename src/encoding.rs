@@ -60,12 +60,12 @@ impl Encoder for ValueRef<'_> {
                 if val.len() > U8_MAX {
                     writer.write_u8(TypeCode::Sym32 as u8)?;
                     writer.write_u32::<NetworkEndian>(val.len() as u32)?;
-                    writer.write_all(&val.as_bytes()[..])?;
+                    writer.write_all(val.as_bytes())?;
                     Ok(TypeCode::Sym32)
                 } else {
                     writer.write_u8(TypeCode::Sym8 as u8)?;
                     writer.write_u8(val.len() as u8)?;
-                    writer.write_all(&val.as_bytes()[..])?;
+                    writer.write_all(val.as_bytes())?;
                     Ok(TypeCode::Sym8)
                 }
             }
@@ -86,12 +86,12 @@ impl Encoder for ValueRef<'_> {
                 if val.len() > U8_MAX {
                     writer.write_u8(TypeCode::Bin32 as u8)?;
                     writer.write_u32::<NetworkEndian>(val.len() as u32)?;
-                    writer.write_all(&val[..])?;
+                    writer.write_all(val)?;
                     Ok(TypeCode::Bin32)
                 } else {
                     writer.write_u8(TypeCode::Bin8 as u8)?;
                     writer.write_u8(val.len() as u8)?;
-                    writer.write_all(&val[..])?;
+                    writer.write_all(val)?;
                     Ok(TypeCode::Bin8)
                 }
             }
