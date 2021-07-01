@@ -5,6 +5,7 @@
 
 //! The error module implements all AMQP 1.0 error types that is supported by dove. Conversion from many different error types are supported.
 
+use async_channel::{RecvError, SendError, TryRecvError, TrySendError};
 use std::error;
 use std::fmt;
 use std::io;
@@ -16,6 +17,8 @@ pub enum AmqpError {
     IoError(io::Error),
     Amqp(ErrorCondition),
     Generic(String),
+    SendError,
+    ReceiveError(TryRecvError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +81,8 @@ impl fmt::Display for AmqpError {
             AmqpError::IoError(e) => write!(f, "{}", e.to_string()),
             AmqpError::Amqp(s) => write!(f, "{:?}", s),
             AmqpError::Generic(s) => write!(f, "{}", s),
+            AmqpError::SendError => write!(f, "Failed to send, channel full or closed"),
+            AmqpError::ReceiveError(e) => write!(f, "Failed to receive: {}", e),
         }
     }
 }
@@ -127,5 +132,29 @@ impl std::convert::From<std::boxed::Box<dyn std::any::Any + std::marker::Send>> 
 impl std::convert::From<std::num::ParseIntError> for AmqpError {
     fn from(error: std::num::ParseIntError) -> Self {
         AmqpError::Generic(error.to_string())
+    }
+}
+
+impl<T> From<SendError<T>> for AmqpError {
+    fn from(_: SendError<T>) -> Self {
+        AmqpError::SendError
+    }
+}
+
+impl<T> From<TrySendError<T>> for AmqpError {
+    fn from(_: TrySendError<T>) -> Self {
+        AmqpError::SendError
+    }
+}
+
+impl From<RecvError> for AmqpError {
+    fn from(err: RecvError) -> Self {
+        AmqpError::ReceiveError(TryRecvError::Closed)
+    }
+}
+
+impl From<TryRecvError> for AmqpError {
+    fn from(err: TryRecvError) -> Self {
+        AmqpError::ReceiveError(err)
     }
 }

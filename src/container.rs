@@ -253,7 +253,7 @@ impl ContainerInner {
         self.waker.wake()?;
 
         loop {
-            let frame = conn.recv()?;
+            let frame = conn.recv().await?;
             match frame.performative {
                 Some(Performative::Open(o)) => {
                     trace!(
@@ -426,7 +426,7 @@ impl Connection {
 
         self.waker.wake()?;
         loop {
-            let frame = s.recv()?;
+            let frame = s.recv().await?;
             match frame.performative {
                 Some(Performative::Begin(_b)) => {
                     // Populate remote properties
@@ -473,7 +473,7 @@ impl Session {
         trace!("Created link, waiting for attach frame");
         self.waker.wake()?;
         loop {
-            let frame = self.session.recv()?;
+            let frame = self.session.recv().await?;
             match frame.performative {
                 Some(Performative::Attach(_a)) => {
                     // Populate remote properties
@@ -521,7 +521,7 @@ impl Session {
         trace!("Created link, waiting for attach frame");
         self.waker.wake()?;
         loop {
-            let frame = self.session.recv()?;
+            let frame = self.session.recv().await?;
             match frame.performative {
                 Some(Performative::Attach(_a)) => {
                     // Populate remote properties
@@ -585,7 +585,7 @@ impl Sender {
 
         if !settled {
             loop {
-                let frame = self.link.recv()?;
+                let frame = self.link.recv().await?;
                 match frame.performative {
                     Some(Performative::Disposition(ref disposition)) => {
                         let first = disposition.first;
@@ -635,7 +635,7 @@ impl Receiver {
     /// when a message is received.
     pub async fn receive(&self) -> Result<Delivery> {
         loop {
-            let frame = self.link.recv()?;
+            let frame = self.link.recv().await?;
             match frame.performative {
                 Some(Performative::Transfer(ref transfer)) => {
                     let mut input = frame.payload.unwrap();

@@ -367,10 +367,12 @@ impl ConnectionDriver {
         Ok(session)
     }
 
-    pub fn recv(&self) -> Result<AmqpFrame> {
-        self.rx.recv()
+    #[inline]
+    pub async fn recv(&self) -> Result<AmqpFrame> {
+        self.rx.recv().await
     }
 
+    #[inline]
     pub fn unrecv(&self, frame: AmqpFrame) -> Result<()> {
         self.rx.send(frame)
     }
@@ -603,10 +605,12 @@ impl SessionDriver {
         Ok(link)
     }
 
-    pub fn recv(&self) -> Result<AmqpFrame> {
-        self.rx.recv()
+    #[inline]
+    pub async fn recv(&self) -> Result<AmqpFrame> {
+        self.rx.recv().await
     }
 
+    #[inline]
     pub fn unrecv(&self, frame: AmqpFrame) -> Result<()> {
         self.rx.send(frame)
     }
@@ -745,10 +749,12 @@ impl LinkDriver {
         driver.flush()
     }
 
-    pub fn recv(&self) -> Result<AmqpFrame> {
-        self.rx.recv()
+    #[inline]
+    pub async fn recv(&self) -> Result<AmqpFrame> {
+        self.rx.recv().await
     }
 
+    #[inline]
     pub fn unrecv(&self, frame: AmqpFrame) -> Result<()> {
         self.rx.send(frame)
     }
@@ -780,34 +786,32 @@ impl LinkDriver {
 
 #[derive(Debug)]
 pub struct Channel<T> {
-    tx: Mutex<mpsc::Sender<T>>,
-    rx: Mutex<mpsc::Receiver<T>>,
+    tx: async_channel::Sender<T>,
+    rx: async_channel::Receiver<T>,
 }
 
 impl<T> Channel<T> {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Channel<T> {
-        let (tx, rx) = mpsc::channel();
-        Channel {
-            tx: Mutex::new(tx),
-            rx: Mutex::new(rx),
-        }
+        let (tx, rx) = async_channel::unbounded();
+        Channel { tx, rx }
     }
 
+    #[inline]
     pub fn send(&self, value: T) -> Result<()> {
-        self.tx.lock().unwrap().send(value)?;
-        Ok(())
+        Ok(self.tx.try_send(value)?)
     }
 
+    #[inline]
     pub fn try_recv(&self) -> Result<T> {
-        let r = self.rx.lock().unwrap().try_recv()?;
-        Ok(r)
+        Ok(self.rx.try_recv()?)
     }
 
-    pub fn recv(&self) -> Result<T> {
-        let r = self.rx.lock().unwrap().recv()?;
-        Ok(r)
+    #[inline]
+    pub async fn recv(&self) -> Result<T> {
+        Ok(self.rx.recv().await?)
     }
+
 }
 
 #[cfg(test)]
