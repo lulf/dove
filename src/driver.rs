@@ -188,10 +188,7 @@ impl ConnectionDriver {
             // Ensure our peer honors our keepalive
             if now - last_received > self.idle_timeout * 2 {
                 self.connection.close(Close {
-                    error: Some(ErrorCondition {
-                        condition: condition::RESOURCE_LIMIT_EXCEEDED.to_string(),
-                        description: "local-idle-timeout expired".to_string(),
-                    }),
+                    error: Some(ErrorCondition::local_idle_timeout()),
                 })?;
                 warn!("Connection timed out");
                 return Err(AmqpError::IoError(std::io::Error::from(

@@ -11,6 +11,21 @@ use std::io;
 
 pub type Result<T> = std::result::Result<T, AmqpError>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorCondition {
+    pub condition: String,
+    pub description: String,
+}
+
+impl ErrorCondition {
+    pub fn local_idle_timeout() -> Self {
+        ErrorCondition {
+            condition: AmqpError::AmqpResourceLimitExceeded.to_string(),
+            description: "local-idle-timeout expired".to_string(),
+        }
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum AmqpError {
     #[error("IoError: {0:?}")]
@@ -46,26 +61,6 @@ pub enum AmqpError {
     /// is `ErrorCondition` with 48 bytes, therefore `Message` is boxed
     #[error("The link does not have enough credits to send a message")]
     NotEnoughCreditsToSend(Box<Message>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ErrorCondition {
-    pub condition: String,
-    pub description: String,
-}
-
-pub mod condition {
-    pub const INTERNAL_ERROR: &str = "amqp:internal-error";
-    pub const NOT_FOUND: &str = "amqp:not-found";
-    pub const DECODE_ERROR: &str = "amqp:decode-error";
-    pub const NOT_IMPLEMENTED: &str = "amqp:not-implemented";
-    pub const RESOURCE_LIMIT_EXCEEDED: &str = "amqp:resource-limit-exceeded";
-
-    pub mod connection {
-        pub const CONNECTION_FORCED: &str = "amqp:connection:forced";
-        pub const FRAMING_ERROR: &str = "amqp:connection:framing-error";
-        pub const REDIRECT: &str = "amqp:connection:redirect";
-    }
 }
 
 impl AmqpError {
