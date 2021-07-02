@@ -68,7 +68,7 @@ impl ApplyOptionsTo<Attach> for SenderOptions {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ReceiverOptions {
     pub filter: Option<ReceiverFilter>,
 }
@@ -92,6 +92,7 @@ impl ApplyOptionsTo<Attach> for ReceiverOptions {
 /// Sets the filter to be applied by the broker before sending the message
 /// through the link. Be aware, that some filters do nothing unless the correct
 /// exchange type is set.
+#[derive(Clone)]
 pub enum ReceiverFilter {
     /// Filters for exact matches on `message.properties.subject`.
     /// See 'apache.org:legacy-amqp-direct-binding:string'
@@ -204,6 +205,7 @@ pub mod apache_legacy_exchange_direct_binding {
     use crate::types::Value;
     use std::collections::BTreeMap;
 
+    #[derive(Clone)]
     pub struct Options(String);
 
     impl<T: Into<String>> From<T> for Options {
@@ -240,6 +242,7 @@ pub mod apache_legacy_exchange_topic_binding {
     use crate::types::Value;
     use std::collections::BTreeMap;
 
+    #[derive(Clone)]
     pub struct Options(String);
 
     impl<T: Into<String>> From<T> for Options {
@@ -276,11 +279,13 @@ pub mod apache_legacy_exchange_headers_filter {
     use crate::types::Value;
     use std::collections::{BTreeMap, HashMap};
 
+    #[derive(Clone, Copy)]
     pub enum MatchMode {
         Any,
         All,
     }
 
+    #[derive(Clone)]
     pub struct Options {
         pub mode: MatchMode,
         pub headers: HashMap<String, String>,
