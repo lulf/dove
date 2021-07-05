@@ -8,7 +8,7 @@ use dove::error::AmqpError;
 use dove::message::MessageBody;
 
 use futures::future::join_all;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::process::Command;
 use std::sync::Once;
 use std::time::{Duration, Instant};
@@ -145,7 +145,7 @@ async fn single_client(port: u16, opts: ConnectionOptions) {
 
     let connection = container
         .connect(
-            SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port).into(),
+            SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), port),
             opts,
         )
         .await
@@ -231,7 +231,7 @@ async fn multiple_clients(port: u16, opts: ConnectionOptions) {
         log::info!("{}: connecting on port {}", container.container_id(), port);
         let connection = container
             .connect(
-                SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port).into(),
+                SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), port),
                 sender_opts,
             )
             .await
@@ -280,7 +280,7 @@ async fn multiple_clients(port: u16, opts: ConnectionOptions) {
         log::info!("{}: connecting on port {}", container.container_id(), port);
         let connection = container
             .connect(
-                SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port).into(),
+                SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), port),
                 opts,
             )
             .await
