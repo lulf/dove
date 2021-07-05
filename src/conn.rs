@@ -159,7 +159,11 @@ impl<N: Network> Connection<N> {
         Ok(())
     }
 
-    pub fn transport(&mut self) -> &mut Transport<N> {
+    pub fn transport(&self) -> &Transport<N> {
+        &self.transport
+    }
+
+    pub fn transport_mut(&mut self) -> &mut Transport<N> {
         &mut self.transport
     }
 

@@ -224,7 +224,11 @@ impl<N: Network> Transport<N> {
         &self.info
     }
 
-    pub fn network(&mut self) -> &mut N {
+    pub fn network(&self) -> &N {
+        &self.network
+    }
+
+    pub fn network_mut(&mut self) -> &mut N {
         &mut self.network
     }
 
@@ -309,8 +313,8 @@ pub mod mio {
     use crate::error::*;
     use std::io::Read;
     use std::io::Write;
-    use std::net::Shutdown;
     use std::net::ToSocketAddrs;
+    use std::net::{Shutdown, SocketAddr};
 
     #[derive(Debug)]
     pub struct MioNetwork {
@@ -318,8 +322,8 @@ pub mod mio {
     }
 
     impl MioNetwork {
-        pub fn connect(host: &str, port: u16) -> Result<MioNetwork> {
-            let mut addrs = format!("{}:{}", host, port).to_socket_addrs()?;
+        pub fn connect<S: ToSocketAddrs>(host: &S) -> Result<MioNetwork> {
+            let mut addrs = host.to_socket_addrs()?;
             let stream = TcpStream::connect(
                 addrs
                     .next()
@@ -327,6 +331,10 @@ pub mod mio {
             )?;
 
             Ok(MioNetwork { stream })
+        }
+
+        pub fn peer_addr(&self) -> std::io::Result<SocketAddr> {
+            self.stream.peer_addr()
         }
 
         pub fn register(&mut self, id: Token, poll: &mut Poll) -> Result<()> {
