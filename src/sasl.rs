@@ -115,15 +115,27 @@ impl Sasl {
                             if sasl_client.mechanism == SaslMechanism::Plain {
                                 let mut data = Vec::new();
                                 data.extend_from_slice(
-                                    sasl_client.username.clone().unwrap().as_bytes(),
+                                    sasl_client
+                                        .username
+                                        .as_deref()
+                                        .unwrap_or_default()
+                                        .as_bytes(),
                                 );
                                 data.push(0);
                                 data.extend_from_slice(
-                                    sasl_client.username.clone().unwrap().as_bytes(),
+                                    sasl_client
+                                        .username
+                                        .as_deref()
+                                        .unwrap_or_default()
+                                        .as_bytes(),
                                 );
                                 data.push(0);
                                 data.extend_from_slice(
-                                    sasl_client.password.clone().unwrap().as_bytes(),
+                                    sasl_client
+                                        .password
+                                        .as_deref()
+                                        .unwrap_or_default()
+                                        .as_bytes(),
                                 );
                                 initial_response = Some(data);
                             }

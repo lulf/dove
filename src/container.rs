@@ -655,23 +655,30 @@ impl Receiver {
         loop {
             let frame = self.link.recv().await?;
             match frame.performative {
-                Some(Performative::Transfer(ref transfer)) => {
-                    let mut input = frame.payload.unwrap();
-                    let message = Message::decode(&mut input)?;
-                    let delivery = Arc::new(DeliveryDriver {
-                        state: transfer.state.clone(),
-                        tag: transfer.delivery_tag.clone().unwrap(),
-                        id: transfer.delivery_id.unwrap(),
-                        remotely_settled: transfer.settled.unwrap_or(false),
-                        message: None,
-                        settled: false,
-                    });
-                    return Ok(Delivery {
-                        settled: false,
-                        link: self.link.clone(),
-                        message: Some(message),
-                        delivery,
-                    });
+                Some(Performative::Transfer(transfer)) => {
+                    if let Some(mut input) = frame.payload {
+                        let message = Message::decode(&mut input)?;
+                        let delivery = Arc::new(DeliveryDriver {
+                            state: transfer.state,
+                            tag: transfer
+                                .delivery_tag
+                                .ok_or(AmqpError::TransferFrameIsMissingDeliveryTag)?,
+                            id: transfer
+                                .delivery_id
+                                .ok_or(AmqpError::TransferFrameIsMissingDeliveryTag)?,
+                            remotely_settled: transfer.settled.unwrap_or(false),
+                            message: None,
+                            settled: false,
+                        });
+                        return Ok(Delivery {
+                            settled: false,
+                            link: self.link.clone(),
+                            message: Some(message),
+                            delivery,
+                        });
+                    } else {
+                        return Err(AmqpError::TransferFrameIsMissingPayload);
+                    }
                 }
                 _ => {
                     // TODO: Prevent reordering

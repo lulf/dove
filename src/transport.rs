@@ -319,8 +319,12 @@ pub mod mio {
 
     impl MioNetwork {
         pub fn connect(host: &str, port: u16) -> Result<MioNetwork> {
-            let mut addrs = format!("{}:{}", host, port).to_socket_addrs().unwrap();
-            let stream = TcpStream::connect(addrs.next().unwrap())?;
+            let mut addrs = format!("{}:{}", host, port).to_socket_addrs()?;
+            let stream = TcpStream::connect(
+                addrs
+                    .next()
+                    .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::AddrNotAvailable))?,
+            )?;
 
             Ok(MioNetwork { stream })
         }

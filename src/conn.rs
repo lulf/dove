@@ -142,7 +142,7 @@ impl<N: Network> Connection<N> {
     }
 
     fn skip_sasl(&self) -> bool {
-        self.sasl.is_none() || self.sasl.as_ref().unwrap().is_done()
+        self.sasl.as_ref().map(Sasl::is_done).unwrap_or(true)
     }
 
     // Write outgoing frames
@@ -218,19 +218,22 @@ impl<N: Network> Connection<N> {
             }
             */
             ConnectionState::Sasl => {
-                let sasl = self.sasl.as_mut().unwrap();
-                match sasl.state {
-                    SaslState::Success => {
-                        self.header_sent = false;
-                        self.state = ConnectionState::Start;
+                if let Some(sasl) = &mut self.sasl {
+                    match sasl.state {
+                        SaslState::Success => {
+                            self.header_sent = false;
+                            self.state = ConnectionState::Start;
+                        }
+                        SaslState::Failed => {
+                            self.transport.close()?;
+                            self.state = ConnectionState::Closed;
+                        }
+                        SaslState::InProgress => {
+                            sasl.perform_handshake(None, &mut self.transport)?;
+                        }
                     }
-                    SaslState::Failed => {
-                        self.transport.close()?;
-                        self.state = ConnectionState::Closed;
-                    }
-                    SaslState::InProgress => {
-                        sasl.perform_handshake(None, &mut self.transport)?;
-                    }
+                } else {
+                    return Err(AmqpError::SaslConfigurationExpected);
                 }
             }
             ConnectionState::Opened => {

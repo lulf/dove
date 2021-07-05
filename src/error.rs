@@ -61,6 +61,18 @@ pub enum AmqpError {
     /// is `ErrorCondition` with 48 bytes, therefore `Message` is boxed
     #[error("The link does not have enough credits to send a message")]
     NotEnoughCreditsToSend(Box<Message>),
+    #[error("The server expected a SASL configuration but none was supplied")]
+    SaslConfigurationExpected,
+    #[error("Received a Transfer-Frame without payload but expected some")]
+    TransferFrameIsMissingPayload,
+    #[error("Received a Transfer-Frame without a delivery tag")]
+    TransferFrameIsMissingDeliveryTag,
+    #[error("Received a Transfer-Frame without a delivery id")]
+    TransferFrameIsMissingDeliveryId,
+    #[error("Cannot allocate another session because all available ids are already in use")]
+    SessionAllocationExhausted,
+    #[error("The handle is (no longer) valid")]
+    InvalidHandle,
 }
 
 impl AmqpError {
