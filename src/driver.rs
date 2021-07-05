@@ -337,6 +337,7 @@ impl ConnectionDriver {
 
     #[inline]
     pub fn unrecv(&self, frame: AmqpFrame) -> Result<()> {
+        warn!("unrecv");
         self.rx.send(frame)
     }
 }
@@ -570,6 +571,7 @@ impl SessionDriver {
 
     #[inline]
     pub fn unrecv(&self, frame: AmqpFrame) -> Result<()> {
+        warn!("unrecv");
         self.rx.send(frame)
     }
 }
@@ -695,6 +697,7 @@ impl LinkDriver {
 
     #[inline]
     pub fn unrecv(&self, frame: AmqpFrame) -> Result<()> {
+        warn!("unrecv");
         self.rx.send(frame)
     }
 

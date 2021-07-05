@@ -517,7 +517,6 @@ impl Session {
                 _ => {
                     // Push it back into the queue
                     // TODO: Prevent reordering
-                    eprintln!("unreceive");
                     self.session.unrecv(frame)?;
                 }
             }
@@ -685,7 +684,6 @@ impl Receiver {
                 }
                 _ => {
                     // TODO: Prevent reordering
-                    warn!("unreceive: {:?}", frame);
                     self.link.unrecv(frame)?;
                 }
             }
