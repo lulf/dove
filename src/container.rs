@@ -70,21 +70,18 @@ pub struct Session {
 }
 
 /// Represents a sender link.
-#[allow(dead_code)]
 pub struct Sender {
     link: Arc<LinkDriver>,
     next_message_id: AtomicU64,
 }
 
 /// Represents a receiver link.
-#[allow(dead_code)]
 pub struct Receiver {
     link: Arc<LinkDriver>,
-    next_message_id: AtomicU64,
 }
 
 /// Represents a disposition response for a sent message.
-#[allow(dead_code)]
+#[allow(dead_code)] // TODO this type does not seem to be useful (yet)?
 pub struct Disposition {
     delivery: Arc<DeliveryDriver>,
 }
@@ -559,10 +556,7 @@ impl Session {
                     return if matches!(a.source, Some(s) if matches!(&s.address, Some(a) if a == addr))
                     {
                         // Populate remote properties
-                        Ok(Receiver {
-                            link,
-                            next_message_id: AtomicU64::new(0),
-                        })
+                        Ok(Receiver { link })
                     } else {
                         Err(AmqpError::TargetNotRecognized(addr.to_string()))
                     };

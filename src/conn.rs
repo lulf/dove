@@ -15,7 +15,7 @@ use async_channel::Sender;
 use std::sync::Arc;
 use std::vec::Vec;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct ConnectionOptions {
     pub username: Option<String>,
     pub password: Option<String>,
@@ -23,8 +23,7 @@ pub struct ConnectionOptions {
 }
 
 impl ConnectionOptions {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> ConnectionOptions {
+    pub const fn new() -> ConnectionOptions {
         ConnectionOptions {
             username: None,
             password: None,

@@ -300,7 +300,7 @@ pub struct Source {
     pub capabilities: Option<Vec<Symbol>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Target {
     pub address: Option<String>,
     pub durable: Option<TerminusDurability>,
@@ -800,8 +800,7 @@ impl Encoder for Source {
 }
 
 impl Target {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Target {
+    pub const fn new() -> Target {
         Target {
             address: None,
             durable: None,

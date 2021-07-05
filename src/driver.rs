@@ -729,11 +729,16 @@ pub struct Channel<T> {
     rx: async_channel::Receiver<T>,
 }
 
-impl<T> Channel<T> {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Channel<T> {
+impl<T> Default for Channel<T> {
+    fn default() -> Self {
         let (tx, rx) = async_channel::unbounded();
-        Channel { tx, rx }
+        Self { tx, rx }
+    }
+}
+
+impl<T> Channel<T> {
+    pub fn new() -> Channel<T> {
+        Self::default()
     }
 
     #[inline]
