@@ -73,6 +73,8 @@ pub enum AmqpError {
     SessionAllocationExhausted,
     #[error("The handle is (no longer) valid")]
     InvalidHandle,
+    #[error("The target {0:?} is not recognized by the broker")]
+    TargetNotRecognized(String),
 }
 
 impl AmqpError {

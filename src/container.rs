@@ -505,16 +505,22 @@ impl Session {
         loop {
             let frame = self.session.recv().await?;
             match frame.performative {
-                Some(Performative::Attach(_a)) => {
-                    // Populate remote properties
-                    return Ok(Sender {
-                        link,
-                        next_message_id: AtomicU64::new(0),
-                    });
+                Some(Performative::Attach(a)) if a.name == link.name => {
+                    return if matches!(a.target, Some(t) if matches!(&t.address, Some(a) if a == addr))
+                    {
+                        // Populate remote properties
+                        Ok(Sender {
+                            link,
+                            next_message_id: AtomicU64::new(0),
+                        })
+                    } else {
+                        Err(AmqpError::TargetNotRecognized(addr.to_string()))
+                    };
                 }
                 _ => {
                     // Push it back into the queue
                     // TODO: Prevent reordering
+                    eprintln!("unreceive");
                     self.session.unrecv(frame)?;
                 }
             }
@@ -549,12 +555,17 @@ impl Session {
         loop {
             let frame = self.session.recv().await?;
             match frame.performative {
-                Some(Performative::Attach(_a)) => {
-                    // Populate remote properties
-                    return Ok(Receiver {
-                        link,
-                        next_message_id: AtomicU64::new(0),
-                    });
+                Some(Performative::Attach(a)) if a.name == link.name => {
+                    return if matches!(a.source, Some(s) if matches!(&s.address, Some(a) if a == addr))
+                    {
+                        // Populate remote properties
+                        Ok(Receiver {
+                            link,
+                            next_message_id: AtomicU64::new(0),
+                        })
+                    } else {
+                        Err(AmqpError::TargetNotRecognized(addr.to_string()))
+                    };
                 }
                 _ => {
                     // Push it back into the queue
