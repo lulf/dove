@@ -6,6 +6,7 @@
 //! The error module implements all AMQP 1.0 error types that is supported by dove. Conversion from many different error types are supported.
 
 use crate::message::Message;
+use crate::sasl::SaslMechanism;
 use async_channel::{RecvError, SendError, TryRecvError, TrySendError};
 use std::io;
 
@@ -75,6 +76,8 @@ pub enum AmqpError {
     InvalidHandle,
     #[error("The target {0:?} is not recognized by the broker")]
     TargetNotRecognized(String),
+    #[error("This client does not support the desired SASL mechanism {0:?}")]
+    SaslMechanismNotSupported(SaslMechanism),
 }
 
 impl AmqpError {

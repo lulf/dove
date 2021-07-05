@@ -42,13 +42,14 @@ pub enum SaslState {
     Failed,
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum SaslMechanism {
     Anonymous,
     Plain,
     CramMd5,
     ScramSha1,
     ScramSha256,
+    Other(String),
 }
 
 impl FromStr for SaslMechanism {
@@ -65,20 +66,27 @@ impl FromStr for SaslMechanism {
         } else if "scram-sha-256".eq_ignore_ascii_case(s) {
             Ok(SaslMechanism::ScramSha256)
         } else {
-            Err(AmqpError::decode_error(Some(
-                format!("Unknown SASL mechanism {}", s).as_str(),
-            )))
+            Ok(SaslMechanism::Other(s.to_string()))
+        }
+    }
+}
+
+impl AsRef<str> for SaslMechanism {
+    fn as_ref(&self) -> &str {
+        match self {
+            SaslMechanism::Anonymous => "ANONYMOUS",
+            SaslMechanism::Plain => "PLAIN",
+            SaslMechanism::CramMd5 => "CRAM-MD5",
+            SaslMechanism::ScramSha1 => "SCRAM-SHA-1",
+            SaslMechanism::ScramSha256 => "SCRAM-SHA-256",
+            SaslMechanism::Other(other) => other.as_str(),
         }
     }
 }
 
 impl ToString for SaslMechanism {
     fn to_string(&self) -> String {
-        match self {
-            SaslMechanism::Anonymous => "ANONYMOUS".to_string(),
-            SaslMechanism::Plain => "PLAIN".to_string(),
-            _ => panic!("Unsupported mechanism!"),
-        }
+        self.as_ref().to_string()
     }
 }
 
@@ -110,41 +118,41 @@ impl Sasl {
                         }
                         if !found {
                             self.state = SaslState::Failed;
-                        } else {
-                            let mut initial_response = None;
-                            if sasl_client.mechanism == SaslMechanism::Plain {
-                                let mut data = Vec::new();
-                                data.extend_from_slice(
-                                    sasl_client
-                                        .username
-                                        .as_deref()
-                                        .unwrap_or_default()
-                                        .as_bytes(),
-                                );
-                                data.push(0);
-                                data.extend_from_slice(
-                                    sasl_client
-                                        .username
-                                        .as_deref()
-                                        .unwrap_or_default()
-                                        .as_bytes(),
-                                );
-                                data.push(0);
-                                data.extend_from_slice(
-                                    sasl_client
-                                        .password
-                                        .as_deref()
-                                        .unwrap_or_default()
-                                        .as_bytes(),
-                                );
-                                initial_response = Some(data);
-                            }
-                            let init = Frame::SASL(SaslFrame::SaslInit(SaslInit {
-                                mechanism: sasl_client.mechanism,
-                                initial_response,
+                        } else if sasl_client.mechanism == SaslMechanism::Plain {
+                            let mut data = Vec::new();
+                            data.extend_from_slice(
+                                sasl_client
+                                    .username
+                                    .as_deref()
+                                    .unwrap_or_default()
+                                    .as_bytes(),
+                            );
+                            data.push(0);
+                            data.extend_from_slice(
+                                sasl_client
+                                    .username
+                                    .as_deref()
+                                    .unwrap_or_default()
+                                    .as_bytes(),
+                            );
+                            data.push(0);
+                            data.extend_from_slice(
+                                sasl_client
+                                    .password
+                                    .as_deref()
+                                    .unwrap_or_default()
+                                    .as_bytes(),
+                            );
+                            transport.write_frame(&Frame::SASL(SaslFrame::SaslInit(SaslInit {
+                                mechanism: sasl_client.mechanism.clone(),
+                                initial_response: Some(data),
                                 hostname: hostname.map(|s| s.to_string()),
-                            }));
-                            transport.write_frame(&init)?;
+                            })))?;
+                        } else {
+                            self.state = SaslState::Failed;
+                            return Err(AmqpError::SaslMechanismNotSupported(
+                                sasl_client.mechanism.clone(),
+                            ));
                         }
                     }
                     Frame::SASL(SaslFrame::SaslOutcome(outcome)) => {

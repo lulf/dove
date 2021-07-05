@@ -71,14 +71,7 @@ pub type SaslCode = u8;
 
 impl Encoder for SaslMechanism {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let value = match self {
-            SaslMechanism::Anonymous => Symbol::from_slice(b"ANONYMOUS"),
-            SaslMechanism::Plain => Symbol::from_slice(b"PLAIN"),
-            SaslMechanism::CramMd5 => Symbol::from_slice(b"CRAM-MD5"),
-            SaslMechanism::ScramSha1 => Symbol::from_slice(b"SCRAM-SHA-1"),
-            SaslMechanism::ScramSha256 => Symbol::from_slice(b"SCRAM-SHA-256"),
-        };
-        value.encode(writer)
+        Symbol::from_slice(self.as_ref().as_bytes()).encode(writer)
     }
 }
 
