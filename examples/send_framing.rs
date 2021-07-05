@@ -33,7 +33,7 @@ fn main() {
 
     let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
     let net =
-        mio::MioNetwork::connect(format!("{}:{}", host, port)).expect("Error opening network");
+        mio::MioNetwork::connect(&format!("{}:{}", host, port)).expect("Error opening network");
     let transport = Transport::new(net, 1024);
     let mut connection = connect(transport, opts).expect("Error opening connection");
 
