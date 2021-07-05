@@ -137,10 +137,7 @@ impl Value {
             Value::Array(ref value) => ValueRef::Array(value),
             Value::List(ref value) => ValueRef::List(value),
             Value::Map(ref value) => ValueRef::Map(value),
-            v => {
-                trace!("Cannot convert value ref {:?}", v);
-                panic!("Cannot convert value ref {:?}", v);
-            }
+            Value::Binary(ref value) => ValueRef::Binary(value),
         }
     }
 }
