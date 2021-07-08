@@ -113,6 +113,13 @@ pub enum ReceiverFilter {
     /// # WARN
     /// Requires exchange type 'headers'
     ApacheLegacyExchangeHeadersBinding(apache_legacy_exchange_headers_filter::Options),
+
+    /// Complex filter based on values set in `message.application_properties.*`.
+    /// See 'apache.org:legacy-amqp-headers-binding:map'
+    ///
+    /// # WARN
+    /// Requires exchange type 'headers'
+    ApacheSelector(apache_selector::Selector),
 }
 
 impl ApplyOptionsTo<Attach> for ReceiverFilter {
@@ -127,6 +134,7 @@ impl ApplyOptionsTo<Attach> for ReceiverFilter {
             ReceiverFilter::ApacheLegacyExchangeHeadersBinding(filter) => {
                 filter.apply_options_to(target)
             }
+            ReceiverFilter::ApacheSelector(filter) => filter.apply_options_to(target),
         }
     }
 }
@@ -196,6 +204,18 @@ impl ReceiverFilter {
             headers: kv_pairs
                 .map(|(key, value)| (key.into(), value.into()))
                 .collect(),
+        })
+    }
+
+    /// Filter based on some SQL-like syntax.
+    /// See 'apache.org:selector-filter:string', 'JMS Selectors' and 'javax.jmx.Message'.
+    /// https://docs.oracle.com/javaee/1.4/api/javax/jms/Message.html
+    ///
+    /// # WARN
+    /// Requires exchange type 'headers'
+    pub fn apache_selector(query: impl Into<String>) -> Self {
+        Self::ApacheSelector(apache_selector::Selector {
+            query: query.into(),
         })
     }
 }
@@ -317,6 +337,40 @@ pub mod apache_legacy_exchange_headers_filter {
                                 key_values.extend_from_slice(&self.headers);
                                 key_values
                             })),
+                        ),
+                    );
+                    map
+                });
+            }
+        }
+    }
+}
+
+pub mod apache_selector {
+    use super::*;
+    use crate::symbol::Symbol;
+    use crate::types::Value;
+    use std::collections::BTreeMap;
+
+    #[derive(Clone)]
+    pub struct Selector {
+        pub query: String,
+    }
+
+    impl ApplyOptionsTo<Attach> for Selector {
+        fn apply_options_to(&self, target: &mut Attach) {
+            if let Some(source) = target.source.as_mut() {
+                source.filter = Some({
+                    let mut map = BTreeMap::new();
+                    map.insert(
+                        Symbol::from_string("selector"),
+                        Value::Described(
+                            Box::new(Value::Symbol(
+                                Symbol::from_string("apache.org:selector-filter:string")
+                                    .to_slice()
+                                    .to_vec(),
+                            )),
+                            Box::new(Value::String(self.query.clone())),
                         ),
                     );
                     map
