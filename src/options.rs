@@ -277,7 +277,7 @@ pub mod apache_legacy_exchange_headers_filter {
     use super::*;
     use crate::symbol::Symbol;
     use crate::types::Value;
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
 
     #[derive(Clone, Copy)]
     pub enum MatchMode {
@@ -288,7 +288,7 @@ pub mod apache_legacy_exchange_headers_filter {
     #[derive(Clone)]
     pub struct Options {
         pub mode: MatchMode,
-        pub headers: HashMap<String, String>,
+        pub headers: Vec<(String, String)>,
     }
 
     impl ApplyOptionsTo<Attach> for Options {
