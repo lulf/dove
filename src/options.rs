@@ -1,3 +1,4 @@
+use crate::container::Value;
 use crate::framing::{Attach, LinkRole};
 
 pub trait ApplyOptionsTo<T> {
@@ -158,7 +159,7 @@ impl ReceiverFilter {
     ///
     /// # WARN
     /// Requires exchange type 'headers'
-    pub fn apache_legacy_exchange_headers_binding_match_any<A: Into<String>, B: Into<String>>(
+    pub fn apache_legacy_exchange_headers_binding_match_any<A: Into<Value>, B: Into<Value>>(
         kv_pairs: impl Iterator<Item = (A, B)>,
     ) -> Self {
         Self::apache_legacy_exchange_headers_binding(
@@ -172,7 +173,7 @@ impl ReceiverFilter {
     ///
     /// # WARN
     /// Requires exchange type 'headers'
-    pub fn apache_legacy_exchange_headers_binding_match_all<A: Into<String>, B: Into<String>>(
+    pub fn apache_legacy_exchange_headers_binding_match_all<A: Into<Value>, B: Into<Value>>(
         kv_pairs: impl Iterator<Item = (A, B)>,
     ) -> Self {
         Self::apache_legacy_exchange_headers_binding(
@@ -186,7 +187,7 @@ impl ReceiverFilter {
     ///
     /// # WARN
     /// Requires exchange type 'headers'
-    fn apache_legacy_exchange_headers_binding<A: Into<String>, B: Into<String>>(
+    fn apache_legacy_exchange_headers_binding<A: Into<Value>, B: Into<Value>>(
         mode: apache_legacy_exchange_headers_filter::MatchMode,
         kv_pairs: impl Iterator<Item = (A, B)>,
     ) -> Self {
@@ -288,7 +289,7 @@ pub mod apache_legacy_exchange_headers_filter {
     #[derive(Clone)]
     pub struct Options {
         pub mode: MatchMode,
-        pub headers: Vec<(String, String)>,
+        pub headers: Vec<(Value, Value)>,
     }
 
     impl ApplyOptionsTo<Attach> for Options {
@@ -306,21 +307,14 @@ pub mod apache_legacy_exchange_headers_filter {
                             )),
                             Box::new(Value::Map({
                                 let mut key_values = vec![(
-                                    Value::String("x-match".into()),
-                                    Value::String(
-                                        match self.mode {
-                                            MatchMode::Any => "any",
-                                            MatchMode::All => "all",
-                                        }
-                                        .into(),
-                                    ),
+                                    Value::Str("x-match"),
+                                    Value::Str(match self.mode {
+                                        MatchMode::Any => "any",
+                                        MatchMode::All => "all",
+                                    }),
                                 )];
-                                self.headers.iter().for_each(|(key, value)| {
-                                    key_values.push((
-                                        Value::String(key.clone()),
-                                        Value::String(value.clone()),
-                                    ));
-                                });
+
+                                key_values.extend_from_slice(&self.headers);
                                 key_values
                             })),
                         ),
