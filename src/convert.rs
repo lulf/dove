@@ -139,6 +139,20 @@ impl<T: TryFromValue + std::cmp::Ord> TryFromValue for BTreeMap<T, Value> {
     }
 }
 
+impl TryFromValue for Timestamp {
+    fn try_from(value: Value) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        match value {
+            Value::Timestamp(v) => Ok(Timestamp(v)),
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to Timestamp",
+            ))),
+        }
+    }
+}
+
 impl TryFromValue for Value {
     fn try_from(value: Value) -> Result<Self> {
         Ok(value)

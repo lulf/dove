@@ -57,10 +57,12 @@ pub const DESC_SASL_INIT: Value = Value::Ulong(0x41);
 pub const DESC_SASL_OUTCOME: Value = Value::Ulong(0x44);
 pub const DESC_ERROR: Value = Value::Ulong(0x1D);
 
-/**
- * A reference to a type with a given value. This allows efficient zero copy of the provided values and should
- * be used when possible (depends on lifetime constraints where its used).
- */
+/// Milliseconds since the unix epoch
+#[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
+pub struct Timestamp(pub u64);
+
+/// A reference to a type with a given value. This allows efficient zero copy of the provided values
+/// and should be used when possible (depends on lifetime constraints where its used).
 #[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq)]
 pub enum ValueRef<'a> {
     Described(Box<ValueRef<'a>>, Box<ValueRef<'a>>),
@@ -74,21 +76,28 @@ pub enum ValueRef<'a> {
     Short(&'a i16),
     Int(&'a i32),
     Long(&'a i64),
-    String(&'a str),
+    // Float(&'a f32),  does not impl Ord nor Eq, but is used as key in *Maps in this crate...
+    // Double(&'a f64), does not impl Ord nor Eq, but is used as key in *Maps in this crate...
+    // decimal32
+    // decimal64
+    // decimal128
+    Char(&'a char),
+    Timestamp(&'a u64),
+    // uuid
     Binary(&'a [u8]),
+    String(&'a str),
     Symbol(&'a [u8]),
     SymbolRef(&'a str),
-    Array(&'a Vec<Value>),
     List(&'a Vec<Value>),
-    Map(&'a Vec<(Value, Value)>),
-    ArrayRef(&'a Vec<ValueRef<'a>>),
     ListRef(&'a Vec<ValueRef<'a>>),
+    Map(&'a Vec<(Value, Value)>),
     MapRef(&'a Vec<(ValueRef<'a>, ValueRef<'a>)>),
+    Array(&'a Vec<Value>),
+    ArrayRef(&'a Vec<ValueRef<'a>>),
 }
 
-/**
- * An owned value type, mostly used during decoding.
- */
+/// An owned value type that can be transferred to or from the broker.
+/// http://docs.oasis-open.org/amqp/core/v1.0/csprd01/amqp-core-types-v1.0-csprd01.html#toc
 #[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq)]
 pub enum Value {
     Described(Box<Value>, Box<Value>),
@@ -102,13 +111,21 @@ pub enum Value {
     Short(i16),
     Int(i32),
     Long(i64),
+    // Float(f32),  does not impl Ord nor Eq, but is used as key in *Maps in this crate...
+    // Double(f64), does not impl Ord nor Eq, but is used as key in *Maps in this crate...
+    // decimal32
+    // decimal64
+    // decimal128
+    Char(char),
+    Timestamp(u64),
+    // uuid
+    Binary(Vec<u8>),
     Str(&'static str),
     String(String),
-    Binary(Vec<u8>),
     Symbol(Vec<u8>),
-    Array(Vec<Value>),
     List(Vec<Value>),
     Map(Vec<(Value, Value)>),
+    Array(Vec<Value>),
 }
 
 impl Value {
@@ -138,6 +155,8 @@ impl Value {
             Value::List(ref value) => ValueRef::List(value),
             Value::Map(ref value) => ValueRef::Map(value),
             Value::Binary(ref value) => ValueRef::Binary(value),
+            Value::Char(ref value) => ValueRef::Char(value),
+            Value::Timestamp(ref value) => ValueRef::Timestamp(value),
         }
     }
 }
@@ -151,8 +170,8 @@ pub enum TypeCode {
     Described = 0x00,
     Null = 0x40,
     Boolean = 0x56,
-    Booleantrue = 0x41,
-    Booleanfalse = 0x42,
+    BooleanTrue = 0x41,
+    BooleanFalse = 0x42,
     Ubyte = 0x50,
     Ushort = 0x60,
     Uint = 0x70,
@@ -167,6 +186,14 @@ pub enum TypeCode {
     Intsmall = 0x54,
     Long = 0x81,
     Longsmall = 0x55,
+    // float
+    // double
+    // decimal32
+    // decimal32
+    // decimal12
+    Char = 0x73,
+    Timestamp = 0x83,
+    // uuid
     Bin8 = 0xA0,
     Bin32 = 0xB0,
     Str8 = 0xA1,
