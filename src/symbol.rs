@@ -57,7 +57,7 @@ impl Encoder for Vec<Symbol> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let mut values = Vec::new();
         for sym in self.iter() {
-            values.push(ValueRef::Symbol(sym.to_slice()));
+            values.push(ValueRef::from(sym));
         }
         ValueRef::ArrayRef(&values).encode(writer)
     }

@@ -473,7 +473,7 @@ impl Encoder for Vec<(Symbol, Value)> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let m = self
             .iter()
-            .map(|(k, v)| (ValueRef::Symbol(k.to_slice()), v.value_ref()))
+            .map(|(k, v)| (ValueRef::from(k), v.value_ref()))
             .collect();
         ValueRef::MapRef(&m).encode(writer)
     }
@@ -503,7 +503,7 @@ impl Encoder for BTreeMap<Symbol, Value> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let m = self
             .iter()
-            .map(|(k, v)| (ValueRef::Symbol(k.to_slice()), v.value_ref()))
+            .map(|(k, v)| (ValueRef::from(k), v.value_ref()))
             .collect();
         ValueRef::MapRef(&m).encode(writer)
     }

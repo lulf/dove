@@ -244,9 +244,7 @@ pub mod apache_legacy_exchange_direct_binding {
                     map.insert(
                         Symbol::from_string(filter_symbol),
                         Value::Described(
-                            Box::new(Value::Symbol(
-                                Symbol::from_string(filter_symbol).to_slice().to_vec(),
-                            )),
+                            Box::new(Value::from(Symbol::from_string(filter_symbol))),
                             Box::new(Value::String(self.0.clone())),
                         ),
                     );
@@ -281,9 +279,7 @@ pub mod apache_legacy_exchange_topic_binding {
                     map.insert(
                         Symbol::from_string(filter_symbol),
                         Value::Described(
-                            Box::new(Value::Symbol(
-                                Symbol::from_string(filter_symbol).to_slice().to_vec(),
-                            )),
+                            Box::new(Value::from(Symbol::from_string(filter_symbol))),
                             Box::new(Value::String(self.0.clone())),
                         ),
                     );
@@ -320,11 +316,9 @@ pub mod apache_legacy_exchange_headers_filter {
                     map.insert(
                         Symbol::from_string("selector"),
                         Value::Described(
-                            Box::new(Value::Symbol(
-                                Symbol::from_string("apache.org:legacy-amqp-headers-binding:map")
-                                    .to_slice()
-                                    .to_vec(),
-                            )),
+                            Box::new(Value::from(Symbol::from_string(
+                                "apache.org:legacy-amqp-headers-binding:map",
+                            ))),
                             Box::new(Value::Map({
                                 let mut key_values = vec![(
                                     Value::Str("x-match"),
@@ -365,11 +359,9 @@ pub mod apache_selector {
                     map.insert(
                         Symbol::from_string("selector"),
                         Value::Described(
-                            Box::new(Value::Symbol(
-                                Symbol::from_string("apache.org:selector-filter:string")
-                                    .to_slice()
-                                    .to_vec(),
-                            )),
+                            Box::new(Value::from(Symbol::from_string(
+                                "apache.org:selector-filter:string",
+                            ))),
                             Box::new(Value::String(self.query.clone())),
                         ),
                     );
