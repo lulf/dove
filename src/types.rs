@@ -9,6 +9,7 @@ use std::io::Write;
 use std::vec::Vec;
 
 use crate::error::*;
+use crate::symbol::Symbol;
 
 /**
  * Encoder trait that all types that can be serialized to an AMQP type must implement.
@@ -98,32 +99,47 @@ pub enum ValueRef<'a> {
 
 /// An owned value type that can be transferred to or from the broker.
 /// http://docs.oasis-open.org/amqp/core/v1.0/csprd01/amqp-core-types-v1.0-csprd01.html#toc
-#[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq)]
+#[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq, derive_more::From)]
 pub enum Value {
     Described(Box<Value>, Box<Value>),
     Null,
+    #[from]
     Bool(bool),
+    #[from]
     Ubyte(u8),
+    #[from]
     Ushort(u16),
+    #[from]
     Uint(u32),
+    #[from]
     Ulong(u64),
+    #[from]
     Byte(i8),
+    #[from]
     Short(i16),
+    #[from]
     Int(i32),
+    #[from]
     Long(i64),
     // Float(f32),  does not impl Ord nor Eq, but is used as key in *Maps in this crate...
     // Double(f64), does not impl Ord nor Eq, but is used as key in *Maps in this crate...
     // decimal32
     // decimal64
     // decimal128
+    #[from]
     Char(char),
     Timestamp(u64),
     // uuid
+    #[from]
     Binary(Vec<u8>),
+    #[from]
     Str(&'static str),
+    #[from]
     String(String),
     Symbol(Vec<u8>),
+    #[from]
     List(Vec<Value>),
+    #[from]
     Map(Vec<(Value, Value)>),
     Array(Vec<Value>),
 }
@@ -158,6 +174,28 @@ impl Value {
             Value::Char(ref value) => ValueRef::Char(value),
             Value::Timestamp(ref value) => ValueRef::Timestamp(value),
         }
+    }
+}
+
+impl From<Symbol> for Value {
+    fn from(s: Symbol) -> Self {
+        Self::Symbol(s.data)
+    }
+}
+
+impl From<Timestamp> for Value {
+    fn from(t: Timestamp) -> Self {
+        Self::Timestamp(t.0)
+    }
+}
+
+impl<V: Into<Value>, const N: usize> From<[V; N]> for Value {
+    fn from(array: [V; N]) -> Self {
+        Self::Array(
+            std::array::IntoIter::new(array)
+                .map(Into::into)
+                .collect::<Vec<Value>>(),
+        )
     }
 }
 
