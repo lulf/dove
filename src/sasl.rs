@@ -122,7 +122,7 @@ impl Sasl {
                         }
                         if !found {
                             self.state = SaslState::Failed;
-                        } else if sasl_client.mechanism == SaslMechanism::Plain {
+                        } else if SaslMechanism::Plain == sasl_client.mechanism {
                             let mut data = Vec::new();
                             data.extend_from_slice(
                                 sasl_client
@@ -150,6 +150,12 @@ impl Sasl {
                             transport.write_frame(&Frame::SASL(SaslFrame::SaslInit(SaslInit {
                                 mechanism: sasl_client.mechanism.clone(),
                                 initial_response: Some(data),
+                                hostname: hostname.map(|s| s.to_string()),
+                            })))?;
+                        } else if SaslMechanism::Anonymous == sasl_client.mechanism {
+                            transport.write_frame(&Frame::SASL(SaslFrame::SaslInit(SaslInit {
+                                mechanism: sasl_client.mechanism.clone(),
+                                initial_response: None,
                                 hostname: hostname.map(|s| s.to_string()),
                             })))?;
                         } else {
