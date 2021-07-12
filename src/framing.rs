@@ -21,6 +21,7 @@ use crate::frame_codec::*;
 use crate::sasl::*;
 use crate::symbol::*;
 use crate::types::*;
+use std::str::FromStr;
 
 #[derive(Debug)]
 pub struct FrameHeader {
@@ -100,16 +101,7 @@ impl SaslOutcome {
 impl SaslMechanism {
     pub fn from_slice(data: &[u8]) -> Result<SaslMechanism> {
         let input = std::str::from_utf8(data)?;
-        match input {
-            "ANONYMOUS" => Ok(SaslMechanism::Anonymous),
-            "PLAIN" => Ok(SaslMechanism::Plain),
-            "CRAM-MD5" => Ok(SaslMechanism::CramMd5),
-            "SCRAM-SHA-1" => Ok(SaslMechanism::ScramSha1),
-            "SCRAM-SHA-256" => Ok(SaslMechanism::ScramSha256),
-            v => Err(AmqpError::decode_error(Some(
-                format!("Unsupported SASL mechanism {:?}", v).as_str(),
-            ))),
-        }
+        SaslMechanism::from_str(input)
     }
 }
 
