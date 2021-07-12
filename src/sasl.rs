@@ -47,6 +47,7 @@ pub enum SaslMechanism {
     Anonymous,
     Plain,
     CramMd5,
+    DigestMd5,
     ScramSha1,
     ScramSha256,
     Other(String),
@@ -61,6 +62,8 @@ impl FromStr for SaslMechanism {
             Ok(SaslMechanism::Plain)
         } else if "cram-md5".eq_ignore_ascii_case(s) {
             Ok(SaslMechanism::CramMd5)
+        } else if "digest-md5".eq_ignore_ascii_case(s) {
+            Ok(SaslMechanism::DigestMd5)
         } else if "scram-sha-1".eq_ignore_ascii_case(s) {
             Ok(SaslMechanism::ScramSha1)
         } else if "scram-sha-256".eq_ignore_ascii_case(s) {
@@ -77,6 +80,7 @@ impl AsRef<str> for SaslMechanism {
             SaslMechanism::Anonymous => "ANONYMOUS",
             SaslMechanism::Plain => "PLAIN",
             SaslMechanism::CramMd5 => "CRAM-MD5",
+            SaslMechanism::DigestMd5 => "DIGEST-MD5",
             SaslMechanism::ScramSha1 => "SCRAM-SHA-1",
             SaslMechanism::ScramSha256 => "SCRAM-SHA-256",
             SaslMechanism::Other(other) => other.as_str(),
