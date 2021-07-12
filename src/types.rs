@@ -64,37 +64,93 @@ pub struct Timestamp(pub u64);
 
 /// A reference to a type with a given value. This allows efficient zero copy of the provided values
 /// and should be used when possible (depends on lifetime constraints where its used).
-#[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq)]
+#[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq, derive_more::From)]
 pub enum ValueRef<'a> {
     Described(Box<ValueRef<'a>>, Box<ValueRef<'a>>),
     Null,
+    #[from]
     Bool(&'a bool),
+    #[from]
     Ubyte(&'a u8),
+    #[from]
     Ushort(&'a u16),
+    #[from]
     Uint(&'a u32),
+    #[from]
     Ulong(&'a u64),
+    #[from]
     Byte(&'a i8),
+    #[from]
     Short(&'a i16),
+    #[from]
     Int(&'a i32),
+    #[from]
     Long(&'a i64),
     // Float(&'a f32),  does not impl Ord nor Eq, but is used as key in *Maps in this crate...
     // Double(&'a f64), does not impl Ord nor Eq, but is used as key in *Maps in this crate...
     // decimal32
     // decimal64
     // decimal128
+    #[from]
     Char(&'a char),
     Timestamp(&'a u64),
     // uuid
+    #[from]
     Binary(&'a [u8]),
+    #[from]
     String(&'a str),
     Symbol(&'a [u8]),
     SymbolRef(&'a str),
     List(&'a Vec<Value>),
+    #[from]
     ListRef(&'a Vec<ValueRef<'a>>),
     Map(&'a Vec<(Value, Value)>),
+    #[from]
     MapRef(&'a Vec<(ValueRef<'a>, ValueRef<'a>)>),
     Array(&'a Vec<Value>),
     ArrayRef(&'a Vec<ValueRef<'a>>),
+}
+
+impl<'a> From<&'a Symbol> for ValueRef<'a> {
+    fn from(s: &'a Symbol) -> Self {
+        Self::Symbol(&s.data)
+    }
+}
+
+impl<'a> From<&'a Timestamp> for ValueRef<'a> {
+    fn from(t: &'a Timestamp) -> Self {
+        Self::Timestamp(&t.0)
+    }
+}
+
+impl<'a> From<&'a Value> for ValueRef<'a> {
+    fn from(value: &'a Value) -> Self {
+        match value {
+            Value::Described(ref descriptor, ref value) => ValueRef::Described(
+                Box::new(descriptor.value_ref()),
+                Box::new(value.value_ref()),
+            ),
+            Value::Null => ValueRef::Null,
+            Value::Bool(ref value) => ValueRef::Bool(value),
+            Value::Str(ref value) => ValueRef::String(value),
+            Value::String(ref value) => ValueRef::String(value),
+            Value::Symbol(ref value) => ValueRef::Symbol(&value[..]),
+            Value::Ubyte(ref value) => ValueRef::Ubyte(value),
+            Value::Ushort(ref value) => ValueRef::Ushort(value),
+            Value::Uint(ref value) => ValueRef::Uint(value),
+            Value::Ulong(ref value) => ValueRef::Ulong(value),
+            Value::Byte(ref value) => ValueRef::Byte(value),
+            Value::Short(ref value) => ValueRef::Short(value),
+            Value::Int(ref value) => ValueRef::Int(value),
+            Value::Long(ref value) => ValueRef::Long(value),
+            Value::Array(ref value) => ValueRef::Array(value),
+            Value::List(ref value) => ValueRef::List(value),
+            Value::Map(ref value) => ValueRef::Map(value),
+            Value::Binary(ref value) => ValueRef::Binary(value),
+            Value::Char(ref value) => ValueRef::Char(value),
+            Value::Timestamp(ref value) => ValueRef::Timestamp(value),
+        }
+    }
 }
 
 /// An owned value type that can be transferred to or from the broker.
@@ -149,31 +205,7 @@ impl Value {
      * Convert to a reference type. Not currently implemented for all types.
      */
     pub fn value_ref(&self) -> ValueRef {
-        match self {
-            Value::Described(ref descriptor, ref value) => ValueRef::Described(
-                Box::new(descriptor.value_ref()),
-                Box::new(value.value_ref()),
-            ),
-            Value::Null => ValueRef::Null,
-            Value::Bool(ref value) => ValueRef::Bool(value),
-            Value::Str(ref value) => ValueRef::String(value),
-            Value::String(ref value) => ValueRef::String(value),
-            Value::Symbol(ref value) => ValueRef::Symbol(&value[..]),
-            Value::Ubyte(ref value) => ValueRef::Ubyte(value),
-            Value::Ushort(ref value) => ValueRef::Ushort(value),
-            Value::Uint(ref value) => ValueRef::Uint(value),
-            Value::Ulong(ref value) => ValueRef::Ulong(value),
-            Value::Byte(ref value) => ValueRef::Byte(value),
-            Value::Short(ref value) => ValueRef::Short(value),
-            Value::Int(ref value) => ValueRef::Int(value),
-            Value::Long(ref value) => ValueRef::Long(value),
-            Value::Array(ref value) => ValueRef::Array(value),
-            Value::List(ref value) => ValueRef::List(value),
-            Value::Map(ref value) => ValueRef::Map(value),
-            Value::Binary(ref value) => ValueRef::Binary(value),
-            Value::Char(ref value) => ValueRef::Char(value),
-            Value::Timestamp(ref value) => ValueRef::Timestamp(value),
-        }
+        ValueRef::from(self)
     }
 }
 
