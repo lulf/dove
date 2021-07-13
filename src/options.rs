@@ -1,3 +1,4 @@
+use crate::container::Value;
 use crate::framing::{Attach, LinkRole};
 
 pub trait ApplyOptionsTo<T> {
@@ -68,7 +69,7 @@ impl ApplyOptionsTo<Attach> for SenderOptions {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ReceiverOptions {
     pub filter: Option<ReceiverFilter>,
 }
@@ -92,6 +93,7 @@ impl ApplyOptionsTo<Attach> for ReceiverOptions {
 /// Sets the filter to be applied by the broker before sending the message
 /// through the link. Be aware, that some filters do nothing unless the correct
 /// exchange type is set.
+#[derive(Clone)]
 pub enum ReceiverFilter {
     /// Filters for exact matches on `message.properties.subject`.
     /// See 'apache.org:legacy-amqp-direct-binding:string'
@@ -111,6 +113,13 @@ pub enum ReceiverFilter {
     /// # WARN
     /// Requires exchange type 'headers'
     ApacheLegacyExchangeHeadersBinding(apache_legacy_exchange_headers_filter::Options),
+
+    /// Complex filter based on values set in `message.application_properties.*`.
+    /// See 'apache.org:legacy-amqp-headers-binding:map'
+    ///
+    /// # WARN
+    /// Requires exchange type 'headers'
+    ApacheSelector(apache_selector::Selector),
 }
 
 impl ApplyOptionsTo<Attach> for ReceiverFilter {
@@ -125,6 +134,7 @@ impl ApplyOptionsTo<Attach> for ReceiverFilter {
             ReceiverFilter::ApacheLegacyExchangeHeadersBinding(filter) => {
                 filter.apply_options_to(target)
             }
+            ReceiverFilter::ApacheSelector(filter) => filter.apply_options_to(target),
         }
     }
 }
@@ -157,7 +167,7 @@ impl ReceiverFilter {
     ///
     /// # WARN
     /// Requires exchange type 'headers'
-    pub fn apache_legacy_exchange_headers_binding_match_any<A: Into<String>, B: Into<String>>(
+    pub fn apache_legacy_exchange_headers_binding_match_any<A: Into<Value>, B: Into<Value>>(
         kv_pairs: impl Iterator<Item = (A, B)>,
     ) -> Self {
         Self::apache_legacy_exchange_headers_binding(
@@ -171,7 +181,7 @@ impl ReceiverFilter {
     ///
     /// # WARN
     /// Requires exchange type 'headers'
-    pub fn apache_legacy_exchange_headers_binding_match_all<A: Into<String>, B: Into<String>>(
+    pub fn apache_legacy_exchange_headers_binding_match_all<A: Into<Value>, B: Into<Value>>(
         kv_pairs: impl Iterator<Item = (A, B)>,
     ) -> Self {
         Self::apache_legacy_exchange_headers_binding(
@@ -185,7 +195,7 @@ impl ReceiverFilter {
     ///
     /// # WARN
     /// Requires exchange type 'headers'
-    fn apache_legacy_exchange_headers_binding<A: Into<String>, B: Into<String>>(
+    fn apache_legacy_exchange_headers_binding<A: Into<Value>, B: Into<Value>>(
         mode: apache_legacy_exchange_headers_filter::MatchMode,
         kv_pairs: impl Iterator<Item = (A, B)>,
     ) -> Self {
@@ -196,6 +206,18 @@ impl ReceiverFilter {
                 .collect(),
         })
     }
+
+    /// Filter based on some SQL-like syntax.
+    /// See 'apache.org:selector-filter:string', 'JMS Selectors' and 'javax.jmx.Message'.
+    /// https://docs.oracle.com/javaee/1.4/api/javax/jms/Message.html
+    ///
+    /// # WARN
+    /// Requires exchange type 'headers'
+    pub fn apache_selector(query: impl Into<String>) -> Self {
+        Self::ApacheSelector(apache_selector::Selector {
+            query: query.into(),
+        })
+    }
 }
 
 pub mod apache_legacy_exchange_direct_binding {
@@ -204,6 +226,7 @@ pub mod apache_legacy_exchange_direct_binding {
     use crate::types::Value;
     use std::collections::BTreeMap;
 
+    #[derive(Clone)]
     pub struct Options(String);
 
     impl<T: Into<String>> From<T> for Options {
@@ -221,9 +244,7 @@ pub mod apache_legacy_exchange_direct_binding {
                     map.insert(
                         Symbol::from_string(filter_symbol),
                         Value::Described(
-                            Box::new(Value::Symbol(
-                                Symbol::from_string(filter_symbol).to_slice().to_vec(),
-                            )),
+                            Box::new(Value::from(Symbol::from_string(filter_symbol))),
                             Box::new(Value::String(self.0.clone())),
                         ),
                     );
@@ -240,6 +261,7 @@ pub mod apache_legacy_exchange_topic_binding {
     use crate::types::Value;
     use std::collections::BTreeMap;
 
+    #[derive(Clone)]
     pub struct Options(String);
 
     impl<T: Into<String>> From<T> for Options {
@@ -257,9 +279,7 @@ pub mod apache_legacy_exchange_topic_binding {
                     map.insert(
                         Symbol::from_string(filter_symbol),
                         Value::Described(
-                            Box::new(Value::Symbol(
-                                Symbol::from_string(filter_symbol).to_slice().to_vec(),
-                            )),
+                            Box::new(Value::from(Symbol::from_string(filter_symbol))),
                             Box::new(Value::String(self.0.clone())),
                         ),
                     );
@@ -274,16 +294,18 @@ pub mod apache_legacy_exchange_headers_filter {
     use super::*;
     use crate::symbol::Symbol;
     use crate::types::Value;
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
 
+    #[derive(Clone, Copy)]
     pub enum MatchMode {
         Any,
         All,
     }
 
+    #[derive(Clone)]
     pub struct Options {
         pub mode: MatchMode,
-        pub headers: HashMap<String, String>,
+        pub headers: Vec<(Value, Value)>,
     }
 
     impl ApplyOptionsTo<Attach> for Options {
@@ -294,30 +316,53 @@ pub mod apache_legacy_exchange_headers_filter {
                     map.insert(
                         Symbol::from_string("selector"),
                         Value::Described(
-                            Box::new(Value::Symbol(
-                                Symbol::from_string("apache.org:legacy-amqp-headers-binding:map")
-                                    .to_slice()
-                                    .to_vec(),
-                            )),
+                            Box::new(Value::from(Symbol::from_string(
+                                "apache.org:legacy-amqp-headers-binding:map",
+                            ))),
                             Box::new(Value::Map({
                                 let mut key_values = vec![(
-                                    Value::String("x-match".into()),
-                                    Value::String(
-                                        match self.mode {
-                                            MatchMode::Any => "any",
-                                            MatchMode::All => "all",
-                                        }
-                                        .into(),
-                                    ),
+                                    Value::Str("x-match"),
+                                    Value::Str(match self.mode {
+                                        MatchMode::Any => "any",
+                                        MatchMode::All => "all",
+                                    }),
                                 )];
-                                self.headers.iter().for_each(|(key, value)| {
-                                    key_values.push((
-                                        Value::String(key.clone()),
-                                        Value::String(value.clone()),
-                                    ));
-                                });
+
+                                key_values.extend_from_slice(&self.headers);
                                 key_values
                             })),
+                        ),
+                    );
+                    map
+                });
+            }
+        }
+    }
+}
+
+pub mod apache_selector {
+    use super::*;
+    use crate::symbol::Symbol;
+    use crate::types::Value;
+    use std::collections::BTreeMap;
+
+    #[derive(Clone)]
+    pub struct Selector {
+        pub query: String,
+    }
+
+    impl ApplyOptionsTo<Attach> for Selector {
+        fn apply_options_to(&self, target: &mut Attach) {
+            if let Some(source) = target.source.as_mut() {
+                source.filter = Some({
+                    let mut map = BTreeMap::new();
+                    map.insert(
+                        Symbol::from_string("selector"),
+                        Value::Described(
+                            Box::new(Value::from(Symbol::from_string(
+                                "apache.org:selector-filter:string",
+                            ))),
+                            Box::new(Value::String(self.query.clone())),
                         ),
                     );
                     map

@@ -9,6 +9,7 @@ use std::io::Write;
 use std::vec::Vec;
 
 use crate::error::*;
+use crate::symbol::Symbol;
 
 /**
  * Encoder trait that all types that can be serialized to an AMQP type must implement.
@@ -57,71 +58,81 @@ pub const DESC_SASL_INIT: Value = Value::Ulong(0x41);
 pub const DESC_SASL_OUTCOME: Value = Value::Ulong(0x44);
 pub const DESC_ERROR: Value = Value::Ulong(0x1D);
 
-/**
- * A reference to a type with a given value. This allows efficient zero copy of the provided values and should
- * be used when possible (depends on lifetime constraints where its used).
- */
-#[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq)]
+/// Milliseconds since the unix epoch
+#[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
+pub struct Timestamp(pub u64);
+
+/// A reference to a type with a given value. This allows efficient zero copy of the provided values
+/// and should be used when possible (depends on lifetime constraints where its used).
+#[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq, derive_more::From)]
 pub enum ValueRef<'a> {
     Described(Box<ValueRef<'a>>, Box<ValueRef<'a>>),
     Null,
+    #[from]
     Bool(&'a bool),
+    #[from]
     Ubyte(&'a u8),
+    #[from]
     Ushort(&'a u16),
+    #[from]
     Uint(&'a u32),
+    #[from]
     Ulong(&'a u64),
+    #[from]
     Byte(&'a i8),
+    #[from]
     Short(&'a i16),
+    #[from]
     Int(&'a i32),
+    #[from]
     Long(&'a i64),
-    String(&'a str),
+    // Float(&'a f32),  does not impl Ord nor Eq, but is used as key in *Maps in this crate...
+    // Double(&'a f64), does not impl Ord nor Eq, but is used as key in *Maps in this crate...
+    // decimal32
+    // decimal64
+    // decimal128
+    #[from]
+    Char(&'a char),
+    Timestamp(&'a u64),
+    // uuid
+    #[from]
     Binary(&'a [u8]),
+    #[from]
+    String(&'a str),
     Symbol(&'a [u8]),
     SymbolRef(&'a str),
-    Array(&'a Vec<Value>),
     List(&'a Vec<Value>),
-    Map(&'a Vec<(Value, Value)>),
-    ArrayRef(&'a Vec<ValueRef<'a>>),
+    #[from]
     ListRef(&'a Vec<ValueRef<'a>>),
+    Map(&'a Vec<(Value, Value)>),
+    #[from]
     MapRef(&'a Vec<(ValueRef<'a>, ValueRef<'a>)>),
+    Array(&'a Vec<Value>),
+    ArrayRef(&'a Vec<ValueRef<'a>>),
 }
 
-/**
- * An owned value type, mostly used during decoding.
- */
-#[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq)]
-pub enum Value {
-    Described(Box<Value>, Box<Value>),
-    Null,
-    Bool(bool),
-    Ubyte(u8),
-    Ushort(u16),
-    Uint(u32),
-    Ulong(u64),
-    Byte(i8),
-    Short(i16),
-    Int(i32),
-    Long(i64),
-    String(String),
-    Binary(Vec<u8>),
-    Symbol(Vec<u8>),
-    Array(Vec<Value>),
-    List(Vec<Value>),
-    Map(Vec<(Value, Value)>),
+impl<'a> From<&'a Symbol> for ValueRef<'a> {
+    fn from(s: &'a Symbol) -> Self {
+        Self::Symbol(&s.data)
+    }
 }
 
-impl Value {
-    /**
-     * Convert to a reference type. Not currently implemented for all types.
-     */
-    pub fn value_ref(&self) -> ValueRef {
-        match self {
+impl<'a> From<&'a Timestamp> for ValueRef<'a> {
+    fn from(t: &'a Timestamp) -> Self {
+        Self::Timestamp(&t.0)
+    }
+}
+
+impl<'a> From<&'a Value> for ValueRef<'a> {
+    fn from(value: &'a Value) -> Self {
+        match value {
             Value::Described(ref descriptor, ref value) => ValueRef::Described(
                 Box::new(descriptor.value_ref()),
                 Box::new(value.value_ref()),
             ),
             Value::Null => ValueRef::Null,
             Value::Bool(ref value) => ValueRef::Bool(value),
+            Value::Str(ref value) => ValueRef::String(value),
             Value::String(ref value) => ValueRef::String(value),
             Value::Symbol(ref value) => ValueRef::Symbol(&value[..]),
             Value::Ubyte(ref value) => ValueRef::Ubyte(value),
@@ -135,11 +146,88 @@ impl Value {
             Value::Array(ref value) => ValueRef::Array(value),
             Value::List(ref value) => ValueRef::List(value),
             Value::Map(ref value) => ValueRef::Map(value),
-            v => {
-                trace!("Cannot convert value ref {:?}", v);
-                panic!("Cannot convert value ref {:?}", v);
-            }
+            Value::Binary(ref value) => ValueRef::Binary(value),
+            Value::Char(ref value) => ValueRef::Char(value),
+            Value::Timestamp(ref value) => ValueRef::Timestamp(value),
         }
+    }
+}
+
+/// An owned value type that can be transferred to or from the broker.
+/// http://docs.oasis-open.org/amqp/core/v1.0/csprd01/amqp-core-types-v1.0-csprd01.html#toc
+#[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq, derive_more::From)]
+pub enum Value {
+    Described(Box<Value>, Box<Value>),
+    Null,
+    #[from]
+    Bool(bool),
+    #[from]
+    Ubyte(u8),
+    #[from]
+    Ushort(u16),
+    #[from]
+    Uint(u32),
+    #[from]
+    Ulong(u64),
+    #[from]
+    Byte(i8),
+    #[from]
+    Short(i16),
+    #[from]
+    Int(i32),
+    #[from]
+    Long(i64),
+    // Float(f32),  does not impl Ord nor Eq, but is used as key in *Maps in this crate...
+    // Double(f64), does not impl Ord nor Eq, but is used as key in *Maps in this crate...
+    // decimal32
+    // decimal64
+    // decimal128
+    #[from]
+    Char(char),
+    Timestamp(u64),
+    // uuid
+    #[from]
+    Binary(Vec<u8>),
+    #[from]
+    Str(&'static str),
+    #[from]
+    String(String),
+    Symbol(Vec<u8>),
+    #[from]
+    List(Vec<Value>),
+    #[from]
+    Map(Vec<(Value, Value)>),
+    Array(Vec<Value>),
+}
+
+impl Value {
+    /**
+     * Convert to a reference type. Not currently implemented for all types.
+     */
+    pub fn value_ref(&self) -> ValueRef {
+        ValueRef::from(self)
+    }
+}
+
+impl From<Symbol> for Value {
+    fn from(s: Symbol) -> Self {
+        Self::Symbol(s.data)
+    }
+}
+
+impl From<Timestamp> for Value {
+    fn from(t: Timestamp) -> Self {
+        Self::Timestamp(t.0)
+    }
+}
+
+impl<V: Into<Value>, const N: usize> From<[V; N]> for Value {
+    fn from(array: [V; N]) -> Self {
+        Self::Array(
+            std::array::IntoIter::new(array)
+                .map(Into::into)
+                .collect::<Vec<Value>>(),
+        )
     }
 }
 
@@ -152,8 +240,8 @@ pub enum TypeCode {
     Described = 0x00,
     Null = 0x40,
     Boolean = 0x56,
-    Booleantrue = 0x41,
-    Booleanfalse = 0x42,
+    BooleanTrue = 0x41,
+    BooleanFalse = 0x42,
     Ubyte = 0x50,
     Ushort = 0x60,
     Uint = 0x70,
@@ -168,6 +256,14 @@ pub enum TypeCode {
     Intsmall = 0x54,
     Long = 0x81,
     Longsmall = 0x55,
+    // float
+    // double
+    // decimal32
+    // decimal32
+    // decimal12
+    Char = 0x73,
+    Timestamp = 0x83,
+    // uuid
     Bin8 = 0xA0,
     Bin32 = 0xB0,
     Str8 = 0xA1,

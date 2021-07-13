@@ -15,7 +15,7 @@ use async_channel::Sender;
 use std::sync::Arc;
 use std::vec::Vec;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct ConnectionOptions {
     pub username: Option<String>,
     pub password: Option<String>,
@@ -23,8 +23,7 @@ pub struct ConnectionOptions {
 }
 
 impl ConnectionOptions {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> ConnectionOptions {
+    pub const fn new() -> ConnectionOptions {
         ConnectionOptions {
             username: None,
             password: None,
@@ -142,7 +141,7 @@ impl<N: Network> Connection<N> {
     }
 
     fn skip_sasl(&self) -> bool {
-        self.sasl.is_none() || self.sasl.as_ref().unwrap().is_done()
+        self.sasl.as_ref().map(Sasl::is_done).unwrap_or(true)
     }
 
     // Write outgoing frames
@@ -159,7 +158,11 @@ impl<N: Network> Connection<N> {
         Ok(())
     }
 
-    pub fn transport(&mut self) -> &mut Transport<N> {
+    pub fn transport(&self) -> &Transport<N> {
+        &self.transport
+    }
+
+    pub fn transport_mut(&mut self) -> &mut Transport<N> {
         &mut self.transport
     }
 
@@ -218,19 +221,22 @@ impl<N: Network> Connection<N> {
             }
             */
             ConnectionState::Sasl => {
-                let sasl = self.sasl.as_mut().unwrap();
-                match sasl.state {
-                    SaslState::Success => {
-                        self.header_sent = false;
-                        self.state = ConnectionState::Start;
+                if let Some(sasl) = &mut self.sasl {
+                    match sasl.state {
+                        SaslState::Success => {
+                            self.header_sent = false;
+                            self.state = ConnectionState::Start;
+                        }
+                        SaslState::Failed => {
+                            self.transport.close()?;
+                            self.state = ConnectionState::Closed;
+                        }
+                        SaslState::InProgress => {
+                            sasl.perform_handshake(None, &mut self.transport)?;
+                        }
                     }
-                    SaslState::Failed => {
-                        self.transport.close()?;
-                        self.state = ConnectionState::Closed;
-                    }
-                    SaslState::InProgress => {
-                        sasl.perform_handshake(None, &mut self.transport)?;
-                    }
+                } else {
+                    return Err(AmqpError::SaslConfigurationExpected);
                 }
             }
             ConnectionState::Opened => {

@@ -21,6 +21,7 @@ use crate::frame_codec::*;
 use crate::sasl::*;
 use crate::symbol::*;
 use crate::types::*;
+use std::str::FromStr;
 
 #[derive(Debug)]
 pub struct FrameHeader {
@@ -71,14 +72,7 @@ pub type SaslCode = u8;
 
 impl Encoder for SaslMechanism {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        let value = match self {
-            SaslMechanism::Anonymous => Symbol::from_slice(b"ANONYMOUS"),
-            SaslMechanism::Plain => Symbol::from_slice(b"PLAIN"),
-            SaslMechanism::CramMd5 => Symbol::from_slice(b"CRAM-MD5"),
-            SaslMechanism::ScramSha1 => Symbol::from_slice(b"SCRAM-SHA-1"),
-            SaslMechanism::ScramSha256 => Symbol::from_slice(b"SCRAM-SHA-256"),
-        };
-        value.encode(writer)
+        Symbol::from_slice(self.as_ref().as_bytes()).encode(writer)
     }
 }
 
@@ -107,16 +101,7 @@ impl SaslOutcome {
 impl SaslMechanism {
     pub fn from_slice(data: &[u8]) -> Result<SaslMechanism> {
         let input = std::str::from_utf8(data)?;
-        match input {
-            "ANONYMOUS" => Ok(SaslMechanism::Anonymous),
-            "PLAIN" => Ok(SaslMechanism::Plain),
-            "CRAM-MD5" => Ok(SaslMechanism::CramMd5),
-            "SCRAM-SHA-1" => Ok(SaslMechanism::ScramSha1),
-            "SCRAM-SHA-256" => Ok(SaslMechanism::ScramSha256),
-            v => Err(AmqpError::decode_error(Some(
-                format!("Unsupported SASL mechanism {:?}", v).as_str(),
-            ))),
-        }
+        SaslMechanism::from_str(input)
     }
 }
 
@@ -307,7 +292,7 @@ pub struct Source {
     pub capabilities: Option<Vec<Symbol>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Target {
     pub address: Option<String>,
     pub durable: Option<TerminusDurability>,
@@ -807,8 +792,7 @@ impl Encoder for Source {
 }
 
 impl Target {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Target {
+    pub const fn new() -> Target {
         Target {
             address: None,
             durable: None,

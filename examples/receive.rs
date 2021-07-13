@@ -38,7 +38,7 @@ fn main() {
     block_on(async {
         println!("Going to connect");
         let connection = container
-            .connect(url.hostname, url.port, opts)
+            .connect(format!("{}:{}", url.hostname, url.port), opts)
             .await
             .expect("connection not created");
 

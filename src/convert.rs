@@ -46,27 +46,8 @@ impl TryFromValue for Vec<u8> {
 impl<T: TryFromValueVec> TryFromValue for Vec<T> {
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            Value::List(v) => {
-                let (results, errors): (Vec<_>, Vec<_>) =
-                    v.into_iter().map(T::try_from).partition(Result::is_ok);
-                if !errors.is_empty() {
-                    Err(AmqpError::decode_error(Some(
-                        "Error decoding list elements",
-                    )))
-                } else {
-                    Ok(results.into_iter().map(Result::unwrap).collect())
-                }
-            }
-            Value::Array(v) => {
-                let (results, errors): (Vec<_>, Vec<_>) =
-                    v.into_iter().map(T::try_from).partition(Result::is_ok);
-                if !errors.is_empty() {
-                    Err(AmqpError::decode_error(Some(
-                        format!("Error decoding array elements: {:?}", errors).as_str(),
-                    )))
-                } else {
-                    Ok(results.into_iter().map(Result::unwrap).collect())
-                }
+            Value::List(v) | Value::Array(v) => {
+                Ok(v.into_iter().map(T::try_from).collect::<Result<Vec<T>>>()?)
             }
             _ => Ok(vec![T::try_from(value)?]),
         }
@@ -153,6 +134,20 @@ impl<T: TryFromValue + std::cmp::Ord> TryFromValue for BTreeMap<T, Value> {
             }
             _ => Err(AmqpError::decode_error(Some(
                 "Error converting value to Map<T, Value>",
+            ))),
+        }
+    }
+}
+
+impl TryFromValue for Timestamp {
+    fn try_from(value: Value) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        match value {
+            Value::Timestamp(v) => Ok(Timestamp(v)),
+            _ => Err(AmqpError::decode_error(Some(
+                "Error converting value to Timestamp",
             ))),
         }
     }

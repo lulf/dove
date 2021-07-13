@@ -29,6 +29,7 @@ use crate::options::{LinkOptions, ReceiverOptions};
 pub use crate::sasl::SaslMechanism;
 use crate::transport::mio::MioNetwork;
 pub use crate::types::{Value, ValueRef};
+use std::net::{SocketAddr, ToSocketAddrs};
 
 /// Represents an AMQP 1.0 container that can manage multiple connections.
 pub struct Container {
@@ -54,7 +55,7 @@ pub struct Connection {
     waker: Arc<Waker>,
 
     pub container_id: String,
-    pub hostname: String,
+    pub host: SocketAddr,
     pub channel_max: u16,
     pub idle_timeout: Duration,
 
@@ -69,21 +70,18 @@ pub struct Session {
 }
 
 /// Represents a sender link.
-#[allow(dead_code)]
 pub struct Sender {
     link: Arc<LinkDriver>,
     next_message_id: AtomicU64,
 }
 
 /// Represents a receiver link.
-#[allow(dead_code)]
 pub struct Receiver {
     link: Arc<LinkDriver>,
-    next_message_id: AtomicU64,
 }
 
 /// Represents a disposition response for a sent message.
-#[allow(dead_code)]
+#[allow(dead_code)] // TODO this type does not seem to be useful (yet)?
 pub struct Disposition {
     delivery: Arc<DeliveryDriver>,
 }
@@ -167,13 +165,12 @@ impl Container {
     }
 
     /// Connect to an AMQP endpoint and send the initial open performative.
-    pub async fn connect(
+    pub async fn connect<S: ToSocketAddrs + Send + 'static>(
         &self,
-        host: &str,
-        port: u16,
+        host: S,
         opts: ConnectionOptions,
     ) -> Result<Connection> {
-        self.container.connect(host, port, opts).await
+        self.container.connect(host, opts).await
     }
 
     /// Close the connection. Flushes outgoing buffer before sending the final close performative,
@@ -217,15 +214,18 @@ impl ContainerInner {
         Ok(())
     }
 
-    async fn connect(&self, host: &str, port: u16, opts: ConnectionOptions) -> Result<Connection> {
+    async fn connect<S: ToSocketAddrs + Send + 'static>(
+        &self,
+        host: S,
+        opts: ConnectionOptions,
+    ) -> Result<Connection> {
         let (tx, rx) = async_channel::bounded(1);
 
         // mio connects in blocking mode -> new thread to not block in async context
         thread::spawn({
-            let host = host.to_string();
             move || {
                 let result: Result<_> = (|| {
-                    let network = transport::mio::MioNetwork::connect(&host, port)?;
+                    let network = transport::mio::MioNetwork::connect(&host)?;
                     let transport = transport::Transport::new(network, 1024);
                     let connection = conn::connect(transport, opts)?;
                     Ok(connection)
@@ -235,12 +235,13 @@ impl ContainerInner {
         });
 
         let connection = rx.recv().await??;
-        trace!("{}: connected to {}:{}", self.container_id, host, port);
+        let host = connection.transport().network().peer_addr()?;
+        trace!("{}: connected to {}", self.container_id, host);
 
         let id = Token(self.token_generator.fetch_add(1, Ordering::SeqCst) as usize);
         debug!(
-            "{}: created connection to {}:{} with local id {:?}",
-            self.container_id, host, port, id,
+            "{}: created connection to {} with local id {:?}",
+            self.container_id, host, id,
         );
         let driver = {
             let handle = connection.handle(self.waker.clone());
@@ -248,7 +249,7 @@ impl ContainerInner {
 
             driver.open({
                 let mut open = Open::new(&self.container_id);
-                open.hostname = Some(host.to_string());
+                // open.hostname = Some(host.to_string());
                 open.channel_max = Some(u16::MAX);
                 open.idle_timeout = Some(5_000);
                 open
@@ -264,18 +265,13 @@ impl ContainerInner {
             let frame = driver.recv().await?;
             match frame.performative {
                 Some(Performative::Open(o)) => {
-                    trace!(
-                        "{}: received OPEN frame from {}:{}",
-                        self.container_id,
-                        host,
-                        port
-                    );
+                    trace!("{}: received OPEN frame from {}", self.container_id, host);
                     // Populate remote properties
                     return Ok(Connection {
                         waker: self.waker.clone(),
                         connection: driver,
                         container_id: self.container_id.clone(),
-                        hostname: host.to_string(),
+                        host,
                         channel_max: u16::MAX,
                         idle_timeout: Duration::from_secs(5),
 
@@ -287,12 +283,7 @@ impl ContainerInner {
                     });
                 }
                 Some(Performative::Close(c)) => {
-                    trace!(
-                        "{}: received CLOSE frame from {}:{}",
-                        self.container_id,
-                        host,
-                        port
-                    );
+                    trace!("{}: received CLOSE frame from {}", self.container_id, host);
                     match c.error {
                         Some(e) => {
                             return Err(AmqpError::Amqp(e));
@@ -315,7 +306,11 @@ impl ContainerInner {
         let mut poll = self.poll.borrow_mut();
         // Register new connections
         while let Ok((id, driver, mut connection)) = self.incoming.try_recv() {
-            if let Err(e) = connection.transport().network().register(id, &mut poll) {
+            if let Err(e) = connection
+                .transport_mut()
+                .network_mut()
+                .register(id, &mut poll)
+            {
                 let _ = driver.close(None);
                 let _ = connection.shutdown();
                 error!("Failed to register connection {:?}: {}", id, e);
@@ -507,12 +502,17 @@ impl Session {
         loop {
             let frame = self.session.recv().await?;
             match frame.performative {
-                Some(Performative::Attach(_a)) => {
-                    // Populate remote properties
-                    return Ok(Sender {
-                        link,
-                        next_message_id: AtomicU64::new(0),
-                    });
+                Some(Performative::Attach(a)) if a.name == link.name => {
+                    return if matches!(a.target, Some(t) if matches!(&t.address, Some(a) if a == addr))
+                    {
+                        // Populate remote properties
+                        Ok(Sender {
+                            link,
+                            next_message_id: AtomicU64::new(0),
+                        })
+                    } else {
+                        Err(AmqpError::TargetNotRecognized(addr.to_string()))
+                    };
                 }
                 _ => {
                     // Push it back into the queue
@@ -551,12 +551,14 @@ impl Session {
         loop {
             let frame = self.session.recv().await?;
             match frame.performative {
-                Some(Performative::Attach(_a)) => {
-                    // Populate remote properties
-                    return Ok(Receiver {
-                        link,
-                        next_message_id: AtomicU64::new(0),
-                    });
+                Some(Performative::Attach(a)) if a.name == link.name => {
+                    return if matches!(a.source, Some(s) if matches!(&s.address, Some(a) if a == addr))
+                    {
+                        // Populate remote properties
+                        Ok(Receiver { link })
+                    } else {
+                        Err(AmqpError::TargetNotRecognized(addr.to_string()))
+                    };
                 }
                 _ => {
                     // Push it back into the queue
@@ -655,27 +657,33 @@ impl Receiver {
         loop {
             let frame = self.link.recv().await?;
             match frame.performative {
-                Some(Performative::Transfer(ref transfer)) => {
-                    let mut input = frame.payload.unwrap();
-                    let message = Message::decode(&mut input)?;
-                    let delivery = Arc::new(DeliveryDriver {
-                        state: transfer.state.clone(),
-                        tag: transfer.delivery_tag.clone().unwrap(),
-                        id: transfer.delivery_id.unwrap(),
-                        remotely_settled: transfer.settled.unwrap_or(false),
-                        message: None,
-                        settled: false,
-                    });
-                    return Ok(Delivery {
-                        settled: false,
-                        link: self.link.clone(),
-                        message: Some(message),
-                        delivery,
-                    });
+                Some(Performative::Transfer(transfer)) => {
+                    if let Some(mut input) = frame.payload {
+                        let message = Message::decode(&mut input)?;
+                        let delivery = Arc::new(DeliveryDriver {
+                            state: transfer.state,
+                            tag: transfer
+                                .delivery_tag
+                                .ok_or(AmqpError::TransferFrameIsMissingDeliveryTag)?,
+                            id: transfer
+                                .delivery_id
+                                .ok_or(AmqpError::TransferFrameIsMissingDeliveryTag)?,
+                            remotely_settled: transfer.settled.unwrap_or(false),
+                            message: None,
+                            settled: false,
+                        });
+                        return Ok(Delivery {
+                            settled: false,
+                            link: self.link.clone(),
+                            message: Some(message),
+                            delivery,
+                        });
+                    } else {
+                        return Err(AmqpError::TransferFrameIsMissingPayload);
+                    }
                 }
                 _ => {
                     // TODO: Prevent reordering
-                    warn!("unreceive: {:?}", frame);
                     self.link.unrecv(frame)?;
                 }
             }

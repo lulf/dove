@@ -28,7 +28,6 @@ pub struct FrameEncoder {
  * A decoder helper type that provides convenient decoding of described list types,
  * such as frames and a few other AMQP types.
  */
-#[allow(dead_code)]
 pub struct FrameDecoder<'a> {
     desc: &'a Value,
     args: &'a mut Vec<Value>,

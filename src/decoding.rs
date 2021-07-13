@@ -39,8 +39,8 @@ fn decode_value_with_ctor(raw_code: u8, reader: &mut dyn Read) -> Result<Value> 
             let val = reader.read_u8()?;
             Ok(Value::Bool(val == 1))
         }
-        TypeCode::Booleantrue => Ok(Value::Bool(true)),
-        TypeCode::Booleanfalse => Ok(Value::Bool(false)),
+        TypeCode::BooleanTrue => Ok(Value::Bool(true)),
+        TypeCode::BooleanFalse => Ok(Value::Bool(false)),
         TypeCode::Ubyte => {
             let val = reader.read_u8()?;
             Ok(Value::Ubyte(val))
@@ -194,6 +194,16 @@ fn decode_value_with_ctor(raw_code: u8, reader: &mut dyn Read) -> Result<Value> 
             }
             Ok(Value::Map(data))
         }
+        TypeCode::Char => {
+            let val = reader.read_u32::<NetworkEndian>()?;
+            Ok(Value::Char(char::from_u32(val).ok_or_else(|| {
+                AmqpError::decode_error(Some("Invalid unicode character received"))
+            })?))
+        }
+        TypeCode::Timestamp => {
+            let val = reader.read_u64::<NetworkEndian>()?;
+            Ok(Value::Timestamp(val))
+        }
     }
 }
 
@@ -205,8 +215,8 @@ fn decode_type(code: u8) -> Result<TypeCode> {
         0x00 => Ok(TypeCode::Described),
         0x40 => Ok(TypeCode::Null),
         0x56 => Ok(TypeCode::Boolean),
-        0x41 => Ok(TypeCode::Booleantrue),
-        0x42 => Ok(TypeCode::Booleanfalse),
+        0x41 => Ok(TypeCode::BooleanTrue),
+        0x42 => Ok(TypeCode::BooleanFalse),
         0x50 => Ok(TypeCode::Ubyte),
         0x60 => Ok(TypeCode::Ushort),
         0x70 => Ok(TypeCode::Uint),
@@ -221,6 +231,14 @@ fn decode_type(code: u8) -> Result<TypeCode> {
         0x54 => Ok(TypeCode::Intsmall),
         0x81 => Ok(TypeCode::Long),
         0x55 => Ok(TypeCode::Longsmall),
+        // float
+        // double
+        // decimal32
+        // decimal64
+        // decimal128
+        0x73 => Ok(TypeCode::Char),
+        0x83 => Ok(TypeCode::Timestamp),
+        // uuid
         0xA0 => Ok(TypeCode::Bin8),
         0xA1 => Ok(TypeCode::Str8),
         0xA3 => Ok(TypeCode::Sym8),

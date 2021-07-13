@@ -35,9 +35,9 @@ impl Encoder for ValueRef<'_> {
             }
             ValueRef::Bool(value) => {
                 let code = if *value {
-                    TypeCode::Booleantrue
+                    TypeCode::BooleanTrue
                 } else {
-                    TypeCode::Booleanfalse
+                    TypeCode::BooleanFalse
                 };
                 writer.write_u8(code as u8)?;
 
@@ -343,7 +343,23 @@ impl Encoder for ValueRef<'_> {
                     Ok(TypeCode::Map8)
                 }
             }
+            ValueRef::Char(val) => {
+                writer.write_u8(TypeCode::Char as u8)?;
+                writer.write_u32::<NetworkEndian>(*val as u32)?;
+                Ok(TypeCode::Char)
+            }
+            ValueRef::Timestamp(val) => {
+                writer.write_u8(TypeCode::Timestamp as u8)?;
+                writer.write_u64::<NetworkEndian>(*val)?;
+                Ok(TypeCode::Timestamp)
+            }
         }
+    }
+}
+
+impl Encoder for Timestamp {
+    fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
+        Value::Timestamp(self.0).encode(writer)
     }
 }
 
@@ -457,7 +473,7 @@ impl Encoder for Vec<(Symbol, Value)> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let m = self
             .iter()
-            .map(|(k, v)| (ValueRef::Symbol(k.to_slice()), v.value_ref()))
+            .map(|(k, v)| (ValueRef::from(k), v.value_ref()))
             .collect();
         ValueRef::MapRef(&m).encode(writer)
     }
@@ -487,7 +503,7 @@ impl Encoder for BTreeMap<Symbol, Value> {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
         let m = self
             .iter()
-            .map(|(k, v)| (ValueRef::Symbol(k.to_slice()), v.value_ref()))
+            .map(|(k, v)| (ValueRef::from(k), v.value_ref()))
             .collect();
         ValueRef::MapRef(&m).encode(writer)
     }

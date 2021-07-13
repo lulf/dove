@@ -6,10 +6,26 @@
 //! The error module implements all AMQP 1.0 error types that is supported by dove. Conversion from many different error types are supported.
 
 use crate::message::Message;
+use crate::sasl::SaslMechanism;
 use async_channel::{RecvError, SendError, TryRecvError, TrySendError};
 use std::io;
 
 pub type Result<T> = std::result::Result<T, AmqpError>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorCondition {
+    pub condition: String,
+    pub description: String,
+}
+
+impl ErrorCondition {
+    pub fn local_idle_timeout() -> Self {
+        ErrorCondition {
+            condition: AmqpError::AmqpResourceLimitExceeded.to_string(),
+            description: "local-idle-timeout expired".to_string(),
+        }
+    }
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum AmqpError {
@@ -46,26 +62,22 @@ pub enum AmqpError {
     /// is `ErrorCondition` with 48 bytes, therefore `Message` is boxed
     #[error("The link does not have enough credits to send a message")]
     NotEnoughCreditsToSend(Box<Message>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ErrorCondition {
-    pub condition: String,
-    pub description: String,
-}
-
-pub mod condition {
-    pub const INTERNAL_ERROR: &str = "amqp:internal-error";
-    pub const NOT_FOUND: &str = "amqp:not-found";
-    pub const DECODE_ERROR: &str = "amqp:decode-error";
-    pub const NOT_IMPLEMENTED: &str = "amqp:not-implemented";
-    pub const RESOURCE_LIMIT_EXCEEDED: &str = "amqp:resource-limit-exceeded";
-
-    pub mod connection {
-        pub const CONNECTION_FORCED: &str = "amqp:connection:forced";
-        pub const FRAMING_ERROR: &str = "amqp:connection:framing-error";
-        pub const REDIRECT: &str = "amqp:connection:redirect";
-    }
+    #[error("The server expected a SASL configuration but none was supplied")]
+    SaslConfigurationExpected,
+    #[error("Received a Transfer-Frame without payload but expected some")]
+    TransferFrameIsMissingPayload,
+    #[error("Received a Transfer-Frame without a delivery tag")]
+    TransferFrameIsMissingDeliveryTag,
+    #[error("Received a Transfer-Frame without a delivery id")]
+    TransferFrameIsMissingDeliveryId,
+    #[error("Cannot allocate another session because all available ids are already in use")]
+    SessionAllocationExhausted,
+    #[error("The handle is (no longer) valid")]
+    InvalidHandle,
+    #[error("The target {0:?} is not recognized by the broker")]
+    TargetNotRecognized(String),
+    #[error("This client does not support the desired SASL mechanism {0:?}")]
+    SaslMechanismNotSupported(SaslMechanism),
 }
 
 impl AmqpError {

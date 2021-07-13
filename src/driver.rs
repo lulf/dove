@@ -188,10 +188,7 @@ impl ConnectionDriver {
             // Ensure our peer honors our keepalive
             if now - last_received > self.idle_timeout * 2 {
                 self.connection.close(Close {
-                    error: Some(ErrorCondition {
-                        condition: condition::RESOURCE_LIMIT_EXCEEDED.to_string(),
-                        description: "local-idle-timeout expired".to_string(),
-                    }),
+                    error: Some(ErrorCondition::local_idle_timeout()),
                 })?;
                 warn!("Connection timed out");
                 return Err(AmqpError::IoError(std::io::Error::from(
@@ -310,7 +307,9 @@ impl ConnectionDriver {
     }
 
     pub async fn new_session(&self, _opts: Option<SessionOpts>) -> Result<Arc<SessionDriver>> {
-        let session = self.allocate_session().unwrap();
+        let session = self
+            .allocate_session()
+            .ok_or(AmqpError::SessionAllocationExhausted)?;
         let flow_control: SessionFlowControl = { session.flow_control.lock().unwrap().clone() };
         let begin = Begin {
             remote_channel: None,
@@ -338,6 +337,7 @@ impl ConnectionDriver {
 
     #[inline]
     pub fn unrecv(&self, frame: AmqpFrame) -> Result<()> {
+        warn!("unrecv");
         self.rx.send(frame)
     }
 }
@@ -430,7 +430,7 @@ impl SessionDriver {
                     if let Some((handle, _)) = self.did_to_delivery.lock().unwrap().get(&id) {
                         let link = {
                             let mut m = self.links.lock().unwrap();
-                            m.get_mut(&handle).unwrap().clone()
+                            m.get_mut(&handle).ok_or(AmqpError::InvalidHandle)?.clone()
                         };
                         if link.role == disposition.role {
                             link.rx.send(frame.clone())?;
@@ -457,7 +457,7 @@ impl SessionDriver {
                 if let Some(handle) = flow.handle {
                     let link = {
                         let mut m = self.links.lock().unwrap();
-                        m.get_mut(&handle).unwrap().clone()
+                        m.get_mut(&handle).ok_or(AmqpError::InvalidHandle)?.clone()
                     };
                     if let Some(credit) = flow.link_credit {
                         let credit = flow.delivery_count.unwrap_or(0) + credit
@@ -571,6 +571,7 @@ impl SessionDriver {
 
     #[inline]
     pub fn unrecv(&self, frame: AmqpFrame) -> Result<()> {
+        warn!("unrecv");
         self.rx.send(frame)
     }
 }
@@ -696,6 +697,7 @@ impl LinkDriver {
 
     #[inline]
     pub fn unrecv(&self, frame: AmqpFrame) -> Result<()> {
+        warn!("unrecv");
         self.rx.send(frame)
     }
 
@@ -730,11 +732,16 @@ pub struct Channel<T> {
     rx: async_channel::Receiver<T>,
 }
 
-impl<T> Channel<T> {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Channel<T> {
+impl<T> Default for Channel<T> {
+    fn default() -> Self {
         let (tx, rx) = async_channel::unbounded();
-        Channel { tx, rx }
+        Self { tx, rx }
+    }
+}
+
+impl<T> Channel<T> {
+    pub fn new() -> Channel<T> {
+        Self::default()
     }
 
     #[inline]
