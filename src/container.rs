@@ -25,7 +25,7 @@ use uuid::Uuid;
 pub use crate::conn::ConnectionOptions;
 pub use crate::framing::DeliveryState;
 pub use crate::message::{Message, MessageProperties};
-use crate::options::{LinkOptions, ReceiverOptions};
+use crate::options::{LinkOptions, ReceiverOptions, SenderOptions};
 pub use crate::sasl::SaslMechanism;
 use crate::transport::mio::MioNetwork;
 pub use crate::types::{Value, ValueRef};
@@ -71,13 +71,27 @@ pub struct Session {
 
 /// Represents a sender link.
 pub struct Sender {
+    address: String,
     link: Arc<LinkDriver>,
     next_message_id: AtomicU64,
 }
 
+impl Sender {
+    pub fn address(&self) -> &str {
+        &self.address
+    }
+}
+
 /// Represents a receiver link.
 pub struct Receiver {
+    address: String,
     link: Arc<LinkDriver>,
+}
+
+impl Receiver {
+    pub fn address(&self) -> &str {
+        &self.address
+    }
 }
 
 /// Represents a disposition response for a sent message.
@@ -497,16 +511,45 @@ impl Session {
     /// Create a new sender link for a given address cross this session. The sender
     /// is returned when the other side have confirmed its existence.
     pub async fn new_sender(&self, addr: &str) -> Result<Sender> {
-        let link = self.session.new_link(addr, LinkRole::Sender)?;
+        self.new_sender_with_link_options(addr, LinkRole::Sender)
+            .await
+    }
+
+    /// Create a new sender link for a given address cross this session. The sender
+    /// is returned when the other side have confirmed its existence.
+    pub async fn new_sender_with_options<T: Into<SenderOptions>>(
+        &self,
+        addr: &str,
+        options: T,
+    ) -> Result<Sender> {
+        self.new_sender_with_link_options(addr, options.into())
+            .await
+    }
+
+    /// Create a new sender link for a given address cross this session. The sender
+    /// is returned when the other side have confirmed its existence.
+    async fn new_sender_with_link_options<T: Into<LinkOptions>>(
+        &self,
+        addr: &str,
+        options: T,
+    ) -> Result<Sender> {
+        let options = options.into();
+        let dynamic = options.dynamic().unwrap_or(false);
+        let link = self.session.new_link_with_options(addr, options)?;
         trace!("Created link, waiting for attach frame");
         loop {
             let frame = self.session.recv().await?;
             match frame.performative {
                 Some(Performative::Attach(a)) if a.name == link.name => {
-                    return if matches!(a.target, Some(t) if matches!(&t.address, Some(a) if a == addr))
+                    return if dynamic
+                        || matches!(&a.target, Some(t) if matches!(&t.address, Some(a) if a == addr))
                     {
                         // Populate remote properties
                         Ok(Sender {
+                            address: a
+                                .target
+                                .and_then(|t| t.address)
+                                .ok_or_else(|| AmqpError::TargetNotRecognized(addr.to_string()))?,
                             link,
                             next_message_id: AtomicU64::new(0),
                         })
@@ -546,16 +589,25 @@ impl Session {
         addr: &str,
         options: T,
     ) -> Result<Receiver> {
-        let link = self.session.new_link_with_options(addr, options.into())?;
+        let options = options.into();
+        let dynamic = options.dynamic().unwrap_or(false);
+        let link = self.session.new_link_with_options(addr, options)?;
         trace!("Created link, waiting for attach frame");
         loop {
             let frame = self.session.recv().await?;
             match frame.performative {
                 Some(Performative::Attach(a)) if a.name == link.name => {
-                    return if matches!(a.source, Some(s) if matches!(&s.address, Some(a) if a == addr))
+                    return if dynamic
+                        || matches!(&a.source, Some(s) if matches!(&s.address, Some(a) if a == addr))
                     {
                         // Populate remote properties
-                        Ok(Receiver { link })
+                        Ok(Receiver {
+                            address: a
+                                .source
+                                .and_then(|s| s.address)
+                                .ok_or_else(|| AmqpError::TargetNotRecognized(addr.to_string()))?,
+                            link,
+                        })
                     } else {
                         Err(AmqpError::TargetNotRecognized(addr.to_string()))
                     };
@@ -621,8 +673,15 @@ impl Sender {
                             self.link.unrecv(frame)?;
                         }
                     }
+                    Some(Performative::Detach(detach)) if detach.handle == self.link.handle => {
+                        let error_condition =
+                            detach.error.unwrap_or_else(ErrorCondition::detach_received);
+                        self.close(Some(error_condition.clone()))?;
+                        return Err(AmqpError::Amqp(error_condition));
+                    }
                     _ => {
                         // TODO: Prevent reordering
+                        warn!("unreceiving: {:?}", frame);
                         self.link.unrecv(frame)?;
                     }
                 }

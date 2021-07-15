@@ -5,6 +5,7 @@
 
 //! The types module contains the AMQP 1.0 types system encoders and decoders. By using these types you can enforce a certain encoding for your data.
 
+use std::borrow::Cow;
 use std::io::Write;
 use std::vec::Vec;
 
@@ -113,7 +114,7 @@ pub enum ValueRef<'a> {
 
 impl<'a> From<&'a Symbol> for ValueRef<'a> {
     fn from(s: &'a Symbol) -> Self {
-        Self::Symbol(&s.data)
+        Self::Symbol(&s.0)
     }
 }
 
@@ -135,6 +136,7 @@ impl<'a> From<&'a Value> for ValueRef<'a> {
             Value::Str(ref value) => ValueRef::String(value),
             Value::String(ref value) => ValueRef::String(value),
             Value::Symbol(ref value) => ValueRef::Symbol(&value[..]),
+            Value::SymbolSlice(ref value) => ValueRef::Symbol(&value[..]),
             Value::Ubyte(ref value) => ValueRef::Ubyte(value),
             Value::Ushort(ref value) => ValueRef::Ushort(value),
             Value::Uint(ref value) => ValueRef::Uint(value),
@@ -193,6 +195,7 @@ pub enum Value {
     #[from]
     String(String),
     Symbol(Vec<u8>),
+    SymbolSlice(&'static [u8]),
     #[from]
     List(Vec<Value>),
     #[from]
@@ -211,7 +214,10 @@ impl Value {
 
 impl From<Symbol> for Value {
     fn from(s: Symbol) -> Self {
-        Self::Symbol(s.data)
+        match s.0 {
+            Cow::Owned(owned) => Self::Symbol(owned),
+            Cow::Borrowed(borrowed) => Self::SymbolSlice(borrowed),
+        }
     }
 }
 

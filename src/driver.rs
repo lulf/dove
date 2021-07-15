@@ -209,10 +209,12 @@ impl ConnectionDriver {
         }
 
         for (_id, session) in core::mem::take(&mut *self.sessions.lock().unwrap()) {
-            session.rx.close();
             for (_id, link) in core::mem::take(&mut *session.links.lock().unwrap()) {
+                let _ = link.close(None);
                 link.rx.close();
             }
+            let _ = session.close(None);
+            session.rx.close();
         }
 
         self.rx.close();
@@ -372,8 +374,13 @@ impl SessionDriver {
                 }
                 self.rx.send(frame)?;
             }
-            Some(Performative::Detach(ref _detach)) => {
-                self.rx.send(frame)?;
+            Some(Performative::Detach(ref detach)) => {
+                eprintln!("Detach: {:?}", frame);
+                if let Some(link) = self.links.lock().unwrap().get(&detach.handle) {
+                    link.rx.send(frame)?;
+                } else {
+                    self.rx.send(frame)?;
+                }
             }
             Some(Performative::Transfer(ref transfer)) => {
                 // Session flow control
