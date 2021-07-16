@@ -60,6 +60,17 @@ pub enum MessageBody {
     AmqpValue(Value),
 }
 
+impl MessageBody {
+    /// Best guess for extracting binary payload data
+    pub fn binary_payload(&self) -> Option<&[u8]> {
+        match self {
+            MessageBody::Data(v) => Some(&v[..]),
+            MessageBody::AmqpValue(Value::Binary(v)) => Some(&v[..]),
+            _ => None,
+        }
+    }
+}
+
 impl Message {
     pub fn amqp_value(value: Value) -> Message {
         Message {
