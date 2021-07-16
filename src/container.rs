@@ -302,14 +302,11 @@ impl ContainerInner {
                 }
                 Some(Performative::Close(c)) => {
                     trace!("{}: received CLOSE frame from {}", self.container_id, host);
-                    match c.error {
-                        Some(e) => {
-                            return Err(AmqpError::Amqp(e));
-                        }
-                        None => {
-                            return Err(AmqpError::Generic("connection closed".to_string()));
-                        }
-                    }
+                    return if let Some(e) = c.error {
+                        Err(AmqpError::Amqp(e))
+                    } else {
+                        Err(AmqpError::Generic("connection closed".to_string()))
+                    };
                 }
                 _ => {
                     // Push it back into the queue
@@ -396,17 +393,18 @@ impl ContainerInner {
         let mut m = self.connections.lock().unwrap();
         if let Some((driver, connection)) = m.get_mut(&id) {
             let close = match self.process_connection(driver, connection) {
-                Err(AmqpError::Amqp(condition)) => Some(Some(condition)),
-                Err(_) => Some(None),
-                _ => None,
+                Err(AmqpError::Amqp(condition)) => Err(Some(condition)),
+                Err(e) => {
+                    error!("Error while processing a connection: {:?}", e);
+                    Err(None)
+                }
+                _ => Ok(()),
             };
 
-            if let Some(condition) = close {
-                trace!(
+            if let Err(condition) = close {
+                warn!(
                     "{}: closing connection and removing reference to {:?}: {:?}",
-                    self.container_id,
-                    id,
-                    condition
+                    self.container_id, id, condition
                 );
 
                 if let Err(e) = driver.close(condition) {
@@ -447,7 +445,8 @@ impl ContainerInner {
                 Err(AmqpError::IoError(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     break Ok(());
                 }
-                Err(_) => {
+                Err(ref e) => {
+                    error!("Processing connection frames failed: {:?}", e);
                     break result;
                 }
             }
@@ -514,115 +513,62 @@ impl Drop for Session {
 impl Session {
     /// Create a new sender link for a given address cross this session. The sender
     /// is returned when the other side have confirmed its existence.
-    pub async fn new_sender(&self, addr: &str) -> Result<Sender> {
-        self.new_sender_with_link_options(addr, LinkRole::Sender)
+    pub async fn new_sender(&self, address: &str) -> Result<Sender> {
+        self.new_sender_with_link_options(address, LinkRole::Sender)
             .await
     }
 
     /// Create a new sender link for a given address cross this session. The sender
     /// is returned when the other side have confirmed its existence.
-    pub async fn new_sender_with_options<T: Into<SenderOptions>>(
+    pub async fn new_sender_with_options(
         &self,
-        addr: &str,
-        options: T,
+        address: &str,
+        options: impl Into<SenderOptions>,
     ) -> Result<Sender> {
-        self.new_sender_with_link_options(addr, options.into())
+        self.new_sender_with_link_options(address, options.into())
             .await
     }
 
     /// Create a new sender link for a given address cross this session. The sender
     /// is returned when the other side have confirmed its existence.
-    async fn new_sender_with_link_options<T: Into<LinkOptions>>(
+    async fn new_sender_with_link_options(
         &self,
-        addr: &str,
-        options: T,
+        address: &str,
+        options: impl Into<LinkOptions>,
     ) -> Result<Sender> {
-        let options = options.into();
-        let dynamic = options.dynamic().unwrap_or(false);
-        let link = self.session.new_link_with_options(addr, options)?;
-        trace!("Created link, waiting for attach frame");
-        loop {
-            let frame = self.session.recv().await?;
-            match frame.performative {
-                Some(Performative::Attach(a)) if a.name == link.name => {
-                    return if dynamic
-                        || matches!(&a.target, Some(t) if matches!(&t.address, Some(a) if a == addr))
-                    {
-                        // Populate remote properties
-                        Ok(Sender {
-                            address: a
-                                .target
-                                .and_then(|t| t.address)
-                                .ok_or_else(|| AmqpError::TargetNotRecognized(addr.to_string()))?,
-                            link,
-                            next_message_id: AtomicU64::new(0),
-                        })
-                    } else {
-                        Err(AmqpError::TargetNotRecognized(addr.to_string()))
-                    };
-                }
-                _ => {
-                    // Push it back into the queue
-                    // TODO: Prevent reordering
-                    self.session.unrecv(frame)?;
-                }
-            }
-        }
+        let (address, link) = self.session.new_link(address, options).await?;
+        Ok(Sender {
+            address,
+            link,
+            next_message_id: AtomicU64::new(0),
+        })
     }
 
     /// Create a new receiving link for a given address cross this session. The
     /// is returned when the other side have confirmed its existence.
-    pub async fn new_receiver(&self, addr: &str) -> Result<Receiver> {
-        self.new_receiver_with_link_options(addr, LinkRole::Receiver)
+    pub async fn new_receiver(&self, address: &str) -> Result<Receiver> {
+        self.new_receiver_with_link_options(address, LinkRole::Receiver)
             .await
     }
 
     /// Create a new receiving link for a given address cross this session. The
     /// is returned when the other side have confirmed its existence.
-    pub async fn new_receiver_with_options<T: Into<ReceiverOptions>>(
+    pub async fn new_receiver_with_options(
         &self,
-        addr: &str,
-        options: T,
+        address: &str,
+        options: impl Into<ReceiverOptions>,
     ) -> Result<Receiver> {
-        self.new_receiver_with_link_options(addr, options.into())
+        self.new_receiver_with_link_options(address, options.into())
             .await
     }
 
-    async fn new_receiver_with_link_options<T: Into<LinkOptions>>(
+    async fn new_receiver_with_link_options(
         &self,
-        addr: &str,
-        options: T,
+        address: &str,
+        options: impl Into<LinkOptions>,
     ) -> Result<Receiver> {
-        let options = options.into();
-        let dynamic = options.dynamic().unwrap_or(false);
-        let link = self.session.new_link_with_options(addr, options)?;
-        trace!("Created link, waiting for attach frame");
-        loop {
-            let frame = self.session.recv().await?;
-            match frame.performative {
-                Some(Performative::Attach(a)) if a.name == link.name => {
-                    return if dynamic
-                        || matches!(&a.source, Some(s) if matches!(&s.address, Some(a) if a == addr))
-                    {
-                        // Populate remote properties
-                        Ok(Receiver {
-                            address: a
-                                .source
-                                .and_then(|s| s.address)
-                                .ok_or_else(|| AmqpError::TargetNotRecognized(addr.to_string()))?,
-                            link,
-                        })
-                    } else {
-                        Err(AmqpError::TargetNotRecognized(addr.to_string()))
-                    };
-                }
-                _ => {
-                    // Push it back into the queue
-                    // TODO: Prevent reordering
-                    self.session.unrecv(frame)?;
-                }
-            }
-        }
+        let (address, link) = self.session.new_link(address, options).await?;
+        Ok(Receiver { address, link })
     }
 
     /// Close a session, ending the end performative.
@@ -662,6 +608,10 @@ impl Sender {
         );
         let settled = false;
         let delivery = self.link.send_message(message, settled).await?;
+        debug!(
+            "Message sent (handle {}), awaiting disposition",
+            self.link.handle
+        );
 
         if !settled {
             loop {
@@ -677,15 +627,15 @@ impl Sender {
                             self.link.unrecv(frame)?;
                         }
                     }
-                    Some(Performative::Detach(detach)) if detach.handle == self.link.handle => {
+                    Some(Performative::Detach(detach)) => {
+                        debug!("Link got detached: {:?}", detach);
                         let error_condition =
                             detach.error.unwrap_or_else(ErrorCondition::detach_received);
-                        self.close(Some(error_condition.clone()))?;
                         return Err(AmqpError::Amqp(error_condition));
                     }
                     _ => {
                         // TODO: Prevent reordering
-                        warn!("unreceiving: {:?}", frame);
+                        warn!("({}) unreceiving: {:?}", self.link.handle, frame);
                         self.link.unrecv(frame)?;
                     }
                 }
