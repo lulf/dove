@@ -13,6 +13,7 @@ use crate::sasl::*;
 use crate::transport::*;
 use async_channel::Sender;
 use std::sync::Arc;
+use std::time::Duration;
 use std::vec::Vec;
 
 #[derive(Debug, Default, Clone)]
@@ -20,6 +21,7 @@ pub struct ConnectionOptions {
     pub username: Option<String>,
     pub password: Option<String>,
     pub sasl_mechanism: Option<SaslMechanism>,
+    pub idle_timeout: Option<Duration>,
 }
 
 impl ConnectionOptions {
@@ -28,6 +30,7 @@ impl ConnectionOptions {
             username: None,
             password: None,
             sasl_mechanism: None,
+            idle_timeout: None,
         }
     }
 
@@ -43,6 +46,11 @@ impl ConnectionOptions {
 
     pub fn password(mut self, password: &str) -> Self {
         self.password = Some(password.to_string());
+        self
+    }
+
+    pub fn idle_timeout(mut self, duration: Duration) -> Self {
+        self.idle_timeout = Some(duration);
         self
     }
 }

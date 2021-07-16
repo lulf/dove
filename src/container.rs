@@ -233,6 +233,7 @@ impl ContainerInner {
         host: S,
         opts: ConnectionOptions,
     ) -> Result<Connection> {
+        let options = opts.clone();
         let (tx, rx) = async_channel::bounded(1);
 
         // mio connects in blocking mode -> new thread to not block in async context
@@ -259,13 +260,16 @@ impl ContainerInner {
         );
         let driver = {
             let handle = connection.handle(self.waker.clone());
-            let driver = Arc::new(ConnectionDriver::new(handle));
+            let driver = Arc::new(ConnectionDriver::new(
+                handle,
+                options.idle_timeout.unwrap_or_default(),
+            ));
 
             driver.open({
                 let mut open = Open::new(&self.container_id);
                 // open.hostname = Some(host.to_string());
                 open.channel_max = Some(u16::MAX);
-                open.idle_timeout = Some(5_000);
+                open.idle_timeout = options.idle_timeout.map(|d| d.as_millis() as _);
                 open
             })?;
 
@@ -287,7 +291,7 @@ impl ContainerInner {
                         container_id: self.container_id.clone(),
                         host,
                         channel_max: u16::MAX,
-                        idle_timeout: Duration::from_secs(5),
+                        idle_timeout: options.idle_timeout.unwrap_or_default(),
 
                         remote_container_id: o.container_id.clone(),
                         remote_channel_max: o.channel_max.unwrap_or(u16::MAX),

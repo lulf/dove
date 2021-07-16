@@ -41,7 +41,8 @@ async fn test_artemis() {
         let opts = ConnectionOptions::new()
             .sasl_mechanism(SaslMechanism::Plain)
             .username("test")
-            .password("test");
+            .password("test")
+            .idle_timeout(Duration::from_secs(5));
         single_client(port, opts.clone()).await;
         multiple_clients(port, opts).await;
     })
@@ -65,7 +66,9 @@ async fn test_qpid_dispatch() {
     let port: u16 = node.get_host_port(5672).unwrap();
 
     timeout(Duration::from_secs(120), async move {
-        let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
+        let opts = ConnectionOptions::new()
+            .sasl_mechanism(SaslMechanism::Anonymous)
+            .idle_timeout(Duration::from_secs(5));
         multiple_clients(port, opts).await;
     })
     .await
@@ -114,7 +117,9 @@ async fn test_qpid_broker_j() {
         create_queue(&client, http_port, "myqueue").await;
         create_queue(&client, http_port, "queue2").await;
 
-        let opts = ConnectionOptions::new().sasl_mechanism(SaslMechanism::Anonymous);
+        let opts = ConnectionOptions::new()
+            .sasl_mechanism(SaslMechanism::Anonymous)
+            .idle_timeout(Duration::from_secs(5));
         single_client(port, opts.clone()).await;
         multiple_clients(port, opts).await;
     })

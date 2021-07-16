@@ -142,13 +142,13 @@ pub struct SessionOpts {
 }
 
 impl ConnectionDriver {
-    pub fn new(connection: ConnectionHandle) -> ConnectionDriver {
+    pub fn new(connection: ConnectionHandle, idle_timeout: Duration) -> ConnectionDriver {
         ConnectionDriver {
             connection,
             rx: Channel::new(),
             sessions: Mutex::new(HashMap::new()),
             remote_channel_map: Mutex::new(HashMap::new()),
-            idle_timeout: Duration::from_secs(5),
+            idle_timeout,
             remote_idle_timeout: Duration::from_secs(0),
             channel_max: u16::MAX,
             closed: AtomicBool::new(false),
