@@ -237,6 +237,7 @@ impl<N: Network> Connection<N> {
                             self.state = ConnectionState::Start;
                         }
                         SaslState::Failed => {
+                            error!("SaslHandshake failed");
                             self.transport.close()?;
                             self.state = ConnectionState::Closed;
                         }
