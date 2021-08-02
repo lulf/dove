@@ -196,6 +196,7 @@ impl<N: Network> Connection<N> {
                             self.state = ConnectionState::Opened;
                         }
                         _ => {
+                            error!("Unexpected ProtocolHeader received: {:?}", header);
                             self.transport.close()?;
                             self.state = ConnectionState::Closed;
                         }
