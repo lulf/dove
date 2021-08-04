@@ -718,7 +718,7 @@ impl Drop for Receiver {
 impl Delivery {
     /// Retrieve reference to the message associated with this delivery.
     pub fn message(&self) -> &Message {
-        &self.message.as_ref().unwrap()
+        self.message.as_ref().unwrap()
     }
 
     // Take the message from the delivery to
