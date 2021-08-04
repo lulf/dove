@@ -34,6 +34,24 @@ impl ConnectionOptions {
         }
     }
 
+    pub const fn anonymous() -> Self {
+        Self {
+            username: None,
+            password: None,
+            sasl_mechanism: Some(SaslMechanism::Anonymous),
+            idle_timeout: None,
+        }
+    }
+
+    pub const fn plain(username: String, password: String) -> Self {
+        Self {
+            username: Some(username),
+            password: Some(password),
+            sasl_mechanism: Some(SaslMechanism::Plain),
+            idle_timeout: None,
+        }
+    }
+
     pub fn sasl_mechanism(mut self, mechanism: SaslMechanism) -> Self {
         self.sasl_mechanism = Some(mechanism);
         self
