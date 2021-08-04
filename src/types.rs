@@ -54,8 +54,15 @@ pub const DESC_DETACH: Value = Value::Ulong(0x16);
 pub const DESC_END: Value = Value::Ulong(0x17);
 pub const DESC_CLOSE: Value = Value::Ulong(0x18);
 
+/// http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-security-v1.0-os.html#type-sasl-mechanisms
 pub const DESC_SASL_MECHANISMS: Value = Value::Ulong(0x40);
+/// http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-security-v1.0-os.html#type-sasl-init
 pub const DESC_SASL_INIT: Value = Value::Ulong(0x41);
+/// http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-security-v1.0-os.html#type-sasl-challenge
+pub const DESC_SASL_CHALLENGE: Value = Value::Ulong(0x42);
+/// http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-security-v1.0-os.html#type-sasl-response
+pub const DESC_SASL_RESPONSE: Value = Value::Ulong(0x43);
+/// http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-security-v1.0-os.html#type-sasl-outcome
 pub const DESC_SASL_OUTCOME: Value = Value::Ulong(0x44);
 pub const DESC_ERROR: Value = Value::Ulong(0x1D);
 
