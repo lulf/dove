@@ -250,7 +250,7 @@ impl ContainerInner {
         });
 
         let connection = rx.recv().await??;
-        let host = connection.transport().network().peer_addr()?;
+        let host = connection.transport().network().peer_addr();
         trace!("{}: connected to {}", self.container_id, host);
 
         let id = Token(self.token_generator.fetch_add(1, Ordering::SeqCst) as usize);

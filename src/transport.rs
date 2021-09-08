@@ -319,22 +319,23 @@ pub mod mio {
     #[derive(Debug)]
     pub struct MioNetwork {
         stream: TcpStream,
+        peer: SocketAddr,
     }
 
     impl MioNetwork {
         pub fn connect<S: ToSocketAddrs>(host: &S) -> Result<MioNetwork> {
             let mut addrs = host.to_socket_addrs()?;
-            let stream = TcpStream::connect(
-                addrs
-                    .next()
-                    .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::AddrNotAvailable))?,
-            )?;
-
-            Ok(MioNetwork { stream })
+            let address = addrs
+                .next()
+                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::AddrNotAvailable))?;
+            Ok(MioNetwork {
+                stream: TcpStream::connect(address)?,
+                peer: address,
+            })
         }
 
-        pub fn peer_addr(&self) -> std::io::Result<SocketAddr> {
-            self.stream.peer_addr()
+        pub fn peer_addr(&self) -> SocketAddr {
+            self.peer
         }
 
         pub fn register(&mut self, id: Token, poll: &mut Poll) -> Result<()> {
