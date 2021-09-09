@@ -7,6 +7,7 @@ use dove::container::*;
 use dove::url;
 use futures::executor::block_on;
 use std::env;
+use tokio::time::Duration;
 
 /**
  * Example client that receives a single message to an AMQP endpoint.
@@ -28,6 +29,7 @@ fn main() {
         sasl_mechanism: url.username.map_or(Some(SaslMechanism::Anonymous), |_| {
             Some(SaslMechanism::Plain)
         }),
+        idle_timeout: Some(Duration::from_secs(5)),
     };
 
     let container = Container::new()

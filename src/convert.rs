@@ -163,7 +163,7 @@ impl TryFromValueVec for Symbol {}
 impl TryFromValue for Symbol {
     fn try_from(value: Value) -> Result<Self> {
         match value {
-            Value::Symbol(v) => Ok(Symbol::from_vec(v)),
+            Value::Symbol(v) => Ok(Symbol::from(v)),
             _ => Err(AmqpError::decode_error(Some(
                 "Error converting value to Symbol",
             ))),

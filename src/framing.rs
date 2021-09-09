@@ -72,7 +72,7 @@ pub type SaslCode = u8;
 
 impl Encoder for SaslMechanism {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        Symbol::from_slice(self.as_ref().as_bytes()).encode(writer)
+        Symbol::from_string(self.to_string()).encode(writer)
     }
 }
 

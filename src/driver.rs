@@ -48,10 +48,13 @@ pub struct SessionDriver {
     connection: ConnectionHandle,
     local_channel: ChannelId,
     rx: Channel<AmqpFrame>,
+
+    links_in_flight: Mutex<HashMap<String, Arc<LinkDriver>>>,
     links: Mutex<HashMap<HandleId, Arc<LinkDriver>>>,
+    handle_generator: AtomicU32,
+
     #[allow(clippy::type_complexity)]
     did_to_delivery: Arc<Mutex<HashMap<u32, (HandleId, Arc<DeliveryDriver>)>>>,
-    handle_generator: AtomicU32,
     initial_outgoing_id: u32,
 
     flow_control: Arc<Mutex<SessionFlowControl>>,
@@ -142,13 +145,13 @@ pub struct SessionOpts {
 }
 
 impl ConnectionDriver {
-    pub fn new(connection: ConnectionHandle) -> ConnectionDriver {
+    pub fn new(connection: ConnectionHandle, idle_timeout: Duration) -> ConnectionDriver {
         ConnectionDriver {
             connection,
             rx: Channel::new(),
             sessions: Mutex::new(HashMap::new()),
             remote_channel_map: Mutex::new(HashMap::new()),
-            idle_timeout: Duration::from_secs(5),
+            idle_timeout,
             remote_idle_timeout: Duration::from_secs(0),
             channel_max: u16::MAX,
             closed: AtomicBool::new(false),
@@ -209,10 +212,12 @@ impl ConnectionDriver {
         }
 
         for (_id, session) in core::mem::take(&mut *self.sessions.lock().unwrap()) {
-            session.rx.close();
             for (_id, link) in core::mem::take(&mut *session.links.lock().unwrap()) {
+                let _ = link.close(None);
                 link.rx.close();
             }
+            let _ = session.close(None);
+            session.rx.close();
         }
 
         self.rx.close();
@@ -292,8 +297,11 @@ impl ConnectionDriver {
                     connection: self.connection.clone(),
                     local_channel: chan,
                     rx: Channel::new(),
+
+                    links_in_flight: Mutex::new(HashMap::new()),
                     links: Mutex::new(HashMap::new()),
                     handle_generator: AtomicU32::new(0),
+
                     flow_control: Arc::new(Mutex::new(SessionFlowControl::new())),
                     initial_outgoing_id: 0,
 
@@ -337,43 +345,42 @@ impl ConnectionDriver {
 
     #[inline]
     pub fn unrecv(&self, frame: AmqpFrame) -> Result<()> {
-        warn!("unrecv");
+        warn!("unrecv: {:?}", frame);
         self.rx.send(frame)
     }
 }
 
 impl SessionDriver {
     pub fn dispatch(&self, frame: AmqpFrame) -> Result<()> {
-        match frame.performative {
-            Some(Performative::Attach(ref attach)) => {
-                {
-                    debug!(
-                        "Received attach on link {} with incoming id {}",
-                        attach.name, attach.handle
-                    );
-                    let mut m = self.links.lock().unwrap();
-                    let link = {
-                        let mut link = None;
-                        for l in m.values() {
-                            if l.name == attach.name {
-                                debug!(
-                                    "Found outgoing link with same name with handle {}",
-                                    l.handle
-                                );
-                                link = Some(l.clone());
-                                break;
-                            }
-                        }
-                        link
-                    };
-                    if let Some(link) = link {
-                        m.insert(attach.handle, link);
+        trace!("Dispatching frame: {:?}", frame);
+        match &frame.performative {
+            Some(Performative::Attach(attach_response)) => {
+                let link = self
+                    .links_in_flight
+                    .lock()
+                    .unwrap()
+                    .remove(&attach_response.name);
+
+                if let Some(link) = link {
+                    let handle = attach_response.handle;
+                    if link.rx.send(frame).is_ok() {
+                        self.links.lock().unwrap().insert(handle, Arc::clone(&link));
+                    } else {
+                        error!("Failed to notify LinkDriver about attach frame")
                     }
+                } else {
+                    error!(
+                        "Received attach frame for unknown link: {:?}",
+                        attach_response
+                    );
                 }
-                self.rx.send(frame)?;
             }
-            Some(Performative::Detach(ref _detach)) => {
-                self.rx.send(frame)?;
+            Some(Performative::Detach(ref detach)) => {
+                if let Some(link) = self.links.lock().unwrap().remove(&detach.handle) {
+                    link.rx.send(frame)?;
+                } else {
+                    warn!("Detach request with unknown handle received: {:?}", detach)
+                }
             }
             Some(Performative::Transfer(ref transfer)) => {
                 // Session flow control
@@ -382,15 +389,15 @@ impl SessionDriver {
                         let result = self.flow_control.lock().unwrap().accept(delivery_id);
                         match result {
                             Err(AmqpError::Amqp(cond)) => {
+                                error!("Transfer error: {:?}", cond);
                                 self.close(Some(cond))?;
                             }
-                            Err(_) => {
+                            Err(e) => {
+                                error!("Transfer error: {:?}", e);
                                 self.close(None)?;
                             }
-                            Ok(true) => {
-                                break;
-                            }
-                            _ => {}
+                            Ok(false) => {}
+                            Ok(true) => break,
                         }
                     }
                 }
@@ -427,13 +434,15 @@ impl SessionDriver {
                 trace!("Received disposition: {:?}", disposition);
                 let last = disposition.last.unwrap_or(disposition.first);
                 for id in disposition.first..=last {
-                    if let Some((handle, _)) = self.did_to_delivery.lock().unwrap().get(&id) {
-                        let link = {
-                            let mut m = self.links.lock().unwrap();
-                            m.get_mut(&handle).ok_or(AmqpError::InvalidHandle)?.clone()
-                        };
-                        if link.role == disposition.role {
-                            link.rx.send(frame.clone())?;
+                    if let Some((handle, _delivery)) =
+                        self.did_to_delivery.lock().unwrap().remove(&id)
+                    {
+                        if let Some(link) = self.links.lock().unwrap().get(&handle).cloned() {
+                            if link.role == disposition.role {
+                                link.rx.send(frame.clone())?;
+                            }
+                        } else {
+                            debug!("Disposition for invalid handle({}) received", handle);
                         }
                     }
                 }
@@ -477,56 +486,25 @@ impl SessionDriver {
         self.connection.end(self.local_channel, End { error })
     }
 
-    pub fn new_link(&self, addr: &str, role: LinkRole) -> Result<Arc<LinkDriver>> {
-        self.new_link_with_options(addr, LinkOptions::from(role))
-    }
-
-    pub fn new_link_with_options(
+    pub async fn new_link(
         &self,
-        addr: &str,
-        options: LinkOptions,
-    ) -> Result<Arc<LinkDriver>> {
+        address: &str,
+        options: impl Into<LinkOptions>,
+    ) -> Result<(String, Arc<LinkDriver>)> {
+        let options = options.into();
         let role = options.role();
-        let handle: HandleId = {
-            let m = self.links.lock().unwrap();
-            let mut handle;
-            loop {
-                handle = self.handle_generator.fetch_add(1, Ordering::SeqCst);
-                if !m.contains_key(&handle) {
-                    break;
-                }
-            }
-            handle
-        };
         let link_name = format!("dove-{}-{}", Uuid::new_v4().to_string(), role.as_str());
-        debug!("Creating link {} with handle id {}", link_name, handle);
-        let link = Arc::new(LinkDriver {
-            name: link_name.clone(),
-            role,
-            channel: self.local_channel,
-            connection: self.connection.clone(),
-            handle,
-            rx: Channel::new(),
-            session_flow_control: self.flow_control.clone(),
-            did_to_delivery: self.did_to_delivery.clone(),
-            credit: AtomicU32::new(0),
-            delivery_count: AtomicU32::new(0),
-        });
-
-        {
-            let mut m = self.links.lock().unwrap();
-            m.insert(handle, link.clone());
-        }
+        debug!("Creating link {} with role {:?}", link_name, role);
 
         // Send attach frame
         let attach = Attach {
-            name: link_name,
-            handle: handle as u32,
+            name: link_name.clone(),
+            handle: self.next_handle_id(),
             role,
             snd_settle_mode: None,
             rcv_settle_mode: None,
             source: Some(Source {
-                address: Some(addr.to_string()),
+                address: Some(address.to_string()),
                 durable: None,
                 expiry_policy: None,
                 timeout: None,
@@ -539,7 +517,7 @@ impl SessionDriver {
                 capabilities: None,
             }),
             target: Some(Target {
-                address: Some(addr.to_string()),
+                address: Some(address.to_string()),
                 durable: None,
                 expiry_policy: None,
                 timeout: None,
@@ -559,9 +537,100 @@ impl SessionDriver {
             desired_capabilities: None,
             properties: None,
         };
-        self.connection
-            .attach(self.local_channel, options.applied_on_attach(attach))?;
-        Ok(link)
+
+        let attach = options.applied_on_attach(attach);
+        let link = Arc::new(LinkDriver {
+            name: link_name.clone(),
+            role,
+            channel: self.local_channel,
+            connection: self.connection.clone(),
+            handle: attach.handle,
+            rx: Channel::new(),
+            session_flow_control: self.flow_control.clone(),
+            did_to_delivery: self.did_to_delivery.clone(),
+            credit: AtomicU32::new(0),
+            delivery_count: AtomicU32::new(0),
+        });
+
+        self.links_in_flight
+            .lock()
+            .unwrap()
+            .insert(link_name.clone(), Arc::clone(&link));
+
+        debug!("Requesting attachment of {}/{}", attach.name, attach.handle);
+        self.connection.attach(self.local_channel, attach)?;
+
+        let frame = link.rx.recv().await?;
+        if let Some(Performative::Attach(response)) = frame.performative {
+            debug!(
+                "Received response for attach request: handle={}",
+                response.handle
+            );
+
+            // if it is not dynamic, we need to check whether the attach was successful
+            let requested_address = address;
+            let dynamic = matches!(options.dynamic(), Some(true));
+
+            let address_response = match response.role {
+                LinkRole::Sender => response.target.and_then(|t| t.address),
+                LinkRole::Receiver => response.source.and_then(|s| s.address),
+            };
+
+            match address_response {
+                Some(address) if dynamic || address == requested_address => Ok((address, link)),
+                invalid => {
+                    warn!(
+                        "Expected address {:?}, but server sent {:?}",
+                        requested_address, invalid
+                    );
+                    link.close(Some(ErrorCondition {
+                        condition: "amqp:invalid-field".to_string(),
+                        description: format!(
+                            "Expected address {:?}, but server sent {:?}",
+                            requested_address, invalid
+                        ),
+                    }))?;
+                    Err(AmqpError::TargetNotRecognized(
+                        requested_address.to_string(),
+                    ))
+                }
+            }
+        } else {
+            let condition = ErrorCondition {
+                condition: "amqp:precondition-failed".to_string(),
+                description: format!("Expected attach frame, but got {:?}", frame),
+            };
+            link.close(Some(condition.clone()))?;
+            Err(AmqpError::Amqp(condition))
+        }
+    }
+
+    fn next_handle_id(&self) -> HandleId {
+        loop {
+            let handle_id = self.handle_generator.fetch_add(1, Ordering::SeqCst);
+
+            loop {
+                // try_lock to prevent deadlocks
+                let links = match self.links.try_lock() {
+                    Ok(links) => links,
+                    Err(_) => continue,
+                };
+
+                // try_lock to prevent deadlocks
+                let links_in_flight = match self.links_in_flight.try_lock() {
+                    Ok(links_in_flight) => links_in_flight,
+                    Err(_) => continue,
+                };
+
+                if !links.values().any(|l| l.handle == handle_id)
+                    && !links_in_flight.values().any(|l| l.handle == handle_id)
+                {
+                    return handle_id;
+                } else {
+                    break;
+                }
+            }
+        }
     }
 
     #[inline]

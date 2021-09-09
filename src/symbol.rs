@@ -10,46 +10,31 @@ use std::vec::Vec;
 
 use crate::error::*;
 use crate::types::*;
+use std::borrow::Cow;
 
 /**
  * A type for working with symbols, typically used in some AMQP structures.
  */
-#[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq)]
-pub struct Symbol {
-    pub(crate) data: Vec<u8>,
-}
+#[derive(Clone, PartialEq, Debug, PartialOrd, Ord, Eq, derive_more::From)]
+pub struct Symbol(#[from(forward)] pub(crate) Cow<'static, [u8]>);
 
 impl Symbol {
-    pub fn from_slice(data: &[u8]) -> Symbol {
-        let mut vec = Vec::new();
-        vec.extend_from_slice(data);
-        Symbol { data: vec }
+    pub fn from_static_str(name: &'static str) -> Self {
+        Self(Cow::Borrowed(name.as_bytes()))
     }
 
-    pub fn symbol_from_str(data: &str) -> Symbol {
-        let mut vec = Vec::new();
-        vec.extend_from_slice(data.as_bytes());
-        Symbol { data: vec }
+    pub fn from_string(name: String) -> Symbol {
+        Self::from(name.into_bytes())
     }
 
-    pub fn from_vec(data: Vec<u8>) -> Symbol {
-        Symbol { data }
-    }
-
-    pub fn from_string(data: &str) -> Symbol {
-        let mut vec = Vec::new();
-        vec.extend_from_slice(data.as_bytes());
-        Symbol { data: vec }
-    }
-
-    pub fn to_slice(&self) -> &[u8] {
-        &self.data[..]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0[..]
     }
 }
 
 impl Encoder for Symbol {
     fn encode(&self, writer: &mut dyn Write) -> Result<TypeCode> {
-        ValueRef::Symbol(&self.data[..]).encode(writer)
+        ValueRef::Symbol(&self.0[..]).encode(writer)
     }
 }
 

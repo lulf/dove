@@ -25,6 +25,13 @@ impl ErrorCondition {
             description: "local-idle-timeout expired".to_string(),
         }
     }
+
+    pub fn detach_received() -> Self {
+        ErrorCondition {
+            condition: "amqp:resource-deleted".to_string(),
+            description: "Received detach command - was the link deleted?".to_string(),
+        }
+    }
 }
 
 #[derive(thiserror::Error, Debug)]

@@ -155,7 +155,9 @@ impl Sasl {
                         } else if SaslMechanism::Anonymous == sasl_client.mechanism {
                             transport.write_frame(&Frame::SASL(SaslFrame::SaslInit(SaslInit {
                                 mechanism: sasl_client.mechanism.clone(),
-                                initial_response: None,
+                                // For anonymous login, this *must* be set to `Some(..)` value!
+                                // `Vec::new` is const, so it shouldn't matter in the end (perf)
+                                initial_response: Some(Vec::new()),
                                 hostname: hostname.map(|s| s.to_string()),
                             })))?;
                         } else {
@@ -173,7 +175,7 @@ impl Sasl {
                             self.state = SaslState::Failed;
                         }
                     }
-                    _ => trace!("Got frame {:?}", frame),
+                    _ => warn!("Got unexpected frame {:?}", frame),
                 }
             }
             SaslRole::Server(_) => {}

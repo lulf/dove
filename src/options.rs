@@ -1,5 +1,7 @@
 use crate::container::Value;
 use crate::framing::{Attach, LinkRole};
+use crate::symbol::Symbol;
+use std::collections::BTreeMap;
 
 pub trait ApplyOptionsTo<T> {
     fn apply_options_to(&self, target: &mut T);
@@ -39,6 +41,14 @@ impl LinkOptions {
         }
     }
 
+    pub fn dynamic(&self) -> Option<bool> {
+        match self {
+            LinkOptions::Sender(s) => s.as_ref().and_then(|s| s.dynamic.as_ref()),
+            LinkOptions::Receiver(r) => r.as_ref().and_then(|r| r.dynamic.as_ref()),
+        }
+        .map(|d| DynamicFlag::NotDynamic != *d)
+    }
+
     pub fn applied_on_attach(&self, mut attach: Attach) -> Attach {
         self.apply_options_to(&mut attach);
         attach
@@ -61,39 +71,132 @@ impl ApplyOptionsTo<Attach> for LinkOptions {
     }
 }
 
-pub struct SenderOptions {}
+/// http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-messaging-v1.0-os.html#type-node-properties
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub enum DynamicLifetimePolicy {
+    DeleteOnClose,
+    DeleteOnNoLinks,
+    DeleteOnNoMessages,
+    DeleteOnNoLinksOrMessages,
+}
 
-impl ApplyOptionsTo<Attach> for SenderOptions {
-    fn apply_options_to(&self, target: &mut Attach) {
-        let _ = target;
+impl DynamicLifetimePolicy {
+    pub(crate) fn symbol(&self) -> Symbol {
+        Symbol::from_static_str(match self {
+            DynamicLifetimePolicy::DeleteOnClose => "amqp:delete-on-close:list",
+            DynamicLifetimePolicy::DeleteOnNoLinks => "amqp:delete-on-no-links:list",
+            DynamicLifetimePolicy::DeleteOnNoMessages => "amqp:delete-on-no-messages:list",
+            DynamicLifetimePolicy::DeleteOnNoLinksOrMessages => {
+                "amqp:delete-on-no-links-or-messages:list"
+            }
+        })
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub enum DynamicFlag {
+    NotDynamic,
+    Dynamic {
+        lifetime_policy: DynamicLifetimePolicy,
+        // TODO missing supported-dist-modes
+    },
+}
+
+impl From<DynamicLifetimePolicy> for DynamicFlag {
+    fn from(lifetime_policy: DynamicLifetimePolicy) -> Self {
+        Self::Dynamic { lifetime_policy }
+    }
+}
+
+impl ApplyOptionsTo<(&mut Option<bool>, &mut Option<BTreeMap<Symbol, Value>>)> for DynamicFlag {
+    fn apply_options_to(
+        &self,
+        (dynamic, dynamic_node_properties): &mut (
+            &mut Option<bool>,
+            &mut Option<BTreeMap<Symbol, Value>>,
+        ),
+    ) {
+        match self {
+            DynamicFlag::NotDynamic => **dynamic = Some(false),
+            DynamicFlag::Dynamic { lifetime_policy } => {
+                **dynamic = Some(true);
+                dynamic_node_properties
+                    .get_or_insert_with(Default::default)
+                    .insert(
+                        Symbol::from_static_str("lifetime-policy"),
+                        Value::Described(
+                            Box::new(lifetime_policy.symbol().into()),
+                            Box::new(Value::List(Vec::new())),
+                        ),
+                    );
+            }
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct SenderOptions {
+    /// Whether to create the exchange point dynamically, if it does not yet exist
+    pub dynamic: Option<DynamicFlag>,
+}
+
+impl SenderOptions {
+    pub fn with_dynamic_flag(mut self, dynamic: impl Into<DynamicFlag>) -> Self {
+        self.dynamic = Some(dynamic.into());
+        self
+    }
+}
+
+impl ApplyOptionsTo<Attach> for SenderOptions {
+    fn apply_options_to(&self, attach: &mut Attach) {
+        if let (Some(dynamic_flag), Some(target)) = (&self.dynamic, &mut attach.target) {
+            dynamic_flag
+                .apply_options_to(&mut (&mut target.dynamic, &mut target.dynamic_node_properties))
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
 pub struct ReceiverOptions {
     pub filter: Option<ReceiverFilter>,
+    /// Whether to create the exchange point dynamically, if it does not yet exist
+    pub dynamic: Option<DynamicFlag>,
+}
+
+impl ReceiverOptions {
+    pub fn with_filter(mut self, filter: ReceiverFilter) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+
+    pub fn with_dynamic_flag(mut self, dynamic: impl Into<DynamicFlag>) -> Self {
+        self.dynamic = Some(dynamic.into());
+        self
+    }
 }
 
 #[allow(clippy::needless_update)]
 impl From<ReceiverFilter> for ReceiverOptions {
     fn from(filter: ReceiverFilter) -> Self {
-        Self {
-            filter: Some(filter),
-            ..Default::default()
-        }
+        Self::default().with_filter(filter)
     }
 }
 
 impl ApplyOptionsTo<Attach> for ReceiverOptions {
     fn apply_options_to(&self, target: &mut Attach) {
         self.filter.apply_options_to(target);
+
+        if let (Some(dynamic_flag), Some(source)) = (&self.dynamic, &mut target.source) {
+            dynamic_flag
+                .apply_options_to(&mut (&mut source.dynamic, &mut source.dynamic_node_properties));
+        }
     }
 }
 
 /// Sets the filter to be applied by the broker before sending the message
 /// through the link. Be aware, that some filters do nothing unless the correct
 /// exchange type is set.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum ReceiverFilter {
     /// Filters for exact matches on `message.properties.subject`.
     /// See 'apache.org:legacy-amqp-direct-binding:string'
@@ -226,7 +329,7 @@ pub mod apache_legacy_exchange_direct_binding {
     use crate::types::Value;
     use std::collections::BTreeMap;
 
-    #[derive(Clone)]
+    #[derive(Debug, Clone)]
     pub struct Options(String);
 
     impl<T: Into<String>> From<T> for Options {
@@ -242,9 +345,9 @@ pub mod apache_legacy_exchange_direct_binding {
                     let filter_symbol = "apache.org:legacy-amqp-direct-binding:string";
                     let mut map = BTreeMap::new();
                     map.insert(
-                        Symbol::from_string(filter_symbol),
+                        Symbol::from_static_str(filter_symbol),
                         Value::Described(
-                            Box::new(Value::from(Symbol::from_string(filter_symbol))),
+                            Box::new(Value::from(Symbol::from_static_str(filter_symbol))),
                             Box::new(Value::String(self.0.clone())),
                         ),
                     );
@@ -261,7 +364,7 @@ pub mod apache_legacy_exchange_topic_binding {
     use crate::types::Value;
     use std::collections::BTreeMap;
 
-    #[derive(Clone)]
+    #[derive(Debug, Clone)]
     pub struct Options(String);
 
     impl<T: Into<String>> From<T> for Options {
@@ -277,9 +380,9 @@ pub mod apache_legacy_exchange_topic_binding {
                     let filter_symbol = "apache.org:legacy-amqp-topic-binding:string";
                     let mut map = BTreeMap::new();
                     map.insert(
-                        Symbol::from_string(filter_symbol),
+                        Symbol::from_static_str(filter_symbol),
                         Value::Described(
-                            Box::new(Value::from(Symbol::from_string(filter_symbol))),
+                            Box::new(Value::from(Symbol::from_static_str(filter_symbol))),
                             Box::new(Value::String(self.0.clone())),
                         ),
                     );
@@ -296,13 +399,13 @@ pub mod apache_legacy_exchange_headers_filter {
     use crate::types::Value;
     use std::collections::BTreeMap;
 
-    #[derive(Clone, Copy)]
+    #[derive(Debug, Clone, Copy)]
     pub enum MatchMode {
         Any,
         All,
     }
 
-    #[derive(Clone)]
+    #[derive(Debug, Clone)]
     pub struct Options {
         pub mode: MatchMode,
         pub headers: Vec<(Value, Value)>,
@@ -314,9 +417,9 @@ pub mod apache_legacy_exchange_headers_filter {
                 source.filter = Some({
                     let mut map = BTreeMap::new();
                     map.insert(
-                        Symbol::from_string("selector"),
+                        Symbol::from_static_str("selector"),
                         Value::Described(
-                            Box::new(Value::from(Symbol::from_string(
+                            Box::new(Value::from(Symbol::from_static_str(
                                 "apache.org:legacy-amqp-headers-binding:map",
                             ))),
                             Box::new(Value::Map({
@@ -346,7 +449,7 @@ pub mod apache_selector {
     use crate::types::Value;
     use std::collections::BTreeMap;
 
-    #[derive(Clone)]
+    #[derive(Debug, Clone)]
     pub struct Selector {
         pub query: String,
     }
@@ -357,9 +460,9 @@ pub mod apache_selector {
                 source.filter = Some({
                     let mut map = BTreeMap::new();
                     map.insert(
-                        Symbol::from_string("selector"),
+                        Symbol::from_static_str("selector"),
                         Value::Described(
-                            Box::new(Value::from(Symbol::from_string(
+                            Box::new(Value::from(Symbol::from_static_str(
                                 "apache.org:selector-filter:string",
                             ))),
                             Box::new(Value::String(self.query.clone())),
