@@ -71,7 +71,7 @@ impl ApplyOptionsTo<Attach> for LinkOptions {
     }
 }
 
-/// http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-messaging-v1.0-os.html#type-node-properties
+/// <http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-messaging-v1.0-os.html#type-node-properties>
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub enum DynamicLifetimePolicy {
     DeleteOnClose,
@@ -312,7 +312,7 @@ impl ReceiverFilter {
 
     /// Filter based on some SQL-like syntax.
     /// See 'apache.org:selector-filter:string', 'JMS Selectors' and 'javax.jmx.Message'.
-    /// https://docs.oracle.com/javaee/1.4/api/javax/jms/Message.html
+    /// <https://docs.oracle.com/javaee/1.4/api/javax/jms/Message.html>
     ///
     /// # WARN
     /// Requires exchange type 'headers'
