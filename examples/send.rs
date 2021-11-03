@@ -32,6 +32,7 @@ fn main() {
             Some(SaslMechanism::Plain)
         }),
         idle_timeout: Some(Duration::from_secs(5)),
+        tls_config: None,
     };
 
     let container = Container::new()
@@ -41,7 +42,7 @@ fn main() {
     // connect creates the TCP connection and sends OPEN frame.
     block_on(async {
         let connection = container
-            .connect(format!("{}:{}", url.hostname, url.port), opts)
+            .connect(url.hostname, url.port, opts)
             .await
             .expect("connection not created");
 

@@ -11,7 +11,7 @@ use crate::driver::{
 };
 use crate::error::*;
 use crate::framing::{LinkRole, Open, Performative};
-use crate::transport;
+use crate::transport::{self, Host};
 use mio::{Events, Poll, Token, Waker};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -29,7 +29,7 @@ use crate::options::{LinkOptions, ReceiverOptions, SenderOptions};
 pub use crate::sasl::SaslMechanism;
 use crate::transport::mio::MioNetwork;
 pub use crate::types::{Value, ValueRef};
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::{SocketAddr};
 
 /// Represents an AMQP 1.0 container that can manage multiple connections.
 pub struct Container {
@@ -179,11 +179,13 @@ impl Container {
     }
 
     /// Connect to an AMQP endpoint and send the initial open performative.
-    pub async fn connect<S: ToSocketAddrs + Send + 'static>(
+    pub async fn connect(
         &self,
-        host: S,
+        host_name: &str,
+        port: u16,
         opts: ConnectionOptions,
     ) -> Result<Connection> {
+        let host = (host_name.to_string(), port);
         self.container.connect(host, opts).await
     }
 
@@ -228,19 +230,23 @@ impl ContainerInner {
         Ok(())
     }
 
-    async fn connect<S: ToSocketAddrs + Send + 'static>(
+    async fn connect(
         &self,
-        host: S,
+        host: Host,
         opts: ConnectionOptions,
     ) -> Result<Connection> {
         let options = opts.clone();
         let (tx, rx) = async_channel::bounded(1);
+        let host_name = String::from(&host.0);
 
         // mio connects in blocking mode -> new thread to not block in async context
         thread::spawn({
             move || {
                 let result: Result<_> = (|| {
-                    let network = transport::mio::MioNetwork::connect(&host)?;
+                    let network = match &opts.tls_config {
+                        Some(config) => transport::mio::MioNetwork::connect_with_tls(&host, config.clone())?,
+                        None => transport::mio::MioNetwork::connect(&host)?
+                    };
                     let transport = transport::Transport::new(network, 1024);
                     let connection = conn::connect(transport, opts)?;
                     Ok(connection)
@@ -250,13 +256,13 @@ impl ContainerInner {
         });
 
         let connection = rx.recv().await??;
-        let host = connection.transport().network().peer_addr();
-        trace!("{}: connected to {}", self.container_id, host);
+        let host_addr = connection.transport().network().peer_addr();
+        trace!("{}: connected to {}", self.container_id, host_addr);
 
         let id = Token(self.token_generator.fetch_add(1, Ordering::SeqCst) as usize);
         debug!(
             "{}: created connection to {} with local id {:?}",
-            self.container_id, host, id,
+            self.container_id, host_addr, id,
         );
         let driver = {
             let handle = connection.handle(self.waker.clone());
@@ -267,7 +273,7 @@ impl ContainerInner {
 
             driver.open({
                 let mut open = Open::new(&self.container_id);
-                // open.hostname = Some(host.to_string());
+                open.hostname = Some(host_name);
                 open.channel_max = Some(u16::MAX);
                 open.idle_timeout = options.idle_timeout.map(|d| d.as_millis() as _);
                 open
@@ -283,13 +289,13 @@ impl ContainerInner {
             let frame = driver.recv().await?;
             match frame.performative {
                 Some(Performative::Open(o)) => {
-                    trace!("{}: received OPEN frame from {}", self.container_id, host);
+                    trace!("{}: received OPEN frame from {}", self.container_id, host_addr);
                     // Populate remote properties
                     return Ok(Connection {
                         waker: self.waker.clone(),
                         connection: driver,
                         container_id: self.container_id.clone(),
-                        host,
+                        host: host_addr,
                         channel_max: u16::MAX,
                         idle_timeout: options.idle_timeout.unwrap_or_default(),
 
@@ -301,7 +307,7 @@ impl ContainerInner {
                     });
                 }
                 Some(Performative::Close(c)) => {
-                    trace!("{}: received CLOSE frame from {}", self.container_id, host);
+                    trace!("{}: received CLOSE frame from {}", self.container_id, host_addr);
                     return if let Some(e) = c.error {
                         Err(AmqpError::Amqp(e))
                     } else {

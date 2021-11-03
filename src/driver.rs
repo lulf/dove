@@ -58,6 +58,7 @@ pub struct SessionDriver {
     initial_outgoing_id: u32,
 
     flow_control: Arc<Mutex<SessionFlowControl>>,
+    link_mapping: Arc<Mutex<HashMap<u32, u32>>>,
 }
 
 // TODO: Make this use atomic operations
@@ -306,6 +307,7 @@ impl ConnectionDriver {
                     initial_outgoing_id: 0,
 
                     did_to_delivery: Arc::new(Mutex::new(HashMap::new())),
+                    link_mapping: Arc::new(Mutex::new(HashMap::new())),
                 });
                 entry.insert(session.clone());
                 return Some(session);
@@ -363,6 +365,7 @@ impl SessionDriver {
 
                 if let Some(link) = link {
                     let handle = attach_response.handle;
+                    self.link_mapping.lock().unwrap().insert(link.handle, handle);
                     if link.rx.send(frame).is_ok() {
                         self.links.lock().unwrap().insert(handle, Arc::clone(&link));
                     } else {
@@ -437,12 +440,16 @@ impl SessionDriver {
                     if let Some((handle, _delivery)) =
                         self.did_to_delivery.lock().unwrap().remove(&id)
                     {
-                        if let Some(link) = self.links.lock().unwrap().get(&handle).cloned() {
-                            if link.role == disposition.role {
-                                link.rx.send(frame.clone())?;
+                        if let Some(handle_internal) = self.link_mapping.lock().unwrap().get(&handle) { 
+                            if let Some(link) = self.links.lock().unwrap().get(&handle_internal).cloned() {
+                                if link.role == disposition.role {
+                                    link.rx.send(frame.clone())?;
+                                }
+                            } else {
+                                debug!("Disposition for invalid handle({}) received", handle);
                             }
                         } else {
-                            debug!("Disposition for invalid handle({}) received", handle);
+                            debug!("Link mapping not found for {}", handle);
                         }
                     }
                 }

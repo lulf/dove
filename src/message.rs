@@ -36,7 +36,7 @@ pub struct MessageHeader {
     pub delivery_count: Option<u32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MessageProperties {
     pub message_id: Option<Value>,
     pub user_id: Option<Vec<u8>>,
@@ -66,6 +66,7 @@ impl MessageBody {
         match self {
             MessageBody::Data(v) => Some(&v[..]),
             MessageBody::AmqpValue(Value::Binary(v)) => Some(&v[..]),
+            MessageBody::AmqpValue(Value::String(v)) => Some(v.as_bytes()),
             _ => None,
         }
     }
@@ -240,21 +241,7 @@ impl MessageProperties {
     }
 
     pub fn decode(mut decoder: FrameDecoder) -> Result<MessageProperties> {
-        let mut properties = MessageProperties {
-            message_id: None,
-            user_id: None,
-            to: None,
-            subject: None,
-            reply_to: None,
-            correlation_id: None,
-            content_type: None,
-            content_encoding: None,
-            absolute_expiry_time: None,
-            creation_time: None,
-            group_id: None,
-            group_sequence: None,
-            reply_to_group_id: None,
-        };
+        let mut properties = MessageProperties::default();
         decoder.decode_optional(&mut properties.message_id)?;
         decoder.decode_optional(&mut properties.user_id)?;
         decoder.decode_optional(&mut properties.to)?;

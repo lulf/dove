@@ -30,6 +30,7 @@ fn main() {
             Some(SaslMechanism::Plain)
         }),
         idle_timeout: Some(Duration::from_secs(5)),
+        tls_config: None
     };
 
     let container = Container::new()
@@ -40,7 +41,7 @@ fn main() {
     block_on(async {
         println!("Going to connect");
         let connection = container
-            .connect(format!("{}:{}", url.hostname, url.port), opts)
+            .connect(url.hostname, url.port, opts)
             .await
             .expect("connection not created");
 

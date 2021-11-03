@@ -353,6 +353,11 @@ impl Encoder for ValueRef<'_> {
                 writer.write_u64::<NetworkEndian>(*val)?;
                 Ok(TypeCode::Timestamp)
             }
+            ValueRef::Uuid(val) => {
+                writer.write_u8(TypeCode::Uuid as u8)?;
+                writer.write_all(val.as_bytes())?;
+                Ok(TypeCode::Uuid)
+            }
         }
     }
 }

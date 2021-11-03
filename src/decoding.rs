@@ -7,6 +7,7 @@
 
 use byteorder::NetworkEndian;
 use byteorder::ReadBytesExt;
+use uuid::Uuid;
 use std::io::Read;
 use std::vec::Vec;
 
@@ -204,6 +205,12 @@ fn decode_value_with_ctor(raw_code: u8, reader: &mut dyn Read) -> Result<Value> 
             let val = reader.read_u64::<NetworkEndian>()?;
             Ok(Value::Timestamp(val))
         }
+        TypeCode::Uuid => {
+            let mut buf = [0; 16];
+            reader.read_exact(buf.as_mut())?;
+            let uuid = Uuid::from_slice(&buf).unwrap();
+            Ok(Value::Uuid(uuid))
+        }
     }
 }
 
@@ -238,7 +245,7 @@ fn decode_type(code: u8) -> Result<TypeCode> {
         // decimal128
         0x73 => Ok(TypeCode::Char),
         0x83 => Ok(TypeCode::Timestamp),
-        // uuid
+        0x98 => Ok(TypeCode::Uuid),
         0xA0 => Ok(TypeCode::Bin8),
         0xA1 => Ok(TypeCode::Str8),
         0xA3 => Ok(TypeCode::Sym8),

@@ -36,7 +36,7 @@ fn main() {
         .sasl_mechanism(SaslMechanism::Anonymous)
         .idle_timeout(Duration::from_secs(5));
     let net =
-        mio::MioNetwork::connect(&format!("{}:{}", host, port)).expect("Error opening network");
+        mio::MioNetwork::connect(&(host.to_string(), port)).expect("Error opening network");
     let transport = Transport::new(net, 1024);
     let mut connection = connect(transport, opts).expect("Error opening connection");
 

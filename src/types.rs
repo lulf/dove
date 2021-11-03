@@ -11,6 +11,7 @@ use std::vec::Vec;
 
 use crate::error::*;
 use crate::symbol::Symbol;
+use uuid::Uuid;
 
 /**
  * Encoder trait that all types that can be serialized to an AMQP type must implement.
@@ -102,7 +103,7 @@ pub enum ValueRef<'a> {
     #[from]
     Char(&'a char),
     Timestamp(&'a u64),
-    // uuid
+    Uuid(&'a Uuid),
     #[from]
     Binary(&'a [u8]),
     #[from]
@@ -158,6 +159,7 @@ impl<'a> From<&'a Value> for ValueRef<'a> {
             Value::Binary(ref value) => ValueRef::Binary(value),
             Value::Char(ref value) => ValueRef::Char(value),
             Value::Timestamp(ref value) => ValueRef::Timestamp(value),
+            Value::Uuid(ref value) => ValueRef::Uuid(value),
         }
     }
 }
@@ -194,7 +196,7 @@ pub enum Value {
     #[from]
     Char(char),
     Timestamp(u64),
-    // uuid
+    Uuid(Uuid),
     #[from]
     Binary(Vec<u8>),
     #[from]
@@ -276,7 +278,7 @@ pub enum TypeCode {
     // decimal12
     Char = 0x73,
     Timestamp = 0x83,
-    // uuid
+    Uuid = 0x98,
     Bin8 = 0xA0,
     Bin32 = 0xB0,
     Str8 = 0xA1,

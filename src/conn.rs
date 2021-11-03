@@ -22,6 +22,7 @@ pub struct ConnectionOptions {
     pub password: Option<String>,
     pub sasl_mechanism: Option<SaslMechanism>,
     pub idle_timeout: Option<Duration>,
+    pub tls_config: Option<TlsConfig>,
 }
 
 impl ConnectionOptions {
@@ -31,6 +32,7 @@ impl ConnectionOptions {
             password: None,
             sasl_mechanism: None,
             idle_timeout: None,
+            tls_config: None,
         }
     }
 
@@ -40,6 +42,7 @@ impl ConnectionOptions {
             password: None,
             sasl_mechanism: Some(SaslMechanism::Anonymous),
             idle_timeout: None,
+            tls_config: None,
         }
     }
 
@@ -49,6 +52,7 @@ impl ConnectionOptions {
             password: Some(password),
             sasl_mechanism: Some(SaslMechanism::Plain),
             idle_timeout: None,
+            tls_config: None,
         }
     }
 
