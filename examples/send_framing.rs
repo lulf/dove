@@ -3,6 +3,8 @@
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
 
+use dove::stream::EmptyConfig;
+use ::mio::net::TcpStream;
 use ::mio::Poll;
 use ::mio::Token;
 use ::mio::Waker;
@@ -35,8 +37,8 @@ fn main() {
     let opts = ConnectionOptions::new()
         .sasl_mechanism(SaslMechanism::Anonymous)
         .idle_timeout(Duration::from_secs(5));
-    let net =
-        mio::MioNetwork::connect(&(host.to_string(), port)).expect("Error opening network");
+    let net: mio::MioNetwork<TcpStream> =
+        mio::MioNetwork::connect(&(host.to_string(), port), EmptyConfig).expect("Error opening network");
     let transport = Transport::new(net, 1024);
     let mut connection = connect(transport, opts).expect("Error opening connection");
 

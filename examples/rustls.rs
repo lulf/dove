@@ -1,6 +1,4 @@
-use std::convert::TryInto;
 use dove::container::*;
-use dove::transport::TlsConfig;
 use rustls::OwnedTrustAnchor;
 use rustls::RootCertStore;
 use tokio::time::Duration;
@@ -30,19 +28,14 @@ async fn main() {
         .with_root_certificates(root_store)
         .with_no_client_auth();
 
-    // If tls_config is Some, it will attempt to create a tls connection
     let opts = ConnectionOptions {
         username: Some(String::from("<sasl_key_name>")),
         password: Some(String::from("<sasl_key>")),
         sasl_mechanism: Some(SaslMechanism::Plain),
         idle_timeout: Some(Duration::from_secs(10)),
-        tls_config: Some(TlsConfig {
-            config: config,
-            server_name: hostname.try_into().unwrap()
-        })
     };
 
-    let container = Container::new()
+    let container = Container::new_rustls(config)
         .expect("unable to create container")
         .start();
 
@@ -57,7 +50,7 @@ async fn main() {
         .expect("session not created");
 
     let sender = session
-        .new_sender("amqps://<namespace>.servicebus.windows.net:5671/<queue>")
+        .new_sender("amqps://<namespace>.servicebus.windows.net:5671/<entity_path>")
         .await
         .expect("sender not created");
 

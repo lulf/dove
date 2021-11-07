@@ -22,7 +22,6 @@ pub struct ConnectionOptions {
     pub password: Option<String>,
     pub sasl_mechanism: Option<SaslMechanism>,
     pub idle_timeout: Option<Duration>,
-    pub tls_config: Option<TlsConfig>,
 }
 
 impl ConnectionOptions {
@@ -32,7 +31,6 @@ impl ConnectionOptions {
             password: None,
             sasl_mechanism: None,
             idle_timeout: None,
-            tls_config: None,
         }
     }
 
@@ -42,7 +40,6 @@ impl ConnectionOptions {
             password: None,
             sasl_mechanism: Some(SaslMechanism::Anonymous),
             idle_timeout: None,
-            tls_config: None,
         }
     }
 
@@ -52,7 +49,6 @@ impl ConnectionOptions {
             password: Some(password),
             sasl_mechanism: Some(SaslMechanism::Plain),
             idle_timeout: None,
-            tls_config: None,
         }
     }
 
@@ -173,7 +169,7 @@ impl<N: Network> Connection<N> {
     fn skip_sasl(&self) -> bool {
         self.sasl.as_ref().map(Sasl::is_done).unwrap_or(true)
     }
-
+    
     // Write outgoing frames
     pub fn flush(&mut self) -> Result<()> {
         match self.state {

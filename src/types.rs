@@ -13,6 +13,8 @@ use crate::error::*;
 use crate::symbol::Symbol;
 use uuid::Uuid;
 
+pub type Host = (String, u16);
+
 /**
  * Encoder trait that all types that can be serialized to an AMQP type must implement.
  */

@@ -5,14 +5,17 @@
 
 //! The container module contains a simple API for creating client connections and sending and receiving messages
 
-use crate::conn;
+use crate::{conn, transport};
 use crate::driver::{
     Channel, ConnectionDriver, DeliveryDriver, LinkDriver, SessionDriver, SessionOpts,
 };
 use crate::error::*;
 use crate::framing::{LinkRole, Open, Performative};
-use crate::transport::{self, Host};
+use crate::stream::{EmptyConfig, Rustls, Stream};
+use crate::types::Host;
+use mio::net::TcpStream;
 use mio::{Events, Poll, Token, Waker};
+use rustls::ClientConfig;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -27,23 +30,24 @@ pub use crate::framing::DeliveryState;
 pub use crate::message::{Message, MessageProperties};
 use crate::options::{LinkOptions, ReceiverOptions, SenderOptions};
 pub use crate::sasl::SaslMechanism;
-use crate::transport::mio::MioNetwork;
+use crate::transport::mio::{MioNetwork};
 pub use crate::types::{Value, ValueRef};
 use std::net::{SocketAddr};
 
 /// Represents an AMQP 1.0 container that can manage multiple connections.
-pub struct Container {
-    container: Arc<ContainerInner>,
+pub struct Container<S: Stream> {
+    container: Arc<ContainerInner<S>>,
     running: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
+    stream_config: S::C,
 }
 
-struct ContainerInner {
+struct ContainerInner<S: Stream> {
     container_id: String,
     poll: RefCell<Poll>,
-    incoming: Channel<(Token, Arc<ConnectionDriver>, conn::Connection<MioNetwork>)>,
+    incoming: Channel<(Token, Arc<ConnectionDriver>, conn::Connection<MioNetwork<S>>)>,
     #[allow(clippy::type_complexity)] // subjective judgement: complexity is reasonable
-    connections: Mutex<HashMap<Token, (Arc<ConnectionDriver>, conn::Connection<MioNetwork>)>>,
+    connections: Mutex<HashMap<Token, (Arc<ConnectionDriver>, conn::Connection<MioNetwork<S>>)>>,
     token_generator: AtomicU32,
     waker: Arc<Waker>,
     closed: AtomicBool,
@@ -108,17 +112,29 @@ pub struct Delivery {
     delivery: Arc<DeliveryDriver>,
 }
 
-unsafe impl std::marker::Sync for ContainerInner {}
+unsafe impl<S: Stream> std::marker::Sync for ContainerInner<S> {}
 
-impl Container {
+impl Container<Rustls> {
+    pub fn new_rustls(stream_options: ClientConfig) -> Result<Self> {
+        Container::new_inner(stream_options)
+    }
+}
+
+impl Container<TcpStream> {
+    pub fn new() -> Result<Self> {
+        Container::new_inner(EmptyConfig)
+    }
+}
+
+impl<S: Stream> Container<S> {
     /// Creates a new container that can be used to connect to AMQP endpoints.
     /// use the start() method to launch a worker thread that handles the connection processing,
     /// or invoke the run() method.
-    pub fn new() -> Result<Container> {
-        Container::with_id(&Uuid::new_v4().to_string())
+    fn new_inner(stream_config: S::C) -> Result<Self> {
+        Container::with_id(&Uuid::new_v4().to_string(), stream_config)
     }
 
-    pub fn with_id(container_id: &str) -> Result<Container> {
+    fn with_id(container_id: &str, stream_config: S::C) -> Result<Self> {
         let p = Poll::new()?;
         let waker = Arc::new(Waker::new(p.registry(), Token(u32::MAX as usize))?);
         let inner = ContainerInner {
@@ -134,6 +150,7 @@ impl Container {
             container: Arc::new(inner),
             running: Arc::new(AtomicBool::new(false)),
             thread: None,
+            stream_config,
         })
     }
 
@@ -154,7 +171,7 @@ impl Container {
         Container::do_work(self.running.clone(), self.container.clone());
     }
 
-    fn do_work(running: Arc<AtomicBool>, container: Arc<ContainerInner>) {
+    fn do_work(running: Arc<AtomicBool>, container: Arc<ContainerInner<S>>) {
         debug!("Starting container processing loop");
         loop {
             if !running.load(Ordering::SeqCst) {
@@ -186,7 +203,7 @@ impl Container {
         opts: ConnectionOptions,
     ) -> Result<Connection> {
         let host = (host_name.to_string(), port);
-        self.container.connect(host, opts).await
+        self.container.connect(host, opts, &self.stream_config).await
     }
 
     /// Close the connection. Flushes outgoing buffer before sending the final close performative,
@@ -206,13 +223,13 @@ impl Container {
     }
 }
 
-impl Drop for Container {
+impl<S: Stream> Drop for Container<S> {
     fn drop(&mut self) {
         let _ = self.close();
     }
 }
 
-impl ContainerInner {
+impl<S: Stream> ContainerInner<S> {
     fn close(&self) -> Result<()> {
         if self.closed.fetch_or(true, Ordering::SeqCst) {
             return Ok(());
@@ -234,7 +251,9 @@ impl ContainerInner {
         &self,
         host: Host,
         opts: ConnectionOptions,
+        stream_config: &S::C
     ) -> Result<Connection> {
+        let stream_config = stream_config.clone();
         let options = opts.clone();
         let (tx, rx) = async_channel::bounded(1);
         let host_name = String::from(&host.0);
@@ -243,10 +262,7 @@ impl ContainerInner {
         thread::spawn({
             move || {
                 let result: Result<_> = (|| {
-                    let network = match &opts.tls_config {
-                        Some(config) => transport::mio::MioNetwork::connect_with_tls(&host, config.clone())?,
-                        None => transport::mio::MioNetwork::connect(&host)?
-                    };
+                    let network = transport::mio::MioNetwork::connect(&host, stream_config)?;
                     let transport = transport::Transport::new(network, 1024);
                     let connection = conn::connect(transport, opts)?;
                     Ok(connection)
@@ -432,7 +448,7 @@ impl ContainerInner {
     fn process_connection(
         &self,
         driver: &ConnectionDriver,
-        connection: &mut conn::Connection<MioNetwork>,
+        connection: &mut conn::Connection<MioNetwork<S>>,
     ) -> Result<()> {
         if driver.closed() {
             return Ok(());
@@ -467,7 +483,7 @@ impl ContainerInner {
     }
 }
 
-impl Drop for ContainerInner {
+impl<S: Stream> Drop for ContainerInner<S> {
     fn drop(&mut self) {
         let _ = self.close();
     }

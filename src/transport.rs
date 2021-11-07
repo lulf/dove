@@ -9,9 +9,7 @@ use std::fmt::Debug;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
-
 use std::time::Instant;
-use rustls::{ClientConfig, ServerName};
 
 use crate::error::*;
 use crate::framing::*;
@@ -305,99 +303,42 @@ impl<N: Network> Transport<N> {
     }
 }
 
-pub type Host = (String, u16);
-
-#[derive(Clone)]
-pub struct TlsConfig {
-    pub config: ClientConfig,
-    pub server_name: ServerName
-}
-
-impl Debug for TlsConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f
-        .debug_struct("TlsConfig")
-        .field("server_name", &self.server_name)
-        .finish_non_exhaustive()
-    }
-}
-
 pub mod mio {
     use mio::event::Source;
     use mio::net::TcpStream;
     use mio::{Interest, Poll, Registry, Token};
 
-    use super::{Host, Network, TlsConfig};
+    use super::{Network};
     use crate::error::*;
-    use std::convert::TryInto;
+    use crate::stream::Stream;
+    use crate::types::Host;
     use std::io::Read;
     use std::io::Write;
     use std::net::ToSocketAddrs;
     use std::net::{Shutdown, SocketAddr};
-    use std::sync::Arc;
-
-    use rustls::{ClientConnection, StreamOwned};
 
     #[derive(Debug)]
-    pub struct MioNetwork {
-        stream: Stream,
+    pub struct MioNetwork<S: Stream> {
+        stream: S,
         peer: SocketAddr,
     }
 
-    #[derive(Debug)]
-    pub enum Stream {
-        Tcp(TcpStream),
-        Tls(StreamOwned<ClientConnection, TcpStream>)
-    }
-
-    impl Stream {
-        fn as_ref(&self) -> &TcpStream {
-            match self {
-                Stream::Tcp(stream) => stream,
-                Stream::Tls(tls_stream) => tls_stream.get_ref()
-            }
-        }
-
-        fn as_mut(&mut self) -> &mut TcpStream {
-            match self {
-                Stream::Tcp(stream) => stream,
-                Stream::Tls(tls_stream) => tls_stream.get_mut()
-            }
-        }
-    }
-
-    impl MioNetwork {
-        pub fn connect(host: &Host) -> Result<Self> {
+    impl<S: Stream> MioNetwork<S> {
+        pub fn connect(host: &Host, config: S::C) -> Result<Self> {
             let mut addrs = host.to_socket_addrs()?;
-            let address = addrs
-                .next()
-                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::AddrNotAvailable))?;
-            Ok(MioNetwork {
-                stream: Stream::Tcp(TcpStream::connect(address)?),
-                peer: address,
-            })
-        }
-
-        pub fn connect_with_tls(host: &Host, tls_config: TlsConfig) -> Result<Self> {
-            let mut addrs = host.to_socket_addrs()?;
-            let address = addrs
-                .next()
-                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::AddrNotAvailable))?;
-
-            let conn = 
-                rustls::ClientConnection::new(Arc::new(tls_config.config), (&host.0 as &str).try_into().unwrap()).unwrap();
+            let address = addrs.next().ok_or_else(|| std::io::Error::from(std::io::ErrorKind::AddrNotAvailable))?;
             let sock = TcpStream::connect(address)?;
-
+            
             Ok(MioNetwork {
-                stream: Stream::Tls(rustls::StreamOwned::new(conn, sock)),
+                stream: S::wrap(sock, host, config)?,
                 peer: address,
             })
         }
-
+    
         pub fn peer_addr(&self) -> SocketAddr {
             self.peer
         }
-
+    
         pub fn register(&mut self, id: Token, poll: &mut Poll) -> Result<()> {
             poll.registry().register(
                 self.stream.as_mut(),
@@ -408,39 +349,30 @@ pub mod mio {
         }
     }
 
-    impl Network for MioNetwork {
+    impl<S: Stream> Network for MioNetwork<S> {
         fn close(&mut self) -> Result<()> {
             self.stream.as_ref().shutdown(Shutdown::Both)?;
             Ok(())
         }
     }
 
-    impl Write for MioNetwork {
+    impl<S: Stream> Write for MioNetwork<S> {
         fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-            match &mut self.stream {
-                Stream::Tcp(stream) => stream.write(data),
-                Stream::Tls(tls_stream) => tls_stream.write(data)
-            }
+            self.stream.write(data)
         }
 
         fn flush(&mut self) -> std::io::Result<()> {
-            match &mut self.stream {
-                Stream::Tcp(stream) => stream.flush(),
-                Stream::Tls(tls_stream) => tls_stream.flush()
-            }
+            self.stream.flush()
         }
     }
 
-    impl Read for MioNetwork {
+    impl<S: Stream> Read for MioNetwork<S> {
         fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
-            match &mut self.stream {
-                Stream::Tcp(stream) => stream.read(b),
-                Stream::Tls(tls_stream) => tls_stream.read(b)
-            }
+           self.stream.read(b)
         }
     }
 
-    impl Source for MioNetwork {
+    impl<S: Stream> Source for MioNetwork<S> {
         fn register(
             &mut self,
             registry: &Registry,

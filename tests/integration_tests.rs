@@ -230,7 +230,7 @@ async fn multiple_clients(port: u16, opts: ConnectionOptions) {
     let sender_opts = opts.clone();
 
     let t1 = tokio::spawn(async move {
-        let container = Container::with_id("sender")
+        let container = Container::new()
             .expect("unable to create container")
             .start();
         log::info!("{}: connecting on port {}", container.container_id(), port);
@@ -279,7 +279,7 @@ async fn multiple_clients(port: u16, opts: ConnectionOptions) {
     });
 
     let t2 = tokio::spawn(async move {
-        let container = Container::with_id("receiver")
+        let container = Container::new()
             .expect("unable to create container")
             .start();
 

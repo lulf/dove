@@ -32,7 +32,6 @@ fn main() {
             Some(SaslMechanism::Plain)
         }),
         idle_timeout: Some(Duration::from_secs(5)),
-        tls_config: None,
     };
 
     let container = Container::new()
