@@ -79,15 +79,17 @@ const BUFFER_SIZE: usize = 1024;
 
 #[derive(Debug)]
 struct Buffer {
-    buffer: [u8; BUFFER_SIZE],
+    buffer: Vec<u8>,
     capacity: usize,
     position: usize,
 }
 
 impl Buffer {
     fn new(capacity: usize) -> Buffer {
+        let mut v = Vec::with_capacity(capacity);
+        v.resize(capacity, 0);
         Buffer {
-            buffer: [0; BUFFER_SIZE],
+            buffer: v,
             capacity,
             position: 0,
         }
