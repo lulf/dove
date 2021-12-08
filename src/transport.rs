@@ -203,7 +203,7 @@ pub struct Transport<N: Network> {
     network: N,
     incoming: Buffer,
     outgoing: Buffer,
-    max_frame_size: usize,
+    _max_frame_size: usize,
     info: Arc<TransportInfo>,
 }
 
@@ -215,7 +215,7 @@ impl<N: Network> Transport<N> {
             network,
             incoming: Buffer::new(max_frame_size),
             outgoing: Buffer::new(max_frame_size),
-            max_frame_size,
+            _max_frame_size: max_frame_size,
             info: Arc::new(TransportInfo::default()),
         }
     }
