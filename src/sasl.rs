@@ -32,7 +32,7 @@ pub struct SaslClient {
 
 #[derive(Debug)]
 pub struct SaslServer {
-    supported_mechanisms: Vec<SaslMechanism>,
+    _supported_mechanisms: Vec<SaslMechanism>,
 }
 
 #[derive(Debug, PartialEq)]

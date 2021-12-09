@@ -650,6 +650,10 @@ impl LinkDriver {
         &self.connection
     }
 
+    pub fn credits(&self) -> u32 {
+        self.credit.load(Ordering::SeqCst)
+    }
+
     pub async fn send_message(
         &self,
         message: Message,

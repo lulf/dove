@@ -31,6 +31,7 @@ pub struct FrameHeader {
     ext: u16,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Frame {
     AMQP(AmqpFrame),

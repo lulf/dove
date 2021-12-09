@@ -645,6 +645,11 @@ impl Sender {
         }
     }
 
+    /// Retrieve credits available on this link. 0 means a send will fail with NotEnoughCreditsToSend.
+    pub fn credits(&self) -> u32 {
+        self.link.credits()
+    }
+
     /// Close the sender link, sending the detach performative.
     pub fn close(&self, error: Option<ErrorCondition>) -> Result<()> {
         self.link.close(error)

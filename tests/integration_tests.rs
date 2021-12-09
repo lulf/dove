@@ -183,9 +183,16 @@ async fn single_client(port: u16, opts: ConnectionOptions) {
         let mut message =
             Message::amqp_value(Value::String(format!("Hello, World: {}", i).to_string()));
 
+        while sender.credits() == 0 {
+            sleep(Duration::from_millis(100)).await;
+        }
+
         let start = Instant::now();
         messages.push(loop {
             // a future does nothing unless polled / awaited ...
+            while sender.credits() == 0 {
+                sleep(Duration::from_millis(100)).await;
+            }
             match sender.send(message).await {
                 Err(AmqpError::NotEnoughCreditsToSend(m)) => {
                     if start.elapsed() > Duration::from_secs(5) {
@@ -263,6 +270,10 @@ async fn multiple_clients(port: u16, opts: ConnectionOptions) {
         for i in 0..to_send {
             let message =
                 Message::amqp_value(Value::String(format!("Hello, World: {}", i).to_string()));
+
+            while sender.credits() == 0 {
+                sleep(Duration::from_millis(100)).await;
+            }
             messages.push(sender.send(message));
         }
 
