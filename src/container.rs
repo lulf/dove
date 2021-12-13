@@ -578,9 +578,27 @@ impl Session {
     }
 }
 
+/// See also https://access.redhat.com/documentation/en-us/red_hat_amq/7.4/html/amq_clients_overview/amqp
+#[derive(Clone, Copy, PartialEq)]
+pub enum SendMode {
+    /// Also known as "presettled" or "fire and forget".
+    /// Sends the message and does not care whether it is received.
+    AtMostOnce,
+    /// Sends the message and ensured that its received at least once.
+    AtLeastOnce,
+}
+
 impl Sender {
     /// Send a message across this link. The returned disposition signals the acceptance or rejection of the message on the receiving end.
-    pub async fn send(&self, mut message: Message) -> Result<Disposition> {
+    pub async fn send(&self, message: Message) -> Result<Disposition> {
+        self.send_with_mode(message, SendMode::AtLeastOnce).await
+    }
+
+    pub async fn send_with_mode(
+        &self,
+        mut message: Message,
+        mode: SendMode,
+    ) -> Result<Disposition> {
         let message_id = Some(Value::Ulong(
             self.next_message_id.fetch_add(1, Ordering::SeqCst),
         ));
@@ -607,7 +625,7 @@ impl Sender {
                 Some(p)
             },
         );
-        let settled = false;
+        let settled = SendMode::AtMostOnce == mode;
         let delivery = self.link.send_message(message, settled).await?;
         debug!(
             "Message sent (handle {}), awaiting disposition",
