@@ -22,6 +22,7 @@ pub struct ConnectionOptions {
     pub password: Option<String>,
     pub sasl_mechanism: Option<SaslMechanism>,
     pub idle_timeout: Option<Duration>,
+    pub buffer_size: Option<usize>,
 }
 
 impl ConnectionOptions {
@@ -31,6 +32,7 @@ impl ConnectionOptions {
             password: None,
             sasl_mechanism: None,
             idle_timeout: None,
+            buffer_size: None,
         }
     }
 
@@ -40,6 +42,7 @@ impl ConnectionOptions {
             password: None,
             sasl_mechanism: Some(SaslMechanism::Anonymous),
             idle_timeout: None,
+            buffer_size: None,
         }
     }
 
@@ -49,6 +52,7 @@ impl ConnectionOptions {
             password: Some(password),
             sasl_mechanism: Some(SaslMechanism::Plain),
             idle_timeout: None,
+            buffer_size: None,
         }
     }
 
@@ -69,6 +73,13 @@ impl ConnectionOptions {
 
     pub fn idle_timeout(mut self, duration: Duration) -> Self {
         self.idle_timeout = Some(duration);
+        self
+    }
+
+    /// The size of the transport buffer. Messages (including the header) larger
+    /// than the given value cannot be received.
+    pub fn buffer_size(mut self, buffer_size: usize) -> Self {
+        self.buffer_size = Some(buffer_size);
         self
     }
 }

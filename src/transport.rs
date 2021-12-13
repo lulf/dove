@@ -75,20 +75,16 @@ impl ProtocolHeader {
     }
 }
 
-const BUFFER_SIZE: usize = 1024;
-
 #[derive(Debug)]
 struct Buffer {
-    buffer: [u8; BUFFER_SIZE],
-    capacity: usize,
+    buffer: Vec<u8>,
     position: usize,
 }
 
 impl Buffer {
     fn new(capacity: usize) -> Buffer {
         Buffer {
-            buffer: [0; BUFFER_SIZE],
-            capacity,
+            buffer: vec![0u8; capacity],
             position: 0,
         }
     }
@@ -98,10 +94,11 @@ impl Buffer {
     }
 
     fn fill(&mut self, reader: &mut dyn Read) -> Result<&[u8]> {
-        if self.position < self.capacity {
-            let len = reader.read(&mut self.buffer[self.position..self.capacity])?;
+        let capacity = self.buffer.capacity();
+        if self.position < capacity {
+            let len = reader.read(&mut self.buffer[self.position..capacity])?;
 
-            if len == 0 && self.capacity.saturating_sub(self.position) > 0 {
+            if len == 0 && capacity.saturating_sub(self.position) > 0 {
                 return Err(AmqpError::IoError(std::io::Error::from(
                     std::io::ErrorKind::UnexpectedEof,
                 )));
@@ -129,7 +126,7 @@ impl Buffer {
     }
 
     fn write_buf(&mut self, data: &[u8]) -> std::io::Result<usize> {
-        if data.len() > self.capacity - self.position {
+        if data.len() > self.buffer.capacity().saturating_sub(self.position) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "written data is bigger than output buffer",
@@ -209,8 +206,6 @@ pub struct Transport<N: Network> {
 
 impl<N: Network> Transport<N> {
     pub fn new(network: N, max_frame_size: usize) -> Transport<N> {
-        assert!(max_frame_size <= BUFFER_SIZE);
-        assert!(max_frame_size <= BUFFER_SIZE);
         Transport {
             network,
             incoming: Buffer::new(max_frame_size),
@@ -428,20 +423,20 @@ mod tests {
         let mut buf = Buffer::new(6);
         let result = buf.write_buf(&[1, 2, 3, 4, 5, 6, 7]);
         assert!(result.is_err());
-        assert_eq!([0, 0, 0, 0, 0, 0], &buf.buffer[..buf.capacity]);
+        assert_eq!([0, 0, 0, 0, 0, 0], &buf.buffer[..buf.buffer.capacity()]);
 
         let result = buf.write_buf(&[1, 2, 3, 4]);
         assert!(result.is_ok());
         assert_eq!(4, result.unwrap());
-        assert_eq!([1, 2, 3, 4, 0, 0], &buf.buffer[..buf.capacity]);
+        assert_eq!([1, 2, 3, 4, 0, 0], &buf.buffer[..buf.buffer.capacity()]);
 
         let result = buf.write_buf(&[5, 6]);
         assert!(result.is_ok());
         assert_eq!(2, result.unwrap());
-        assert_eq!([1, 2, 3, 4, 5, 6], &buf.buffer[..buf.capacity]);
+        assert_eq!([1, 2, 3, 4, 5, 6], &buf.buffer[..buf.buffer.capacity()]);
 
         let result = buf.write_buf(&[7]);
         assert!(result.is_err());
-        assert_eq!([1, 2, 3, 4, 5, 6], &buf.buffer[..buf.capacity]);
+        assert_eq!([1, 2, 3, 4, 5, 6], &buf.buffer[..buf.buffer.capacity()]);
     }
 }

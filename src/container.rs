@@ -241,7 +241,8 @@ impl ContainerInner {
             move || {
                 let result: Result<_> = (|| {
                     let network = transport::mio::MioNetwork::connect(&host)?;
-                    let transport = transport::Transport::new(network, 1024);
+                    let transport =
+                        transport::Transport::new(network, opts.buffer_size.unwrap_or(1024 * 1024));
                     let connection = conn::connect(transport, opts)?;
                     Ok(connection)
                 })();
