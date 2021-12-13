@@ -32,6 +32,7 @@ fn main() {
             Some(SaslMechanism::Plain)
         }),
         idle_timeout: Some(Duration::from_secs(5)),
+        buffer_size: Some(1024 * 512),
     };
 
     let container = Container::new()

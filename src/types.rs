@@ -217,6 +217,20 @@ impl Value {
     pub fn value_ref(&self) -> ValueRef {
         ValueRef::from(self)
     }
+
+    pub fn as_any_integer(&self) -> Option<i64> {
+        match self {
+            Self::Ubyte(v) => Some(*v as _),
+            Self::Ushort(v) => Some(*v as _),
+            Self::Uint(v) => Some(*v as _),
+            Self::Ulong(v) => Some(*v as _),
+            Self::Byte(v) => Some(*v as _),
+            Self::Short(v) => Some(*v as _),
+            Self::Int(v) => Some(*v as _),
+            Self::Long(v) => Some(*v as _),
+            _ => None,
+        }
+    }
 }
 
 impl From<Symbol> for Value {
