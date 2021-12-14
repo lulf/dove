@@ -85,6 +85,14 @@ pub enum AmqpError {
     TargetNotRecognized(String),
     #[error("This client does not support the desired SASL mechanism {0:?}")]
     SaslMechanismNotSupported(SaslMechanism),
+
+    #[error(
+        "The AMQP-Message(size={frame_size}) does not fit in the Transport-Buffer(capacity={buffer_capacity})"
+    )]
+    ReceiveBufferHasInsufficientCapacity {
+        frame_size: usize,
+        buffer_capacity: usize,
+    },
 }
 
 impl AmqpError {
