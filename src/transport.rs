@@ -89,6 +89,14 @@ impl Buffer {
         }
     }
 
+    pub fn is_full(&self) -> bool {
+        self.position == self.capacity()
+    }
+
+    fn capacity(&self) -> usize {
+        self.buffer.capacity()
+    }
+
     fn peek(&mut self) -> &[u8] {
         &self.buffer[0..self.position]
     }
@@ -256,11 +264,13 @@ impl<N: Network> Transport<N> {
             if buf.len() >= 8 {
                 let header = FrameHeader::decode(&mut buf)?;
                 let frame_size = header.size as usize;
+
                 trace!(
                     "Found enough bytes for header {:?}. Buffer is {} bytes!",
                     header,
                     buf.len()
                 );
+
                 if buf.len() >= frame_size - 8 {
                     let mut cursor = Cursor::new(&mut buf);
                     let frame = Frame::decode(header, &mut cursor)?;
@@ -268,6 +278,11 @@ impl<N: Network> Transport<N> {
                     self.info.update_last_received();
                     debug!("RX {:?}", frame);
                     return Ok(frame);
+                } else if self.incoming.capacity() < frame_size || self.incoming.is_full() {
+                    return Err(AmqpError::ReceiveBufferHasInsufficientCapacity {
+                        frame_size,
+                        buffer_capacity: self.incoming.capacity(),
+                    });
                 } else {
                     self.incoming.fill(&mut self.network)?;
                 }
