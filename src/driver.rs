@@ -493,7 +493,7 @@ impl SessionDriver {
     ) -> Result<(String, Arc<LinkDriver>)> {
         let options = options.into();
         let role = options.role();
-        let link_name = format!("dove-{}-{}", Uuid::new_v4().to_string(), role.as_str());
+        let link_name = format!("dove-{}-{}", Uuid::new_v4(), role.as_str());
         debug!("Creating link {} with role {:?}", link_name, role);
 
         // Send attach frame

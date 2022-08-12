@@ -7,7 +7,7 @@
 
 use crate::error::*;
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub struct Url<'a> {
     pub scheme: UrlScheme,
     pub username: Option<&'a str>,
@@ -17,7 +17,7 @@ pub struct Url<'a> {
     pub address: &'a str,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum UrlScheme {
     AMQP,
     AMQPS,
