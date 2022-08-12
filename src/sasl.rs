@@ -35,14 +35,14 @@ pub struct SaslServer {
     _supported_mechanisms: Vec<SaslMechanism>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum SaslState {
     InProgress,
     Success,
     Failed,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SaslMechanism {
     Anonymous,
     Plain,

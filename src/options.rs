@@ -72,7 +72,7 @@ impl ApplyOptionsTo<Attach> for LinkOptions {
 }
 
 /// <http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-messaging-v1.0-os.html#type-node-properties>
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq)]
 pub enum DynamicLifetimePolicy {
     DeleteOnClose,
     DeleteOnNoLinks,
@@ -93,7 +93,7 @@ impl DynamicLifetimePolicy {
     }
 }
 
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq)]
 pub enum DynamicFlag {
     NotDynamic,
     Dynamic {

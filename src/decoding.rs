@@ -207,9 +207,8 @@ fn decode_value_with_ctor(raw_code: u8, reader: &mut dyn Read) -> Result<Value> 
     }
 }
 
-/**
- * Converts a byte value to a type constructor.
- */
+/// Converts a byte value to a type constructor.
+/// http://docs.oasis-open.org/amqp/core/v1.0/csprd01/amqp-core-types-v1.0-csprd01.html#doc-idp280416
 fn decode_type(code: u8) -> Result<TypeCode> {
     match code {
         0x00 => Ok(TypeCode::Described),
@@ -231,8 +230,8 @@ fn decode_type(code: u8) -> Result<TypeCode> {
         0x54 => Ok(TypeCode::Intsmall),
         0x81 => Ok(TypeCode::Long),
         0x55 => Ok(TypeCode::Longsmall),
-        // float
-        // double
+        // 0x72 => Ok(TypeCode::Float),
+        // 0x82 => Ok(TypeCode::Double),
         // decimal32
         // decimal64
         // decimal128

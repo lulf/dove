@@ -6,7 +6,7 @@
 name = "dove"
 version = "0.2.0"
 authors = ["Ulf Lilleengen <ulf.lilleengen@gmail.com>", "Michael Watzko <michael@watzko.de>"]
-edition = "2018"
+edition = "2021"
 description = "Dove is an open source Rust implementation of the AMQP 1.0 OASIS standard (http://www.amqp.org/)."
 license = "Apache-2.0"
 include = ["README.md", "LICENSE", "src/*.rs", "tests/*.rs", "examples/*.rs"]

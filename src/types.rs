@@ -250,19 +250,14 @@ impl From<Timestamp> for Value {
 
 impl<V: Into<Value>, const N: usize> From<[V; N]> for Value {
     fn from(array: [V; N]) -> Self {
-        Self::Array(
-            std::array::IntoIter::new(array)
-                .map(Into::into)
-                .collect::<Vec<Value>>(),
-        )
+        Self::Array(array.map(Into::into).to_vec())
     }
 }
 
-/**
- * All basic type codes in AMQP.
- */
+/// All basic type codes in AMQP.
+/// http://docs.oasis-open.org/amqp/core/v1.0/csprd01/amqp-core-types-v1.0-csprd01.html#doc-idp280416
 #[repr(u8)]
-#[derive(Clone, PartialEq, Debug, PartialOrd, Copy)]
+#[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Copy)]
 pub enum TypeCode {
     Described = 0x00,
     Null = 0x40,
@@ -283,8 +278,10 @@ pub enum TypeCode {
     Intsmall = 0x54,
     Long = 0x81,
     Longsmall = 0x55,
-    // float
-    // double
+    // /// IEEE 754-2008 binary32
+    // Float = 0x72,
+    // /// IEEE 754-2008 binary64
+    // Double = 0x82,
     // decimal32
     // decimal32
     // decimal12

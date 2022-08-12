@@ -304,7 +304,7 @@ pub struct Target {
     pub capabilities: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum LinkRole {
     Sender,
     Receiver,
