@@ -356,6 +356,11 @@ pub mod mio {
             )?;
             Ok(())
         }
+
+        /// See [`TcpStream::set_nodelay`]
+        pub fn set_nodelay(&self, nodelay: bool) -> Result<()> {
+            Ok(self.stream.set_nodelay(nodelay)?)
+        }
     }
 
     impl Network for MioNetwork {

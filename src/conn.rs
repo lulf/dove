@@ -23,6 +23,7 @@ pub struct ConnectionOptions {
     pub sasl_mechanism: Option<SaslMechanism>,
     pub idle_timeout: Option<Duration>,
     pub buffer_size: Option<usize>,
+    pub tcp_nodelay: Option<bool>,
 }
 
 impl ConnectionOptions {
@@ -33,6 +34,7 @@ impl ConnectionOptions {
             sasl_mechanism: None,
             idle_timeout: None,
             buffer_size: None,
+            tcp_nodelay: None,
         }
     }
 
@@ -43,6 +45,7 @@ impl ConnectionOptions {
             sasl_mechanism: Some(SaslMechanism::Anonymous),
             idle_timeout: None,
             buffer_size: None,
+            tcp_nodelay: None,
         }
     }
 
@@ -53,6 +56,7 @@ impl ConnectionOptions {
             sasl_mechanism: Some(SaslMechanism::Plain),
             idle_timeout: None,
             buffer_size: None,
+            tcp_nodelay: None,
         }
     }
 
@@ -80,6 +84,12 @@ impl ConnectionOptions {
     /// than the given value cannot be received.
     pub fn buffer_size(mut self, buffer_size: usize) -> Self {
         self.buffer_size = Some(buffer_size);
+        self
+    }
+
+    /// See [`std::net::TcpStream::set_nodelay`]
+    pub fn tcp_nodelay(mut self, nodelay: bool) -> Self {
+        self.tcp_nodelay = Some(nodelay);
         self
     }
 }

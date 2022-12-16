@@ -241,6 +241,11 @@ impl ContainerInner {
             move || {
                 let result: Result<_> = (|| {
                     let network = transport::mio::MioNetwork::connect(&host)?;
+
+                    if let Some(nodelay) = opts.tcp_nodelay {
+                        network.set_nodelay(nodelay)?;
+                    }
+
                     let transport =
                         transport::Transport::new(network, opts.buffer_size.unwrap_or(1024 * 1024));
                     let connection = conn::connect(transport, opts)?;
