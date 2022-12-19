@@ -158,6 +158,10 @@ impl Write for Buffer {
 }
 
 pub trait Network: Read + Write + Debug {
+    /// See [`std::net::TcpStream::set_nodelay`]. Depending on the implementation (mio+windows: [`::mio::net::TcpStream::set_nodelay`]),
+    /// this shall not be set before the network is connected.
+    fn set_nodelay(&self, nodelay: bool) -> Result<()>;
+
     fn close(&mut self) -> Result<()>;
 }
 
@@ -364,6 +368,11 @@ pub mod mio {
     }
 
     impl Network for MioNetwork {
+        fn set_nodelay(&self, nodelay: bool) -> Result<()> {
+            self.stream.set_nodelay(nodelay)?;
+            Ok(())
+        }
+
         fn close(&mut self) -> Result<()> {
             self.stream.shutdown(Shutdown::Both)?;
             Ok(())

@@ -107,6 +107,7 @@ pub struct Connection<N: Network> {
     transport: Transport<N>,
     tx_frames: Channel<Frame>,
     header_sent: bool,
+    tcp_nodelay: Option<bool>,
 }
 
 pub type ChannelId = u16;
@@ -141,6 +142,7 @@ pub fn connect<N: Network>(
         });
     }
     connection.state = ConnectionState::Start;
+    connection.tcp_nodelay = opts.tcp_nodelay;
 
     Ok(connection)
 }
@@ -180,6 +182,7 @@ impl<N: Network> Connection<N> {
             sasl: None,
             tx_frames: Channel::new(),
             header_sent: false,
+            tcp_nodelay: None,
         }
     }
 
@@ -238,6 +241,12 @@ impl<N: Network> Connection<N> {
                             error!("Unexpected ProtocolHeader received: {:?}", header);
                             self.transport.close()?;
                             self.state = ConnectionState::Closed;
+                        }
+                    }
+
+                    if !matches!(self.state, ConnectionState::Closed) {
+                        if let Some(nodelay) = self.tcp_nodelay {
+                            self.transport.network_mut().set_nodelay(nodelay)?;
                         }
                     }
                 }
