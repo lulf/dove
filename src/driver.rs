@@ -677,15 +677,14 @@ impl LinkDriver {
         }
 
         // Session flow control
-        let next_outgoing_id;
-        loop {
+        let next_outgoing_id = loop {
             let props = self.session_flow_control.lock().unwrap().next();
             if let Some(props) = props {
-                next_outgoing_id = props.next_outgoing_id;
-                break;
+                break props.next_outgoing_id;
             }
+            warn!("No next_outgoing_id, busy looping");
             // std::thread::sleep(Duration::from_millis(500));
-        }
+        };
 
         self.delivery_count.fetch_add(1, Ordering::SeqCst);
         let delivery_tag = rand::thread_rng().gen::<[u8; 16]>().to_vec();
