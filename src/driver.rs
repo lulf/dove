@@ -773,28 +773,24 @@ impl LinkDriver {
         self.rx.send(frame)
     }
 
+    #[inline]
     pub fn disposition(
         &self,
         delivery: &DeliveryDriver,
         settled: bool,
         state: DeliveryState,
     ) -> Result<()> {
-        if settled {
-            self.did_to_delivery.lock().unwrap().remove(&delivery.id);
-            let mut control = self.session_flow_control.lock().unwrap();
-            control.incoming_window += 1;
-        }
-        let disposition = framing::Disposition {
-            role: self.role,
-            first: delivery.id,
-            last: Some(delivery.id),
-            settled: Some(settled),
-            state: Some(state),
-            batchable: None,
-        };
-
-        self.connection().disposition(self.channel, disposition)?;
-        Ok(())
+        self.connection().disposition(
+            self.channel,
+            framing::Disposition {
+                role: self.role,
+                first: delivery.id,
+                last: Some(delivery.id),
+                settled: Some(settled),
+                state: Some(state),
+                batchable: None,
+            },
+        )
     }
 }
 
