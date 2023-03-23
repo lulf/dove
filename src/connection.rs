@@ -28,7 +28,7 @@ impl ConnectionHandle {
 
     pub fn begin(&self, channel: ChannelId, begin: Begin) -> Result<()> {
         self.send_amqp_frame(AmqpFrame {
-            channel: channel as u16,
+            channel,
             performative: Some(Performative::Begin(begin)),
             payload: None,
         })
@@ -36,7 +36,7 @@ impl ConnectionHandle {
 
     pub fn attach(&self, channel: ChannelId, attach: Attach) -> Result<()> {
         self.send_amqp_frame(AmqpFrame {
-            channel: channel as u16,
+            channel,
             performative: Some(Performative::Attach(attach)),
             payload: None,
         })
@@ -44,7 +44,7 @@ impl ConnectionHandle {
 
     pub fn flow(&self, channel: ChannelId, flow: Flow) -> Result<()> {
         self.send_amqp_frame(AmqpFrame {
-            channel: channel as u16,
+            channel,
             performative: Some(Performative::Flow(flow)),
             payload: None,
         })
@@ -57,7 +57,7 @@ impl ConnectionHandle {
         payload: Option<Vec<u8>>,
     ) -> Result<()> {
         self.send_amqp_frame(AmqpFrame {
-            channel: channel as u16,
+            channel,
             performative: Some(Performative::Transfer(transfer)),
             payload,
         })
@@ -65,7 +65,7 @@ impl ConnectionHandle {
 
     pub fn disposition(&self, channel: ChannelId, disposition: Disposition) -> Result<()> {
         self.send_amqp_frame(AmqpFrame {
-            channel: channel as u16,
+            channel,
             performative: Some(Performative::Disposition(disposition)),
             payload: None,
         })
@@ -92,7 +92,7 @@ impl ConnectionHandle {
 
     pub fn detach(&self, channel: ChannelId, detach: Detach) -> Result<()> {
         self.send_amqp_frame(AmqpFrame {
-            channel: channel as u16,
+            channel,
             performative: Some(Performative::Detach(detach)),
             payload: None,
         })
@@ -100,7 +100,7 @@ impl ConnectionHandle {
 
     pub fn end(&self, channel: ChannelId, end: End) -> Result<()> {
         self.send_amqp_frame(AmqpFrame {
-            channel: channel as u16,
+            channel,
             performative: Some(Performative::End(end)),
             payload: None,
         })

@@ -740,7 +740,7 @@ impl LinkDriver {
                 incoming_window: props.incoming_window,
                 next_outgoing_id: props.next_outgoing_id,
                 outgoing_window: props.outgoing_window,
-                handle: Some(self.handle as u32),
+                handle: Some(self.handle),
                 delivery_count: Some(self.delivery_count.load(Ordering::SeqCst)),
                 link_credit: Some(credit),
                 available: None,
