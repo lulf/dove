@@ -677,15 +677,14 @@ impl LinkDriver {
         }
 
         // Session flow control
-        let next_outgoing_id;
-        loop {
+        let next_outgoing_id = loop {
             let props = self.session_flow_control.lock().unwrap().next();
             if let Some(props) = props {
-                next_outgoing_id = props.next_outgoing_id;
-                break;
+                break props.next_outgoing_id;
             }
+            warn!("No next_outgoing_id, busy looping");
             // std::thread::sleep(Duration::from_millis(500));
-        }
+        };
 
         self.delivery_count.fetch_add(1, Ordering::SeqCst);
         let delivery_tag = rand::thread_rng().gen::<[u8; 16]>().to_vec();
@@ -741,7 +740,7 @@ impl LinkDriver {
                 incoming_window: props.incoming_window,
                 next_outgoing_id: props.next_outgoing_id,
                 outgoing_window: props.outgoing_window,
-                handle: Some(self.handle as u32),
+                handle: Some(self.handle),
                 delivery_count: Some(self.delivery_count.load(Ordering::SeqCst)),
                 link_credit: Some(credit),
                 available: None,
@@ -774,6 +773,7 @@ impl LinkDriver {
         self.rx.send(frame)
     }
 
+    #[inline]
     pub fn disposition(
         &self,
         delivery: &DeliveryDriver,
@@ -781,21 +781,19 @@ impl LinkDriver {
         state: DeliveryState,
     ) -> Result<()> {
         if settled {
-            self.did_to_delivery.lock().unwrap().remove(&delivery.id);
-            let mut control = self.session_flow_control.lock().unwrap();
-            control.incoming_window += 1;
+            self.session_flow_control.lock().unwrap().incoming_window += 1;
         }
-        let disposition = framing::Disposition {
-            role: self.role,
-            first: delivery.id,
-            last: Some(delivery.id),
-            settled: Some(settled),
-            state: Some(state),
-            batchable: None,
-        };
-
-        self.connection().disposition(self.channel, disposition)?;
-        Ok(())
+        self.connection().disposition(
+            self.channel,
+            framing::Disposition {
+                role: self.role,
+                first: delivery.id,
+                last: Some(delivery.id),
+                settled: Some(settled),
+                state: Some(state),
+                batchable: None,
+            },
+        )
     }
 }
 

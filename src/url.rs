@@ -56,7 +56,7 @@ impl Url<'_> {
         let (input, hostname, port) = if let Some(pos) = input.find(':') {
             let (hostname, input) = (&input[0..pos], &input[pos + 1..]);
             let (input, port) = if let Some(end_pos) = input.find('/') {
-                (&input[end_pos + 1..], (&input[..end_pos]).parse::<u16>()?)
+                (&input[end_pos + 1..], input[..end_pos].parse::<u16>()?)
             } else {
                 ("", input.parse::<u16>()?)
             };

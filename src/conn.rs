@@ -23,6 +23,7 @@ pub struct ConnectionOptions {
     pub sasl_mechanism: Option<SaslMechanism>,
     pub idle_timeout: Option<Duration>,
     pub buffer_size: Option<usize>,
+    pub tcp_nodelay: Option<bool>,
 }
 
 impl ConnectionOptions {
@@ -33,6 +34,7 @@ impl ConnectionOptions {
             sasl_mechanism: None,
             idle_timeout: None,
             buffer_size: None,
+            tcp_nodelay: None,
         }
     }
 
@@ -43,6 +45,7 @@ impl ConnectionOptions {
             sasl_mechanism: Some(SaslMechanism::Anonymous),
             idle_timeout: None,
             buffer_size: None,
+            tcp_nodelay: None,
         }
     }
 
@@ -53,6 +56,7 @@ impl ConnectionOptions {
             sasl_mechanism: Some(SaslMechanism::Plain),
             idle_timeout: None,
             buffer_size: None,
+            tcp_nodelay: None,
         }
     }
 
@@ -82,6 +86,12 @@ impl ConnectionOptions {
         self.buffer_size = Some(buffer_size);
         self
     }
+
+    /// See [`std::net::TcpStream::set_nodelay`]
+    pub fn tcp_nodelay(mut self, nodelay: bool) -> Self {
+        self.tcp_nodelay = Some(nodelay);
+        self
+    }
 }
 
 /*
@@ -97,6 +107,7 @@ pub struct Connection<N: Network> {
     transport: Transport<N>,
     tx_frames: Channel<Frame>,
     header_sent: bool,
+    tcp_nodelay: Option<bool>,
 }
 
 pub type ChannelId = u16;
@@ -131,6 +142,7 @@ pub fn connect<N: Network>(
         });
     }
     connection.state = ConnectionState::Start;
+    connection.tcp_nodelay = opts.tcp_nodelay;
 
     Ok(connection)
 }
@@ -170,6 +182,7 @@ impl<N: Network> Connection<N> {
             sasl: None,
             tx_frames: Channel::new(),
             header_sent: false,
+            tcp_nodelay: None,
         }
     }
 
@@ -228,6 +241,12 @@ impl<N: Network> Connection<N> {
                             error!("Unexpected ProtocolHeader received: {:?}", header);
                             self.transport.close()?;
                             self.state = ConnectionState::Closed;
+                        }
+                    }
+
+                    if !matches!(self.state, ConnectionState::Closed) {
+                        if let Some(nodelay) = self.tcp_nodelay {
+                            self.transport.network_mut().set_nodelay(nodelay)?;
                         }
                     }
                 }
