@@ -780,6 +780,9 @@ impl LinkDriver {
         settled: bool,
         state: DeliveryState,
     ) -> Result<()> {
+        if settled {
+            self.session_flow_control.lock().unwrap().incoming_window += 1;
+        }
         self.connection().disposition(
             self.channel,
             framing::Disposition {
