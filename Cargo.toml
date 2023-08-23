@@ -14,17 +14,17 @@ repository = "https://github.com/lulf/dove/"
 
 [dependencies]
 byteorder = "1.4"
-mio = { version = "0.7", features = ["tcp", "os-poll"] }
-uuid = { version = "0.8", features = ["v4"] }
+mio = { version = "0.8", features = ["os-poll"] }
+uuid = { version = "1.4", features = ["v4"] }
 rand = "0.8"
 log = "0.4"
-async-channel = "1.6.1"
-thiserror = "1.0.25"
-derive_more = { version = "0.99.16", default-features = false, features = ["from"] }
+async-channel = "1.9"
+thiserror = "1.0"
+derive_more = { version = "0.99", default-features = false, features = ["from"] }
 
 [dev-dependencies]
 futures = "0.3"
 tokio = { version = "1", features = ["full"] }
-env_logger = "0.8"
-testcontainers = "0.12"
+env_logger = "0.10"
+testcontainers = "0.14"
 reqwest = { version = "0.11" }

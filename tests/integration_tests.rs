@@ -12,7 +12,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::process::Command;
 use std::sync::Once;
 use std::time::{Duration, Instant};
-use testcontainers::{clients, images, Docker};
+use testcontainers::{clients, images};
 use tokio::time::{sleep, timeout};
 
 static INIT: Once = Once::new();
@@ -23,19 +23,27 @@ fn setup() {
     });
 }
 
+fn client() -> clients::Cli {
+    if let Ok("podman") = std::env::var("DOCKER").as_deref() {
+        clients::Cli::podman()
+    } else {
+        clients::Cli::default()
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_artemis() {
     setup();
-    let docker = clients::Cli::default();
+    let docker = client();
     let node = docker.run(
-        images::generic::GenericImage::new("docker.io/vromero/activemq-artemis:2-latest")
+        images::generic::GenericImage::new("docker.io/vromero/activemq-artemis", "2-latest")
             .with_env_var("ARTEMIS_USERNAME", "test")
             .with_env_var("ARTEMIS_PASSWORD", "test"),
     );
     let id = node.id();
     log::info!("ActiveMQ Artemis container started with id {}", id);
     sleep(Duration::from_millis(30000)).await;
-    let port: u16 = node.get_host_port(5672).unwrap();
+    let port: u16 = node.get_host_port_ipv4(5672);
 
     timeout(Duration::from_secs(120), async move {
         let opts = ConnectionOptions::new()
@@ -56,14 +64,15 @@ async fn test_artemis() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_qpid_dispatch() {
     setup();
-    let docker = clients::Cli::default();
+    let docker = client();
     let node = docker.run(images::generic::GenericImage::new(
-        "quay.io/interconnectedcloud/qdrouterd:1.12.0",
+        "quay.io/interconnectedcloud/qdrouterd",
+        "1.12.0",
     ));
     let id = node.id();
     log::info!("Router container started with id {}", id);
     sleep(Duration::from_millis(10000)).await;
-    let port: u16 = node.get_host_port(5672).unwrap();
+    let port: u16 = node.get_host_port_ipv4(5672);
 
     timeout(Duration::from_secs(120), async move {
         let opts = ConnectionOptions::new()
@@ -86,7 +95,7 @@ async fn test_qpid_broker_j() {
     config_dir.push("tests");
     config_dir.push("qpid-broker-j");
     log::info!("Loaded config from {:?}", config_dir);
-    let docker = clients::Cli::default();
+    let docker = client();
     let config_dir_path = config_dir.as_path().to_str().unwrap();
 
     // Required to allow reading directory in container
@@ -101,15 +110,15 @@ async fn test_qpid_broker_j() {
     }
 
     let node = docker.run(
-        images::generic::GenericImage::new("docker.io/chrisob/qpid-broker-j-docker:8.0.0")
+        images::generic::GenericImage::new("docker.io/chrisob/qpid-broker-j-docker", "8.0.0")
             .with_volume(config_dir_path, "/usr/local/etc"),
     );
     let id = node.id();
     log::info!("Qpid Broker J container started with id {}", id);
 
     sleep(Duration::from_millis(20000)).await;
-    let http_port: u16 = node.get_host_port(8080).unwrap();
-    let port: u16 = node.get_host_port(5672).unwrap();
+    let http_port: u16 = node.get_host_port_ipv4(8080);
+    let port: u16 = node.get_host_port_ipv4(5672);
 
     timeout(Duration::from_secs(120), async move {
         // Create queues used by tests
