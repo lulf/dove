@@ -4,7 +4,7 @@
 #
 [package]
 name = "dove"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Ulf Lilleengen <ulf.lilleengen@gmail.com>", "Michael Watzko <michael@watzko.de>"]
 edition = "2021"
 description = "Dove is an open source Rust implementation of the AMQP 1.0 OASIS standard (http://www.amqp.org/)."
